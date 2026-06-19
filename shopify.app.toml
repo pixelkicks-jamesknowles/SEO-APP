@@ -1,0 +1,48 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+#
+# ⚠️ Before `shopify app deploy` to production, replace `https://example.com` with your
+# deployed host in application_url, [auth].redirect_urls, and [app_proxy].url (same origin).
+# During `shopify app dev`, automatically_update_urls_on_dev keeps these pointed at the tunnel.
+
+client_id = "16f6275cefd68c235d54aa800f34c189"
+name = "Pixel Kicks SEO"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[access_scopes]
+# SEO core: product/collection seo + image altText (write_products); page/article/blog SEO +
+# URL redirects (write_content); robots.txt + app embed (read/write_themes). Tracking:
+# read_orders enriches purchase events. Restored after `config link` reset these to the
+# remote app's empty defaults — applies on next deploy / dev restart (triggers re-consent).
+# TODO(verify before deploy): urlRedirectCreate may require write_online_store_pages.
+scopes = "read_products,write_products,read_content,write_content,read_themes,write_themes,read_orders"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
+
+[webhooks]
+api_version = "2026-04"
+
+  # NOTE: [webhooks.privacy_compliance], all [[webhooks.subscriptions]] (app/uninstalled,
+  # app/scopes_update, products/update, collections/update) and [app_proxy] were removed so
+  # `--use-localhost` works — Shopify rejects localhost / internal domains for these URIs.
+  # RESTORE ALL before deploying to a real host; the handlers (app/routes/webhooks.*,
+  # proxy.$type.jsx) already exist. Template:
+  #   [webhooks.privacy_compliance]
+  #   customer_deletion_url = "/webhooks/customers/redact"
+  #   customer_data_request_url = "/webhooks/customers/data_request"
+  #   shop_deletion_url = "/webhooks/shop/redact"
+  #   [[webhooks.subscriptions]]
+  #   uri = "/webhooks/app/uninstalled"   # + app/scopes_update, products/create (auto-apply),
+  #                                       #   products/update (auto-301), collections/update
+  #   topics = [ "app/uninstalled" ]
+  #   [app_proxy]
+  #   url = "https://<host>/proxy"
+  #   subpath = "pixelify-seo"
+  #   prefix = "apps"

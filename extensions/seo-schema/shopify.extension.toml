@@ -1,0 +1,9 @@
+api_version = "2026-07"
+uid = "a287b8c8-c6dd-af9e-bea2-0e7bbbe6f4748aa5b40b"
+
+# Theme app extension. Ships the app embed that injects validated JSON-LD into <head>
+# on any theme. Replaces the theme's own structured data once the cutover is verified.
+[[extensions]]
+type = "theme"
+name = "Pixelify SEO Schema"
+handle = "seo-schema"

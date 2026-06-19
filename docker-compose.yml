@@ -1,0 +1,27 @@
+# Local-dev Postgres for pixelify-seo. Separate port + DB from pixelify-admin so both
+# apps can run at once. Production uses the host's managed Postgres (set DATABASE_URL there).
+#
+#   docker compose up -d db      # start Postgres in the background
+#   npx prisma migrate dev       # create the schema
+#   shopify app dev              # run the app (tunnels + overrides the app URL)
+#   docker compose down          # stop it (add -v to also wipe the data volume)
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pixelify
+      POSTGRES_PASSWORD: pixelify
+      POSTGRES_DB: pixelify_seo
+    ports:
+      - "5433:5432"
+    volumes:
+      - pixelify_seo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pixelify -d pixelify_seo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pixelify_seo_pgdata:

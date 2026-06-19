@@ -1,0 +1,157 @@
+// pixelify-seo data. Postgres in every environment (parity with pixelify-admin):
+// SQLite is not viable in prod — the session store holds each shop's offline token,
+// wiped on every redeploy on a container/serverless host. DATABASE_URL is set in env.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Shopify session storage (@shopify/shopify-app-session-storage-prisma).
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Per-shop install + billing snapshot. No business data — SEO config lives below;
+// products/collections/metafields stay in Shopify.
+model Shop {
+  shopDomain    String   @id
+  plan          String?  // free | starter | growth | pro
+  subscriptionGid String?
+  billingStatus String?
+  installedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// SEO core settings (spec seo-app-v1 §4). Templates + toggles are deterministic;
+// no per-resource copy is stored here (that's written to native seo.title/description).
+model SeoSettings {
+  shopDomain         String   @id
+  // Deterministic meta templates, e.g. {"product":"{{product.title}} — {{product.type}} | {{shop.name}}"}
+  metaTemplates      String   @default("{}") // JSON: { product, collection, page, article, blog }
+  altTemplate        String?  // e.g. "{{product.title}} – {{variant}}"
+  // Which JSON-LD nodes the app emits. The dedup pass suppresses any the theme already emits.
+  schemaToggles      String   @default("{}") // JSON: { product, breadcrumb, organization, faq, video, article }
+  // Nodes the app must NOT emit because the host theme/another app owns them
+  // (e.g. AggregateRating when the Reviews app emits it). The single-emitter rule.
+  suppressedNodes    String   @default("[]") // JSON array of node types
+  organization       String   @default("{}") // JSON: name, logo, sameAs[] for Organization schema
+  robotsRules        String?  // managed robots.txt additions
+  llmsTxtEnabled     Boolean  @default(false)
+  autoApply          Boolean  @default(false) // apply meta templates to new products on create
+  indexnowKey        String?  // IndexNow key, served as a key-file via the app proxy
+  cruxApiKey         String?  // Google CrUX API key for Core Web Vitals field data
+  monitoring         Boolean  @default(false) // scheduled re-audit + regression alerts
+  alertWebhook       String?  // Slack-compatible incoming webhook for regression alerts
+  updatedAt          DateTime @updatedAt
+}
+
+// Tracking module settings (spec seo-app-v1 §9). Platform IDs + per-platform event
+// matrix + consent. Web Pixel reads an effective copy via app proxy / metafield.
+model TrackingSettings {
+  shopDomain     String   @id
+  gtmId          String?
+  ga4Id          String?
+  metaPixelId    String?
+  tiktokPixelId  String?
+  pinterestId    String?
+  snapPixelId    String?
+  bingUetId      String?
+  // Per-platform event opt-in, e.g. {"ga4":["page_viewed","product_viewed","checkout_completed"]}
+  eventMatrix    String   @default("{}") // JSON
+  consentMode    Boolean  @default(true)  // gate all tags on Customer Privacy consent
+  serverSide     Boolean  @default(false) // Meta CAPI / GA4 MP / server GTM (Pro tier)
+  serverSideKeys String?  // JSON: encrypted server-side credentials
+  webPixelId     String?  // gid of the WebPixel created via webPixelCreate (create-once, then update)
+  updatedAt      DateTime @updatedAt
+}
+
+// 404 monitoring (spec §4): storefront beacon logs misses; the app suggests/creates 301s.
+model Redirect404Log {
+  id              String   @id @default(uuid())
+  shopDomain      String
+  path            String
+  hits            Int      @default(1)
+  suggestedTarget String?
+  resolved        Boolean  @default(false)
+  firstSeen       DateTime @default(now())
+  lastSeen        DateTime @updatedAt
+
+  @@unique([shopDomain, path])
+  @@index([shopDomain, resolved])
+}
+
+// Last-seen handle per resource, so products/collections/update can detect a handle change
+// and auto-create a 301 from the old storefront path (spec seo-app-v1 §4).
+model ResourceHandle {
+  shopDomain   String
+  resourceId   String // gid://shopify/Product/123
+  resourceType String // product | collection
+  handle       String
+  updatedAt    DateTime @updatedAt
+
+  @@id([shopDomain, resourceId])
+}
+
+// Audit trail of merchant/app actions (saves, applies, redirects) for governance + support.
+model ActivityLog {
+  id         String   @id @default(uuid())
+  shopDomain String
+  action     String
+  detail     String?
+  createdAt  DateTime @default(now())
+
+  @@index([shopDomain, createdAt])
+}
+
+// Google OAuth tokens per shop (Search Console). Written by the OAuth callback.
+model GoogleToken {
+  shopDomain   String    @id
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+// History of audit scores, written by the scheduled cron — powers regression alerts + a trend line.
+model AuditSnapshot {
+  id         String   @id @default(uuid())
+  shopDomain String
+  score      Int
+  issues     String   // JSON snapshot of issue counts
+  createdAt  DateTime @default(now())
+
+  @@index([shopDomain, createdAt])
+}
+
+// Recent storefront events forwarded by the Web Pixel (server-side beacon), for the live
+// event debugger. Capped per shop at write time. Empty until the app proxy is live (deployed).
+model RecentEvent {
+  id         String   @id @default(uuid())
+  shopDomain String
+  name       String
+  platform   String?
+  payload    String
+  createdAt  DateTime @default(now())
+
+  @@index([shopDomain, createdAt])
+}
