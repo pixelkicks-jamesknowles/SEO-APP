@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLoaderData, useActionData, Form, useNavigation, useSubmit } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, TextField, Button, Banner } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, TextField, Button, Banner, Badge } from "@shopify/polaris";
 import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -16,6 +16,8 @@ export const loader = async ({ request }) => {
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),
     gtmServerUrl: keys.gtmServerUrl || "",
+    hasGa4Id: Boolean(tracking?.ga4Id),
+    serverSideOn: Boolean(tracking?.serverSide),
     canTest: Boolean(tracking?.serverSide && tracking?.ga4Id && keys.ga4ApiSecret),
   };
 };
@@ -59,7 +61,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, canTest } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasGa4Id, serverSideOn, canTest } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -115,6 +117,11 @@ export default function Settings() {
               title="Server-side credentials"
               description="Used by server-side delivery: the GA4 Measurement Protocol secret (also powers the subscription event), the Meta CAPI token, and a server-side GTM container URL."
             />
+            <InlineStack gap="200">
+              <Badge tone={hasGa4Secret ? "success" : undefined}>{hasGa4Secret ? "GA4 secret saved" : "No GA4 secret"}</Badge>
+              <Badge tone={hasCapiToken ? "success" : undefined}>{hasCapiToken ? "Meta token saved" : "No Meta token"}</Badge>
+              <Badge tone={savedGtmUrl ? "success" : undefined}>{savedGtmUrl ? "sGTM URL saved" : "No sGTM URL"}</Badge>
+            </InlineStack>
             <Form method="post" ref={keysForm}>
               <BlockStack gap="200">
                 <TextField
@@ -159,17 +166,27 @@ export default function Settings() {
               title="Verify GA4"
               description="Send a pixelify_test event straight to GA4 using the saved secret, then watch it land in GA4 DebugView. The fastest way to confirm credentials work."
             />
-            <Form method="post">
-              <input type="hidden" name="intent" value="test" />
+            <BlockStack gap="150">
               <InlineStack gap="200" blockAlign="center">
-                <Button submit loading={busy} disabled={!canTest}>Send GA4 test event</Button>
-                {!canTest && (
-                  <Text as="span" tone="subdued" variant="bodySm">
-                    Needs GA4 + Server-side on (Tracking) and a saved GA4 secret above.
-                  </Text>
-                )}
+                <Badge tone={hasGa4Id ? "success" : "attention"}>{hasGa4Id ? "GA4 ID set" : "GA4 ID missing"}</Badge>
+                <Text as="span" tone="subdued" variant="bodySm">Measurement ID on the Tracking page</Text>
               </InlineStack>
-            </Form>
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone={serverSideOn ? "success" : "attention"}>{serverSideOn ? "Server-side on" : "Server-side off"}</Badge>
+                <Text as="span" tone="subdued" variant="bodySm">Server-side delivery toggle on the Tracking page</Text>
+              </InlineStack>
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone={hasGa4Secret ? "success" : "attention"}>{hasGa4Secret ? "Secret saved" : "Secret missing"}</Badge>
+                <Text as="span" tone="subdued" variant="bodySm">GA4 Measurement Protocol secret above</Text>
+              </InlineStack>
+            </BlockStack>
+            <InlineStack gap="200" blockAlign="center">
+              <Form method="post">
+                <input type="hidden" name="intent" value="test" />
+                <Button submit loading={busy} disabled={!canTest}>Send GA4 test event</Button>
+              </Form>
+              {!canTest && <Button url="/app/tracking" variant="plain">Open Tracking</Button>}
+            </InlineStack>
           </BlockStack>
         </Card>
       </BlockStack>
