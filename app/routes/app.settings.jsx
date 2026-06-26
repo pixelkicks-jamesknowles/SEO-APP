@@ -5,7 +5,7 @@ import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
-import { sendGa4Event } from "../lib/server-side.server";
+import { sendGa4Event, validateGa4Event } from "../lib/server-side.server";
 import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
@@ -32,15 +32,17 @@ export const action = async ({ request }) => {
     const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
     if (!tracking?.serverSide) return { testError: "Turn on Server-side delivery on the Tracking page first." };
     if (!tracking?.ga4Id) return { testError: "Add a GA4 measurement ID on the Tracking page first." };
-    const res = await sendGa4Event(tracking, {
-      name: "pixelify_test",
-      params: { debug_mode: 1, source: "pixelify-admin" },
-      clientId: "test.0",
-    });
+    const event = { name: "pixelify_test", params: { debug_mode: 1, source: "pixelify-admin" }, clientId: "test.0" };
+    // Validate first (the real endpoint always returns 204, even for a bad secret/payload).
+    const v = await validateGa4Event(tracking, event);
+    if (!v.ok) {
+      return { testError: `GA4 rejected the event: ${v.messages.join("; ")}. Check the measurement ID and secret belong to the same data stream.` };
+    }
+    const res = await sendGa4Event(tracking, event);
     await logActivity(shopDomain, "Sent GA4 test event");
     return res.sent
-      ? { testOk: "Sent a pixelify_test event to GA4. Open GA4, Admin, DebugView - it appears within a few seconds." }
-      : { testError: "Send failed. Check the GA4 Measurement Protocol secret below and that GA4 + Server-side are configured." };
+      ? { testOk: "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. Note: the Admin → Events list can take ~24h, so check Realtime, not there." }
+      : { testError: "Send failed after validating. Check the GA4 secret and that GA4 + Server-side are configured." };
   }
 
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });

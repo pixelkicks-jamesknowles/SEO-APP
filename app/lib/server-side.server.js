@@ -305,6 +305,28 @@ export async function fanOutServerSide(settings, event) {
   await Promise.all(jobs);
 }
 
+// Validate a GA4 event against the Measurement Protocol debug endpoint, which (unlike the real
+// endpoint, that always returns 204) reports payload problems. Returns { ok, messages }.
+export async function validateGa4Event(settings, { name, params = {}, clientId } = {}) {
+  let keys = {};
+  try {
+    keys = JSON.parse(settings?.serverSideKeys || "{}");
+  } catch {
+    return { ok: false, messages: ["Server-side credentials are not valid JSON."] };
+  }
+  if (!settings?.ga4Id) return { ok: false, messages: ["No GA4 measurement ID set."] };
+  if (!keys.ga4ApiSecret) return { ok: false, messages: ["No GA4 Measurement Protocol secret saved."] };
+  const url = `https://www.google-analytics.com/debug/mp/collect?measurement_id=${encodeURIComponent(settings.ga4Id)}&api_secret=${encodeURIComponent(keys.ga4ApiSecret)}`;
+  try {
+    const res = await fetch(url, { method: "POST", body: JSON.stringify({ client_id: clientId || "test.0", events: [{ name, params }] }) });
+    const json = await res.json().catch(() => ({}));
+    const messages = (json.validationMessages || []).map((m) => m.description || m.validationCode || JSON.stringify(m));
+    return { ok: messages.length === 0, messages };
+  } catch (e) {
+    return { ok: false, messages: [e?.message || "Request to GA4 failed."] };
+  }
+}
+
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
