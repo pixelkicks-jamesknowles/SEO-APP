@@ -29,22 +29,6 @@ runtime_context = "strict"
     name = "Meta Pixel ID"
     type = "single_line_text_field"
 
-    [extensions.settings.fields.tiktokPixelId]
-    name = "TikTok Pixel ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.pinterestId]
-    name = "Pinterest Tag ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.snapPixelId]
-    name = "Snap Pixel ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.bingUetId]
-    name = "Bing UET tag ID"
-    type = "single_line_text_field"
-
     [extensions.settings.fields.eventMatrix]
     name = "Per-platform event matrix (JSON)"
     type = "single_line_text_field"

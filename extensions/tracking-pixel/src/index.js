@@ -11,7 +11,7 @@ const EVENTS = [
   "payment_info_submitted",
   "checkout_completed",
 ];
-const PLATFORMS = ["gtm", "ga4", "meta", "tiktok", "pinterest", "snap", "bing"];
+const PLATFORMS = ["gtm", "ga4", "meta"];
 const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
 
 const safeParse = (s) => {
@@ -42,10 +42,6 @@ register(({ analytics, browser, settings, init }) => {
       gtm: settings.gtmId || null,
       ga4: settings.ga4Id || null,
       meta: settings.metaPixelId || null,
-      tiktok: settings.tiktokPixelId || null,
-      pinterest: settings.pinterestId || null,
-      snap: settings.snapPixelId || null,
-      bing: settings.bingUetId || null,
     },
     matrix: safeParse(settings.eventMatrix) || {},
     consentMode: settings.consentMode !== "false",
