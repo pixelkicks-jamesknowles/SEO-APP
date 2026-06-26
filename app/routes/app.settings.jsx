@@ -5,7 +5,8 @@ import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
-import { sendGa4Event, validateGa4Event } from "../lib/server-side.server";
+import { sendGa4Event, validateGa4Event, ga4EventFor } from "../lib/server-side.server";
+import { EVENT_SAMPLES } from "../lib/event-samples";
 import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
@@ -28,21 +29,40 @@ export const action = async ({ request }) => {
   const form = await request.formData();
 
   // Send a live GA4 test event (verifies the secret end-to-end; appears in GA4 DebugView).
-  if (form.get("intent") === "test") {
+  const intent = form.get("intent");
+  if (intent === "test" || intent === "test_purchase") {
     const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
     if (!tracking?.serverSide) return { testError: "Turn on Server-side delivery on the Tracking page first." };
     if (!tracking?.ga4Id) return { testError: "Add a GA4 measurement ID on the Tracking page first." };
-    const event = { name: "pixelify_test", params: { debug_mode: 1, source: "pixelify-admin" }, clientId: "test.0" };
+
+    let event;
+    if (intent === "test_purchase") {
+      // Purchase-shaped payload (the conversion that needs an app, since it fires in the checkout
+      // sandbox). Distinctly named so it can't pollute real `purchase` revenue in GA4.
+      const ga4 = ga4EventFor("checkout_completed", EVENT_SAMPLES.checkout_completed);
+      event = {
+        name: "pixelify_test_purchase",
+        params: { ...ga4.params, transaction_id: "PIXELIFY-TEST", debug_mode: 1 },
+        clientId: "test.0",
+      };
+    } else {
+      event = { name: "pixelify_test", params: { debug_mode: 1, source: "pixelify-admin" }, clientId: "test.0" };
+    }
+
     // Validate first (the real endpoint always returns 204, even for a bad secret/payload).
     const v = await validateGa4Event(tracking, event);
     if (!v.ok) {
       return { testError: `GA4 rejected the event: ${v.messages.join("; ")}. Check the measurement ID and secret belong to the same data stream.` };
     }
     const res = await sendGa4Event(tracking, event);
-    await logActivity(shopDomain, "Sent GA4 test event");
-    return res.sent
-      ? { testOk: "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. Note: the Admin → Events list can take ~24h, so check Realtime, not there." }
-      : { testError: "Send failed after validating. Check the GA4 secret and that GA4 + Server-side are configured." };
+    await logActivity(shopDomain, `Sent GA4 ${intent === "test_purchase" ? "test purchase" : "test"} event`);
+    if (!res.sent) return { testError: "Send failed after validating. Check the GA4 secret and that GA4 + Server-side are configured." };
+    return {
+      testOk:
+        intent === "test_purchase"
+          ? "Validated and sent a pixelify_test_purchase event (with items + value). Check GA4 → Realtime or DebugView. This tests the server→GA4 leg; the real pixel→server leg needs a checkout on a deployed store."
+          : "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. The Admin → Events list can take ~24h, so check Realtime.",
+    };
   }
 
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
@@ -186,6 +206,10 @@ export default function Settings() {
               <Form method="post">
                 <input type="hidden" name="intent" value="test" />
                 <Button submit loading={busy} disabled={!canTest}>Send GA4 test event</Button>
+              </Form>
+              <Form method="post">
+                <input type="hidden" name="intent" value="test_purchase" />
+                <Button submit loading={busy} disabled={!canTest}>Send test purchase</Button>
               </Form>
               {!canTest && <Button url="/app/tracking" variant="plain">Open Tracking</Button>}
             </InlineStack>
