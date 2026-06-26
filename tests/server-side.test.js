@@ -3,6 +3,7 @@ import {
   ga4EventFor,
   metaEventFor,
   metaUserData,
+  dataLayerFor,
   ga4Consent,
   extractCommerce,
   parseGaClientId,
@@ -101,6 +102,24 @@ describe("ga4EventFor", () => {
     const ev = ga4EventFor("engaged_view", { params: { engagement_time_msec: 15000, percent_scrolled: 60 } });
     expect(ev.name).toBe("engaged_view");
     expect(ev.params.engagement_time_msec).toBe(15000);
+  });
+});
+
+describe("dataLayerFor", () => {
+  test("restructures a purchase into the GTM event + ecommerce shape", () => {
+    const dl = dataLayerFor("checkout_completed", checkoutEvent);
+    expect(dl.event).toBe("purchase");
+    expect(dl.ecommerce.transaction_id).toBe("5500000000001");
+    expect(dl.ecommerce.value).toBe(120);
+    expect(dl.ecommerce.items).toHaveLength(1);
+    expect(dl.ecommerce.currency).toBe("GBP");
+  });
+
+  test("scroll has no ecommerce block", () => {
+    const dl = dataLayerFor("scroll", { params: { percent_scrolled: 50 } });
+    expect(dl.event).toBe("scroll");
+    expect(dl.percent_scrolled).toBe(50);
+    expect(dl.ecommerce).toBeUndefined();
   });
 });
 
