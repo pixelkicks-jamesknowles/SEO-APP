@@ -42,6 +42,9 @@ api_version = "2026-04"
   #   uri = "/webhooks/app/uninstalled"   # + app/scopes_update, products/create (auto-apply),
   #                                       #   products/update (auto-301), collections/update
   #   topics = [ "app/uninstalled" ]
+  #   [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
+  #   uri = "/webhooks/orders/paid"
+  #   topics = [ "orders/paid" ]
   #   [app_proxy]
   #   url = "https://<host>/proxy"
   #   subpath = "pixelify-seo"

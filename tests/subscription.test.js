@@ -1,0 +1,121 @@
+import {
+  parseIntervalDays,
+  lineIsSubscription,
+  syntheticClientId,
+  noteAttr,
+  orderHasAnalyticsConsent,
+  buildSubscriptionEvent,
+} from "../app/lib/subscription.js";
+
+describe("parseIntervalDays", () => {
+  test("numeric forms", () => {
+    expect(parseIntervalDays("1 week: save 5%")).toBe(7);
+    expect(parseIntervalDays("10 days")).toBe(10);
+    expect(parseIntervalDays("2 weeks")).toBe(14);
+    expect(parseIntervalDays("3 months")).toBe(84); // monthDays 28
+    expect(parseIntervalDays("1 year")).toBe(365);
+  });
+  test("worded forms", () => {
+    expect(parseIntervalDays("Weekly")).toBe(7);
+    expect(parseIntervalDays("Fortnightly")).toBe(14);
+    expect(parseIntervalDays("Monthly subscription")).toBe(28);
+    expect(parseIntervalDays("Quarterly")).toBe(84);
+    expect(parseIntervalDays("Annually")).toBe(365);
+  });
+  test("monthDays is configurable", () => {
+    expect(parseIntervalDays("1 month", { monthDays: 30 })).toBe(30);
+    expect(parseIntervalDays("monthly", { monthDays: 30 })).toBe(30);
+  });
+  test("unrecognised → 0", () => {
+    expect(parseIntervalDays("save 5%")).toBe(0);
+    expect(parseIntervalDays("")).toBe(0);
+    expect(parseIntervalDays(null)).toBe(0);
+  });
+});
+
+describe("lineIsSubscription", () => {
+  test("REST selling_plan_allocation / GraphQL sellingPlan / neither", () => {
+    expect(lineIsSubscription({ selling_plan_allocation: { selling_plan: { name: "Weekly" } } })).toBe(true);
+    expect(lineIsSubscription({ sellingPlan: { name: "Weekly" } })).toBe(true);
+    expect(lineIsSubscription({ sku: "X" })).toBe(false);
+  });
+});
+
+describe("syntheticClientId", () => {
+  test("deterministic per order + GA4 'a.b' shape", () => {
+    const a = syntheticClientId(7821117129046);
+    expect(a).toBe(syntheticClientId("7821117129046"));
+    expect(a).toMatch(/^\d+\.\d+$/);
+  });
+});
+
+describe("noteAttr / consent", () => {
+  test("reads a note attribute", () => {
+    const o = { note_attributes: [{ name: "ga_client_id", value: "111.222" }] };
+    expect(noteAttr(o, "ga_client_id")).toBe("111.222");
+    expect(noteAttr(o, "missing")).toBeNull();
+  });
+  test("consent heuristic = buyer_accepts_marketing", () => {
+    expect(orderHasAnalyticsConsent({ buyer_accepts_marketing: true })).toBe(true);
+    expect(orderHasAnalyticsConsent({ buyer_accepts_marketing: false })).toBe(false);
+    expect(orderHasAnalyticsConsent({})).toBe(false);
+  });
+});
+
+describe("buildSubscriptionEvent", () => {
+  const order = {
+    id: 7821117129046,
+    currency: "GBP",
+    current_total_price: "28.05",
+    current_total_tax: "0.00",
+    discount_codes: [{ code: "WELCOME5" }],
+    line_items: [
+      {
+        sku: "SKU-BEEF-500",
+        title: "Beef & Organic Chicken",
+        variant_title: "500g pack",
+        price: "2.95",
+        quantity: 16,
+        total_discount: "2.40",
+        selling_plan_allocation: { selling_plan: { name: "1 week: save 5%" } },
+      },
+      { sku: "SKU-TREAT", title: "Treats", price: "5.00", quantity: 1, total_discount: "0.00" },
+    ],
+  };
+
+  test("order-level dims + value + coupon", () => {
+    const { name, params } = buildSubscriptionEvent(order, {});
+    expect(name).toBe("subscription_purchase");
+    expect(params.transaction_id).toBe("7821117129046");
+    expect(params.value).toBe(28.05);
+    expect(params.currency).toBe("GBP");
+    expect(params.coupon).toBe("WELCOME5");
+    expect(params.subscription).toBe(true);
+    expect(params.subscription_interval).toBe(7); // first sub line
+  });
+
+  test("per-item discounted price/discount + per-item subscription flags", () => {
+    const { params } = buildSubscriptionEvent(order, {});
+    const beef = params.items[0];
+    expect(beef.item_subscription).toBe(true);
+    expect(beef.item_subscription_interval).toBe(7);
+    expect(beef.price).toBe(2.8); // (2.95*16 - 2.40)/16 = 2.8
+    expect(beef.discount).toBe(0.15); // 2.40/16
+    const treats = params.items[1];
+    expect(treats.item_subscription).toBe(false);
+    expect(treats.item_subscription_interval).toBe(0);
+  });
+
+  test("one-time-only order → subscription false, interval 0", () => {
+    const { params } = buildSubscriptionEvent({ id: 1, currency: "GBP", current_total_price: "5.00", line_items: [{ sku: "X", price: "5.00", quantity: 1 }] }, {});
+    expect(params.subscription).toBe(false);
+    expect(params.subscription_interval).toBe(0);
+  });
+
+  test("custom eventName + monthDays flow through", () => {
+    const o = { id: 2, line_items: [{ sku: "M", price: "1", quantity: 1, selling_plan_allocation: { selling_plan: { name: "1 month" } } }] };
+    const { name, params } = buildSubscriptionEvent(o, { eventName: "sub_buy", monthDays: 30 });
+    expect(name).toBe("sub_buy");
+    expect(params.subscription_interval).toBe(30);
+  });
+});

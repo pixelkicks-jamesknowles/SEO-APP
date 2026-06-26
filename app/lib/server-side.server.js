@@ -32,6 +32,31 @@ async function ga4(measurementId, apiSecret, name, clientId) {
   });
 }
 
+// Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
+// Unlike ga4() above (empty params, for the beacon path), this forwards the whole params object.
+// Best-effort; never throws. Returns { sent }.
+export async function sendGa4Event(settings, { name, params = {}, clientId } = {}) {
+  if (!settings?.serverSide || !settings.ga4Id || !name) return { sent: false };
+  let keys = {};
+  try {
+    keys = JSON.parse(settings.serverSideKeys || "{}");
+  } catch {
+    return { sent: false };
+  }
+  if (!keys.ga4ApiSecret) return { sent: false };
+  const url = `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(settings.ga4Id)}&api_secret=${encodeURIComponent(keys.ga4ApiSecret)}`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({ client_id: clientId || `${Date.now()}.0`, events: [{ name, params }] }),
+    });
+    return { sent: true };
+  } catch (e) {
+    console.warn("[ga4 mp] subscription event send failed:", e?.message || e);
+    return { sent: false };
+  }
+}
+
 async function meta(pixelId, token, name) {
   const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(token)}`;
   await fetch(url, {

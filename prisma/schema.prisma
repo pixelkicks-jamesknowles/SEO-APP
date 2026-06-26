@@ -82,7 +82,21 @@ model TrackingSettings {
   serverSide     Boolean  @default(false) // Meta CAPI / GA4 MP / server GTM (Pro tier)
   serverSideKeys String?  // JSON: encrypted server-side credentials
   webPixelId     String?  // gid of the WebPixel created via webPixelCreate (create-once, then update)
+  // Server-side subscription conversion event (orders/paid → GA4). See seo-subscription-tracking-v1.
+  subscriptionTracking Boolean @default(false)
+  subscriptionConfig   String  @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
   updatedAt      DateTime @updatedAt
+}
+
+// Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
+// order id). Purged on a TTL by the existing cron.audit job.
+model ProcessedWebhook {
+  webhookId  String   @id
+  shopDomain String
+  topic      String
+  at         DateTime @default(now())
+
+  @@index([shopDomain, at])
 }
 
 // 404 monitoring (spec §4): storefront beacon logs misses; the app suggests/creates 301s.
