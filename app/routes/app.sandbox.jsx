@@ -13,8 +13,10 @@ import {
   Box,
   Divider,
 } from "@shopify/polaris";
+import { ClipboardIcon } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server";
 import { SectionHeading } from "../components/SectionHeading";
+import { eventLabel } from "../lib/event-labels";
 import { EVENT_SAMPLES, SANDBOX_EVENTS, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
 import { ga4EventFor, metaEventFor, dataLayerFor, dataLayerFromGa4, ga4Consent } from "../lib/server-side.server";
 import { buildSubscriptionEvent, syntheticClientId } from "../lib/subscription";
@@ -97,16 +99,31 @@ export const action = async ({ request }) => {
 };
 
 function Code({ value }) {
+  const [copied, setCopied] = useState(false);
+  const text = JSON.stringify(value, null, 2);
+  const copy = () => {
+    try {
+      navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
   return (
-    <Box
-      background="bg-surface-secondary"
-      borderRadius="200"
-      padding="300"
-      overflowX="scroll"
-    >
-      <pre style={{ margin: 0, fontFamily: "var(--p-font-family-mono)", fontSize: "12px", whiteSpace: "pre", lineHeight: 1.5 }}>
-        {JSON.stringify(value, null, 2)}
-      </pre>
+    <Box background="bg-surface-secondary" borderRadius="200" padding="300">
+      <BlockStack gap="100">
+        <InlineStack align="end">
+          <Button size="micro" variant="tertiary" icon={ClipboardIcon} onClick={copy}>
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </InlineStack>
+        <Box overflowX="scroll">
+          <pre style={{ margin: 0, fontFamily: "var(--p-font-family-mono)", fontSize: "12px", whiteSpace: "pre", lineHeight: 1.5 }}>
+            {text}
+          </pre>
+        </Box>
+      </BlockStack>
     </Box>
   );
 }
@@ -140,13 +157,21 @@ export default function Sandbox() {
             <BlockStack gap="400">
               <SectionHeading
                 title="Choose events"
-                help="Tick one or more events to see how they would be transformed and delivered. Combine several to preview a full journey."
+                description="Tick one or more events to see how they would be transformed and delivered. Combine several to preview a full journey."
               />
+              <InlineStack gap="200">
+                <Button variant="plain" onClick={() => setSelected(Object.fromEntries(events.map((n) => [n, true])))}>
+                  Select all
+                </Button>
+                <Button variant="plain" onClick={() => setSelected({})}>
+                  Clear
+                </Button>
+              </InlineStack>
               <InlineStack gap="300" wrap>
                 {events.map((name) => (
                   <span key={name}>
                     {selected[name] && <input type="hidden" name="evt" value={name} />}
-                    <Checkbox label={name} checked={!!selected[name]} onChange={() => toggle(name)} />
+                    <Checkbox label={eventLabel(name)} checked={!!selected[name]} onChange={() => toggle(name)} />
                   </span>
                 ))}
               </InlineStack>
@@ -205,7 +230,7 @@ export default function Sandbox() {
         {actionData?.results?.map((r, i) => (
           <Card key={`${r.name}-${i}`}>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">{r.name}</Text>
+              <Text as="h2" variant="headingMd">{eventLabel(r.name)}</Text>
               {r.note && (
                 <Banner tone="info">{r.note}</Banner>
               )}

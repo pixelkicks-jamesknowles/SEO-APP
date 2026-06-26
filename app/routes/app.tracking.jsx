@@ -1,4 +1,4 @@
-import { useLoaderData, useActionData, Form, useNavigation } from "@remix-run/react";
+import { useLoaderData, useActionData, Form, useNavigation, useSubmit } from "@remix-run/react";
 import {
   Page,
   Card,
@@ -12,11 +12,22 @@ import {
   Button,
   Banner,
 } from "@shopify/polaris";
-import { useState } from "react";
+import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
+import { useState, useRef, useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
+import { eventLabel } from "../lib/event-labels";
+
+// Build the matrix[platform][event] = boolean map from saved settings.
+function buildMatrix(data) {
+  const m = {};
+  for (const { key } of PLATFORMS) {
+    m[key] = Object.fromEntries(EVENTS.map((e) => [e, (data.eventMatrix[key] || []).includes(e)]));
+  }
+  return m;
+}
 
 // Shopify standard customer events (Web Pixels API).
 const EVENTS = [
@@ -48,7 +59,10 @@ export const loader = async ({ request }) => {
   const t = await prisma.trackingSettings.findUnique({
     where: { shopDomain: session.shop },
   });
+  const keys = JSON.parse(t?.serverSideKeys || "{}");
   return {
+    hasGa4Secret: Boolean(keys.ga4ApiSecret),
+    hasCapiToken: Boolean(keys.metaCapiToken),
     gtmId: t?.gtmId ?? "",
     ga4Id: t?.ga4Id ?? "",
     metaPixelId: t?.metaPixelId ?? "",
@@ -172,15 +186,7 @@ export default function Tracking() {
   const saving = nav.state === "submitting";
 
   // Local matrix state: matrix[platform][event] = boolean
-  const [matrix, setMatrix] = useState(() => {
-    const m = {};
-    for (const { key } of PLATFORMS) {
-      m[key] = Object.fromEntries(
-        EVENTS.map((e) => [e, (data.eventMatrix[key] || []).includes(e)]),
-      );
-    }
-    return m;
-  });
+  const [matrix, setMatrix] = useState(() => buildMatrix(data));
   const [consent, setConsent] = useState(data.consentMode);
   const [consentSignals, setConsentSignals] = useState(data.consentSignals);
   const [debug, setDebug] = useState(data.pixelDebug);
@@ -213,12 +219,64 @@ export default function Tracking() {
       return { ...m, [p]: Object.fromEntries(EVENTS.map((e) => [e, turnOn])) };
     });
 
+  // --- Contextual save bar (App Bridge): show on unsaved changes, hide after save/discard. ---
+  const shopify = useAppBridge();
+  const submit = useSubmit();
+  const formRef = useRef(null);
+  const snapshotOf = () =>
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, subTracking, subCfg, ids });
+  const snapshot = snapshotOf();
+  const baseline = useRef(snapshot);
+  const dirty = snapshot !== baseline.current;
+
+  useEffect(() => {
+    if (dirty) shopify.saveBar.show("tracking-save");
+    else shopify.saveBar.hide("tracking-save");
+  }, [dirty, shopify]);
+
+  useEffect(() => {
+    if (actionData?.ok && nav.state === "idle") {
+      baseline.current = snapshotOf();
+      shopify.saveBar.hide("tracking-save");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionData, nav.state]);
+
+  const discard = () => {
+    setMatrix(buildMatrix(data));
+    setConsent(data.consentMode);
+    setConsentSignals(data.consentSignals);
+    setDebug(data.pixelDebug);
+    setScrollDepth(seoHas("scroll"));
+    setEngagedView(seoHas("engaged_view"));
+    setServerSide(data.serverSide);
+    setSubTracking(data.subscriptionTracking);
+    setSubCfg({
+      eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
+      monthDays: String(data.subscriptionConfig.monthDays ?? 28),
+      clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
+    });
+    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId });
+  };
+  const saveNow = () => submit(formRef.current, { method: "post" });
+
+  // Inline config validation - catch the "set up but sends nothing" traps.
+  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId);
+  const deliveryOffWarn = idsSet && !serverSide;
+  const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
+  const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
+
   return (
     <Page
       title="Tracking"
-      subtitle="GTM, GA4 and Meta - fired via the Web Pixels API, consent-gated."
+      subtitle="Send GTM, GA4 and Meta events via the Web Pixels API, consent-gated."
+      primaryAction={{ content: "Save", onAction: saveNow, loading: saving, disabled: !dirty }}
     >
-      <Form method="post">
+      <SaveBar id="tracking-save">
+        <button variant="primary" onClick={saveNow}>Save</button>
+        <button onClick={discard}>Discard</button>
+      </SaveBar>
+      <Form method="post" ref={formRef}>
         <BlockStack gap="400">
           {actionData?.ok && !actionData?.pixelError && (
             <Banner tone="success">Saved - web pixel synced.</Banner>
@@ -228,16 +286,26 @@ export default function Tracking() {
               {actionData.pixelError}
             </Banner>
           )}
+          {deliveryOffWarn && (
+            <Banner tone="warning" title="Nothing will be sent yet">
+              You&apos;ve added destination IDs, but <b>Server-side delivery</b> is off. Turn it on below
+              for events to actually send.
+            </Banner>
+          )}
+          {(ga4SecretWarn || metaTokenWarn) && (
+            <Banner tone="warning" title="Missing server-side credentials">
+              {ga4SecretWarn && <p>GA4 is set but has no Measurement Protocol secret - add it on Settings.</p>}
+              {metaTokenWarn && <p>Meta is set but has no CAPI token - add it on Settings.</p>}
+            </Banner>
+          )}
 
           <Card>
             <BlockStack gap="300">
               <SectionHeading
-                title="Tags"
-                help="Paste each platform's tracking ID; blank platforms are skipped. Events fire through Shopify's Web Pixels API, which also covers checkout and purchase."
+                title="Destinations"
+                description="Paste each platform's ID. Leave one blank to disable that destination. Events fire via Shopify's Web Pixels API, which also covers checkout and purchase."
+                help="GTM here is a web container ID for reference; server-side GTM delivery uses the container URL on Settings."
               />
-              <Text as="p" tone="subdued">
-                Paste each platform&apos;s ID. Leave blank to disable that platform.
-              </Text>
               <FormLayout>
                 <FormLayout.Group>
                   <TextField label="GTM container ID" name="gtmId" autoComplete="off" value={ids.gtmId} onChange={setId("gtmId")} placeholder="GTM-XXXXXXX" error={idError("gtm", ids.gtmId)} />
@@ -251,18 +319,18 @@ export default function Tracking() {
           <Card padding="0">
             <div style={{ padding: "var(--p-space-400)" }}>
               <SectionHeading
-                title="Events to track"
-                help="Tick which standard storefront/checkout events each platform receives. Because it uses Web Pixels, checkout and purchase events are covered - which theme scripts can't reach."
+                title="Events"
+                description="Tick which events each destination receives. Because it uses Web Pixels, checkout and purchase are covered - which theme scripts can't reach."
               />
-              <Text as="p" tone="subdued">
-                Tick which events each platform receives. Fired via the Web Pixels API, so
-                checkout &amp; purchase are covered.
-              </Text>
             </div>
+            <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <caption style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>
+                Per-destination event opt-in matrix
+              </caption>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left", padding: "var(--p-space-200) var(--p-space-400)" }}>
+                  <th scope="col" style={{ textAlign: "left", padding: "var(--p-space-200) var(--p-space-400)" }}>
                     <Text as="span" variant="bodySm" tone="subdued">
                       Event
                     </Text>
@@ -270,6 +338,7 @@ export default function Tracking() {
                   {PLATFORMS.map((p) => (
                     <th
                       key={p.key}
+                      scope="col"
                       style={{ textAlign: "center", padding: "var(--p-space-200) var(--p-space-300)" }}
                     >
                       <BlockStack gap="050" inlineAlign="center">
@@ -287,11 +356,11 @@ export default function Tracking() {
               <tbody>
                 {EVENTS.map((e) => (
                   <tr key={e} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
-                    <td style={{ padding: "var(--p-space-200) var(--p-space-400)" }}>
+                    <th scope="row" style={{ textAlign: "left", fontWeight: "normal", padding: "var(--p-space-200) var(--p-space-400)" }}>
                       <Text as="span" variant="bodyMd">
-                        {e}
+                        {eventLabel(e)}
                       </Text>
-                    </td>
+                    </th>
                     {PLATFORMS.map((p) => (
                       <td key={p.key} style={{ padding: "var(--p-space-100) var(--p-space-300)" }}>
                         {matrix[p.key][e] && (
@@ -299,7 +368,7 @@ export default function Tracking() {
                         )}
                         <div style={{ display: "flex", justifyContent: "center" }}>
                           <Checkbox
-                            label={`${p.label} ${e}`}
+                            label={`${p.label}: ${eventLabel(e)}`}
                             labelHidden
                             checked={matrix[p.key][e]}
                             onChange={() => toggle(p.key, e)}
@@ -311,6 +380,7 @@ export default function Tracking() {
                 ))}
               </tbody>
             </table>
+            </div>
           </Card>
 
           <Card>
