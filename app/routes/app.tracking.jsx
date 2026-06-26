@@ -57,6 +57,7 @@ export const loader = async ({ request }) => {
     serverSide: t?.serverSide ?? false,
     subscriptionTracking: t?.subscriptionTracking ?? false,
     subscriptionConfig: JSON.parse(t?.subscriptionConfig ?? "{}"),
+    pixelDebug: t?.pixelDebug ?? false,
   };
 };
 
@@ -90,6 +91,7 @@ export const action = async ({ request }) => {
     metaPixelId: form.get("metaPixelId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
+    pixelDebug: form.get("pixelDebug") === "on",
     serverSide: form.get("serverSide") === "on",
     subscriptionTracking: form.get("subscriptionTracking") === "on",
     subscriptionConfig: JSON.stringify({
@@ -118,6 +120,7 @@ export const action = async ({ request }) => {
       metaPixelId: data.metaPixelId || "",
       eventMatrix: JSON.parse(data.eventMatrix || "{}"),
       consentMode: data.consentMode,
+      debug: data.pixelDebug,
       proxyUrl: "", // set to the app-proxy /track URL once deployed to a real host
     }),
   };
@@ -166,6 +169,7 @@ export default function Tracking() {
     return m;
   });
   const [consent, setConsent] = useState(data.consentMode);
+  const [debug, setDebug] = useState(data.pixelDebug);
   const [serverSide, setServerSide] = useState(data.serverSide);
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
   const [subCfg, setSubCfg] = useState({
@@ -303,6 +307,13 @@ export default function Tracking() {
                 name="consentMode"
                 checked={consent}
                 onChange={setConsent}
+              />
+              <Checkbox
+                label="Debug mode — log every event to the storefront browser console"
+                helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
+                name="pixelDebug"
+                checked={debug}
+                onChange={setDebug}
               />
               <Checkbox
                 label="Server-side (Meta CAPI / GA4 Measurement Protocol)"

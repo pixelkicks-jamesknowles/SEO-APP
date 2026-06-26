@@ -49,6 +49,7 @@ register(({ analytics, browser, settings, init }) => {
     matrix: s.eventMatrix && typeof s.eventMatrix === "object" ? s.eventMatrix : {},
     consentMode: s.consentMode !== false,
     proxyUrl: s.proxyUrl || null,
+    debug: s.debug === true,
   };
 
   // Consent gate. With consentMode on, fire nothing until the visitor has allowed
@@ -63,7 +64,6 @@ register(({ analytics, browser, settings, init }) => {
   // Route one normalized event to each platform that (a) has an ID and (b) opted in
   // to this event in the matrix.
   const route = (name, event) => {
-    if (!consentAllows()) return;
     const payload = {
       name,
       id: event?.id,
@@ -72,6 +72,17 @@ register(({ analytics, browser, settings, init }) => {
       context: event?.context,
       utm: utmFromHref(event?.context?.document?.location?.href),
     };
+    // Debug mode: log every event in the storefront console regardless of platform IDs / consent,
+    // so firing can be verified without configuring any destination tag.
+    if (cfg.debug) {
+      try {
+        // eslint-disable-next-line no-console
+        console.log("[pixelify-tracking]", name, { consentAllowed: consentAllows(), payload });
+      } catch {
+        /* sandbox: never throw */
+      }
+    }
+    if (!consentAllows()) return;
     for (const p of PLATFORMS) {
       if (!cfg.ids[p]) continue;
       if (!(cfg.matrix[p] || []).includes(name)) continue;

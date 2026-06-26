@@ -85,6 +85,7 @@ model TrackingSettings {
   // Server-side subscription conversion event (orders/paid → GA4). See seo-subscription-tracking-v1.
   subscriptionTracking Boolean @default(false)
   subscriptionConfig   String  @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
+  pixelDebug     Boolean  @default(false) // log every event in the storefront console (testing)
   updatedAt      DateTime @updatedAt
 }
 
