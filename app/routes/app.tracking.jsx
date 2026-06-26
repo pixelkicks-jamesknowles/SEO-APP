@@ -7,6 +7,7 @@ import {
   FormLayout,
   Text,
   TextField,
+  Select,
   Checkbox,
   Button,
   Banner,
@@ -70,6 +71,8 @@ export const loader = async ({ request }) => {
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     serverSide: t?.serverSide ?? false,
+    subscriptionTracking: t?.subscriptionTracking ?? false,
+    subscriptionConfig: JSON.parse(t?.subscriptionConfig ?? "{}"),
     isPro,
   };
 };
@@ -109,6 +112,13 @@ export const action = async ({ request }) => {
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     serverSide: form.get("serverSide") === "on",
+    subscriptionTracking: form.get("subscriptionTracking") === "on",
+    subscriptionConfig: JSON.stringify({
+      eventName: form.get("sub_eventName") || "subscription_purchase",
+      monthDays: Number(form.get("sub_monthDays")) || 28,
+      clientIdMode: form.get("sub_clientIdMode") || "synthetic",
+      respectConsent: true,
+    }),
   };
 
   const existing = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
@@ -178,6 +188,13 @@ export default function Tracking() {
   });
   const [consent, setConsent] = useState(data.consentMode);
   const [serverSide, setServerSide] = useState(data.serverSide);
+  const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
+  const [subCfg, setSubCfg] = useState({
+    eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
+    monthDays: String(data.subscriptionConfig.monthDays ?? 28),
+    clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
+  });
+  const setSub = (k) => (v) => setSubCfg((s) => ({ ...s, [k]: v }));
   const [ids, setIds] = useState({
     gtmId: data.gtmId,
     ga4Id: data.ga4Id,
@@ -319,6 +336,36 @@ export default function Tracking() {
                 disabled={!data.isPro}
                 onChange={setServerSide}
               />
+              <Checkbox
+                label="Subscription conversion tracking — send a server-side subscription_purchase event from orders/paid"
+                helpText={
+                  serverSide && data.isPro
+                    ? "Requires the GA4 Measurement Protocol API secret on the Settings page. Carries subscription / subscription_interval (per-order + per-line) and the actual discounted amount."
+                    : "Enable Server-side above (Pro) first."
+                }
+                name="subscriptionTracking"
+                checked={subTracking && serverSide && data.isPro}
+                disabled={!serverSide || !data.isPro}
+                onChange={setSubTracking}
+              />
+              {subTracking && serverSide && data.isPro ? (
+                <FormLayout>
+                  <FormLayout.Group>
+                    <TextField label="Event name" name="sub_eventName" autoComplete="off" value={subCfg.eventName} onChange={setSub("eventName")} helpText="Must not be 'purchase' (avoids colliding with the native GA4 purchase)." />
+                    <TextField label="Days per month" type="number" name="sub_monthDays" autoComplete="off" value={subCfg.monthDays} onChange={setSub("monthDays")} helpText="How 'monthly' plans map to days (client default 28)." />
+                    <Select
+                      label="Client ID"
+                      name="sub_clientIdMode"
+                      options={[
+                        { label: "Synthetic (join on transaction_id)", value: "synthetic" },
+                        { label: "Cookie (ga_client_id from checkout)", value: "cookie" },
+                      ]}
+                      value={subCfg.clientIdMode}
+                      onChange={setSub("clientIdMode")}
+                    />
+                  </FormLayout.Group>
+                </FormLayout>
+              ) : null}
             </BlockStack>
           </Card>
 
