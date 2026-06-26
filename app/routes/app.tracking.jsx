@@ -302,26 +302,28 @@ export default function Tracking() {
                 title="Consent & delivery"
                 help="Gate every tag behind the Customer Privacy (consent) API, and optionally send events server-side via GA4 Measurement Protocol / Meta CAPI for accuracy and ad-blocker resilience."
               />
+              {/* Polaris Checkbox doesn't post a form value, so a hidden input carries each toggle. */}
+              <input type="hidden" name="consentMode" value={consent ? "on" : ""} />
               <Checkbox
                 label="Consent mode — gate all tags on the Customer Privacy API (recommended)"
-                name="consentMode"
                 checked={consent}
                 onChange={setConsent}
               />
+              <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
               <Checkbox
                 label="Debug mode — log every event to the storefront browser console"
                 helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
-                name="pixelDebug"
                 checked={debug}
                 onChange={setDebug}
               />
+              <input type="hidden" name="serverSide" value={serverSide ? "on" : ""} />
               <Checkbox
                 label="Server-side (Meta CAPI / GA4 Measurement Protocol)"
                 helpText="Events also sent server-side for accuracy + ad-blocker resilience."
-                name="serverSide"
                 checked={serverSide}
                 onChange={setServerSide}
               />
+              <input type="hidden" name="subscriptionTracking" value={subTracking && serverSide ? "on" : ""} />
               <Checkbox
                 label="Subscription conversion tracking — send a server-side subscription_purchase event from orders/paid"
                 helpText={
@@ -329,7 +331,6 @@ export default function Tracking() {
                     ? "Requires the GA4 Measurement Protocol API secret on the Settings page. Carries subscription / subscription_interval (per-order + per-line) and the actual discounted amount."
                     : "Enable Server-side above first."
                 }
-                name="subscriptionTracking"
                 checked={subTracking && serverSide}
                 disabled={!serverSide}
                 onChange={setSubTracking}
