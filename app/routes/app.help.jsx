@@ -33,8 +33,9 @@ export default function Help() {
           <Text as="p">
             It captures storefront and checkout events and delivers them server-side to GA4
             (Measurement Protocol), Meta (Conversions API) and a server-side GTM container. On top of
-            the standard events it adds subscription conversion tracking from paid orders and SEO
-            engagement signals (scroll depth and engaged-content views).
+            the standard events it adds subscription conversion tracking, refund / cancellation
+            tracking, and SEO engagement signals (scroll depth and engaged-content views) - with bot
+            filtering and per-destination delivery health built in.
           </Text>
           <Text as="p" tone="subdued">
             Because delivery is server-side, events keep flowing past ad blockers, Safari ITP and the
@@ -56,90 +57,136 @@ export default function Help() {
               engaged-content views, which are not Shopify customer events.
             </List.Item>
             <List.Item>
-              Both send one first-party beacon to the app proxy, which forwards the event server-side
-              to GA4 / Meta / server-side GTM using the credentials you store. In the strict pixel
-              sandbox you cannot load gtag or fbq, so server-side is the delivery path.
+              Both send one first-party beacon to the app proxy. <b>Bot filtering</b> drops known
+              crawlers and headless agents, then the app forwards the event server-side to GA4 / Meta /
+              server-side GTM using the credentials you store. In the strict pixel sandbox you cannot
+              load gtag or fbq, so server-side is the delivery path.
             </List.Item>
             <List.Item>
-              Subscription conversions come from the <b>orders/paid</b> webhook, not the pixel.
+              Subscription conversions (orders/paid) and refunds (refunds/create, orders/cancelled) come
+              from webhooks, not the pixel.
+            </List.Item>
+            <List.Item>
+              Every server-side send is recorded, so <b>Delivery health</b> shows whether each
+              destination is actually receiving data.
             </List.Item>
           </List>
         </Section>
 
-        <Section
-          title="Setup checklist"
-          help="The order to switch things on."
-        >
+        <Section title="Setup checklist" help="The order to switch things on.">
           <List type="number">
             <List.Item>
               On <Link to="/app/tracking">Tracking</Link>, enter your GA4, Meta and/or GTM IDs and tick
-              which events each platform should receive.
+              which events each destination should receive.
             </List.Item>
             <List.Item>
               On <Link to="/app/settings">Settings</Link>, add the server-side credentials (GA4
               Measurement Protocol secret, Meta CAPI token, and a server-side GTM container URL if you
               use GTM).
             </List.Item>
-            <List.Item>Turn on <b>Server-side</b> delivery on the Tracking page.</List.Item>
+            <List.Item>
+              Turn on <b>Server-side delivery</b> on the Tracking page. Keep <b>Consent mode</b> and
+              <b> Bot filtering</b> on. Optionally enable <b>Subscription</b> and <b>Refund</b> tracking.
+            </List.Item>
             <List.Item>
               For scroll and engaged-content events, enable the <b>Pixelify SEO engagement</b> app embed
               in Theme editor, App embeds, then tick those events on the Tracking page.
             </List.Item>
             <List.Item>
-              The app proxy and webhooks need a deployed (public) host. They do not work on localhost,
-              so deploy or use a tunnel to test live delivery.
+              Verify on Settings with <b>Send GA4 test event / purchase / subscription</b>, then in GA4
+              Realtime / DebugView. The app proxy and webhooks need a deployed (public) host - they do
+              not work on localhost, so deploy or use a tunnel to test live storefront delivery.
             </List.Item>
           </List>
         </Section>
 
-        <Section
-          title="How to test"
-          help="From safe preview to live verification."
-        >
+        <Section title="How to test" help="From safe preview to live verification.">
           <List>
             <List.Item>
-              <b><Link to="/app/sandbox">Event sandbox</Link></b>: preview the exact GTM dataLayer,
-              GA4 and Meta payloads for any event (or several together), with different consent states.
+              <b><Link to="/app/sandbox">Event sandbox</Link></b>: preview the exact GTM dataLayer, GA4
+              and Meta payloads for any event (or several together), with different consent states.
               Nothing is sent, so it is safe to experiment and to build GTM tags against.
             </List.Item>
             <List.Item>
+              <b>Settings test buttons</b>: <i>Send GA4 test event</i> (a ping), <i>Send test purchase</i>
+              {" "}(items + value - the conversion that needs an app, since it fires in the checkout
+              sandbox), and <i>Send test subscription</i> (subscription + interval + items). Each
+              validates the payload against GA4 first, then sends a distinctly-named event so it never
+              pollutes real revenue.
+            </List.Item>
+            <List.Item>
               <b>Debug mode</b> (Tracking page): logs every event to the storefront browser console.
-              Open the storefront, then DevTools, Console, and look for “[pixelify-tracking]”. This
-              confirms events fire and respect consent without configuring any destination.
+              Open the storefront, then DevTools, Console, and look for “[pixelify-tracking]”. Confirms
+              events fire and respect consent without configuring any destination.
             </List.Item>
             <List.Item>
               <b><Link to="/app/events">Live events</Link></b>: once deployed, server-side events stream
-              here as they arrive (it does not work over localhost).
+              here with expandable payloads, plus a <b>Delivery health (last 24h)</b> panel showing each
+              destination&apos;s success / failure counts. (Does not work over localhost.)
             </List.Item>
             <List.Item>
-              <b>GA4 DebugView</b> and <b>Meta Test Events</b>: the source of truth for confirming events
-              actually land in each platform with the right parameters.
+              <b>GA4 DebugView / Realtime</b> and <b>Meta Test Events</b>: the source of truth. Note GA4
+              Admin → Events can lag ~24h, so check Realtime, not there.
             </List.Item>
           </List>
         </Section>
 
-        <Section
-          title="Consent (and Consent Mode v2)"
-          help="How consent affects what is sent."
-        >
+        <Section title="Consent (and Consent Mode v2)" help="How consent affects what is sent.">
           <Text as="p">
             With Consent mode on, events respect the Customer Privacy API. With Consent Mode v2 enabled,
             instead of dropping events when a visitor declines, the app sends a privacy-safe, flagged hit
-            so GA4 can model the missing conversions. Meta is skipped without marketing consent. Untick
+            so GA4 can model the missing conversions; Meta is skipped without marketing consent. Untick
             Consent Mode v2 for strict gating, where nothing fires until consent is granted. You can see
             exactly how each consent state changes the payload in the Event sandbox.
           </Text>
         </Section>
 
-        <Section
-          title="Subscription conversion tracking"
-          help="Recurring revenue that GA4 normally never sees."
-        >
+        <Section title="Subscription conversion tracking" help="Recurring revenue GA4 normally never sees.">
           <Text as="p">
             When enabled, a paid order fires a server-side subscription_purchase event to GA4. It uses a
-            distinct event name so it never collides with the native purchase, and recurring orders
-            inherit the first order&apos;s client_id and source/medium/campaign, so they keep their
-            original attribution instead of looking like fresh direct traffic.
+            distinct event name so it never collides with the native purchase, carries subscription /
+            subscription_interval per order and per line, and recurring orders inherit the first
+            order&apos;s client_id and source/medium/campaign, so they keep their original attribution
+            instead of looking like fresh direct traffic.
+          </Text>
+        </Section>
+
+        <Section title="Refund & cancellation tracking" help="Negative conversions so ads optimise correctly.">
+          <Text as="p">
+            When enabled, a refund (refunds/create) or a cancelled order (orders/cancelled) fires a GA4
+            <b> refund</b> event with the original transaction_id and the refunded value and items. GA4
+            nets it off the matching purchase, and through GA4 → Google Ads import that flows to Google
+            Ads too - so campaigns stop optimising toward orders that get returned. Requires Server-side
+            delivery; partial refunds send only the refunded line items.
+          </Text>
+        </Section>
+
+        <Section title="SEO engagement (scroll + engaged content)" help="On-site signals SEO teams care about.">
+          <Text as="p">
+            Scroll depth and engaged-content views are not Shopify customer events, so they are captured
+            by the <b>Pixelify SEO engagement</b> app embed (Theme editor → App embeds) and forwarded to
+            GA4 / GTM as <b>scroll</b> (with percent_scrolled) and <b>engaged_view</b> events. Site search
+            is sent as a complete GA4 <b>search</b> event with search_term. Enable the embed, then tick
+            the engagement events on the Tracking page. These go to GA4 and GTM only, not Meta.
+          </Text>
+        </Section>
+
+        <Section title="Bot filtering" help="Keeps fake conversions out of your ad platforms.">
+          <Text as="p">
+            Bot filtering (on by default) drops known crawlers, headless browsers and monitoring agents
+            before anything is recorded or delivered, so the 20-30% of traffic that is non-human never
+            reaches your ad platforms as fake conversions. It applies to storefront pixel events; order
+            webhooks (subscription, refund) are real orders and are never filtered.
+          </Text>
+        </Section>
+
+        <Section title="Delivery health" help="Proof that each destination is receiving data.">
+          <Text as="p">
+            Every server-side send is logged with its outcome. The <Link to="/app/events">Live events</Link>
+            {" "}page shows a <b>Delivery health (last 24h)</b> panel - green when a destination is
+            receiving everything, red with a failure count when something is wrong (for example a bad Meta
+            token). The Home page flags recent delivery failures too. This is the fastest way to catch a
+            broken credential before it costs you data.
           </Text>
         </Section>
 
@@ -167,9 +214,9 @@ export default function Help() {
         </Section>
 
         <Banner tone="info">
-          Still stuck? The Event sandbox shows precisely what the app would send, and Debug mode confirms
-          what fires on the storefront. Between them you can diagnose almost any tracking question without
-          guessing.
+          Still stuck? The Event sandbox shows precisely what the app would send, Debug mode confirms what
+          fires on the storefront, and Delivery health shows what actually landed. Between them you can
+          diagnose almost any tracking question without guessing.
         </Banner>
         <Box paddingBlockEnd="400" />
       </BlockStack>

@@ -6,7 +6,8 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
 import { sendGa4Event, validateGa4Event, ga4EventFor } from "../lib/server-side.server";
-import { EVENT_SAMPLES } from "../lib/event-samples";
+import { buildSubscriptionEvent } from "../lib/subscription";
+import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
 import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
@@ -30,7 +31,7 @@ export const action = async ({ request }) => {
 
   // Send a live GA4 test event (verifies the secret end-to-end; appears in GA4 DebugView).
   const intent = form.get("intent");
-  if (intent === "test" || intent === "test_purchase") {
+  if (intent === "test" || intent === "test_purchase" || intent === "test_subscription") {
     const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
     if (!tracking?.serverSide) return { testError: "Turn on Server-side delivery on the Tracking page first." };
     if (!tracking?.ga4Id) return { testError: "Add a GA4 measurement ID on the Tracking page first." };
@@ -45,6 +46,16 @@ export const action = async ({ request }) => {
         params: { ...ga4.params, transaction_id: "PIXELIFY-TEST", debug_mode: 1 },
         clientId: "test.0",
       };
+    } else if (intent === "test_subscription") {
+      // Subscription-shaped payload from the orders/paid path (carries subscription + interval + items).
+      // Distinctly named + test transaction_id so it can't collide with real subscription data.
+      const sub = buildSubscriptionEvent(SUBSCRIPTION_SAMPLE.order, {
+        eventName: "pixelify_test_subscription",
+        monthDays: 28,
+        clientId: "test.0",
+        attribution: SUBSCRIPTION_SAMPLE.attribution,
+      });
+      event = { name: sub.name, params: { ...sub.params, transaction_id: "PIXELIFY-TEST-SUB", debug_mode: 1 }, clientId: "test.0" };
     } else {
       event = { name: "pixelify_test", params: { debug_mode: 1, source: "pixelify-admin" }, clientId: "test.0" };
     }
@@ -57,12 +68,14 @@ export const action = async ({ request }) => {
     const res = await sendGa4Event(tracking, event);
     await logActivity(shopDomain, `Sent GA4 ${intent === "test_purchase" ? "test purchase" : "test"} event`);
     if (!res.sent) return { testError: "Send failed after validating. Check the GA4 secret and that GA4 + Server-side are configured." };
-    return {
-      testOk:
-        intent === "test_purchase"
-          ? "Validated and sent a pixelify_test_purchase event (with items + value). Check GA4 → Realtime or DebugView. This tests the server→GA4 leg; the real pixel→server leg needs a checkout on a deployed store."
-          : "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. The Admin → Events list can take ~24h, so check Realtime.",
+    const okMessages = {
+      test_purchase:
+        "Validated and sent a pixelify_test_purchase event (items + value). Check GA4 → Realtime or DebugView. This tests the server→GA4 leg; the real pixel→server leg needs a checkout on a deployed store.",
+      test_subscription:
+        "Validated and sent a pixelify_test_subscription event (subscription + interval + items). Check GA4 → Realtime or DebugView. The real event fires from orders/paid on a deployed store.",
+      test: "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. The Admin → Events list can take ~24h, so check Realtime.",
     };
+    return { testOk: okMessages[intent] };
   }
 
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
@@ -210,6 +223,10 @@ export default function Settings() {
               <Form method="post">
                 <input type="hidden" name="intent" value="test_purchase" />
                 <Button submit loading={busy} disabled={!canTest}>Send test purchase</Button>
+              </Form>
+              <Form method="post">
+                <input type="hidden" name="intent" value="test_subscription" />
+                <Button submit loading={busy} disabled={!canTest}>Send test subscription</Button>
               </Form>
               {!canTest && <Button url="/app/tracking" variant="plain">Open Tracking</Button>}
             </InlineStack>
