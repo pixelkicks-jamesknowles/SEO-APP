@@ -267,6 +267,9 @@ export async function fanOutServerSide(settings, event) {
       jobs.push(sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event), consent).catch(() => {}));
     }
   }
+  // Google Ads needs no integration here — the GA4 purchase above carries the correct client_id, so
+  // it stitches to the on-page gtag session that holds the gclid; the merchant links GA4 ↔ Google Ads
+  // and imports the conversion. No Google Ads API / developer token / OAuth required.
 
   await Promise.all(jobs);
 }

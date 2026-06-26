@@ -228,6 +228,11 @@ export default function Tracking() {
               doesn&apos;t. GTM events require a server-side GTM container URL on the Settings page
               (a web GTM-XXXX container can&apos;t load in the pixel sandbox).
             </p>
+            <p>
+              <b>Google Ads:</b> no setup needed here — the server-side GA4 purchase carries the right
+              client_id, so it stitches to the on-page session that holds the gclid. Link your GA4
+              property to Google Ads and import the purchase conversion (no API or developer token).
+            </p>
           </Banner>
 
           <Card>
