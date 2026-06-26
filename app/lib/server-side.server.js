@@ -123,7 +123,14 @@ export function ga4EventFor(name, ev) {
   // our server-side purchase with the Google & YouTube app's client-side one.
   if (name === "checkout_completed" && c.transactionId) params.transaction_id = c.transactionId;
   if (c.items.length) params.items = c.items;
+  // Internal site search → a complete GA4 `search` event (search_term is what SEO teams report on).
+  if (name === "search_submitted") {
+    const q = ev?.data?.searchResult?.query;
+    if (q) params.search_term = q;
+  }
   for (const [k, utm] of Object.entries(ev?.utm || {})) params[k] = utm;
+  // Synthetic theme events (scroll / engaged_view) carry their GA4 params directly.
+  if (ev?.params && typeof ev.params === "object") Object.assign(params, ev.params);
   return { name: GA4_MAP[name] || name, params };
 }
 

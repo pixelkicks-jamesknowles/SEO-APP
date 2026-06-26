@@ -84,6 +84,24 @@ describe("ga4EventFor", () => {
     expect(ev.params.currency).toBe("GBP");
     expect(ev.params.items).toHaveLength(1);
   });
+
+  test("internal site search → GA4 `search` with search_term", () => {
+    const ev = ga4EventFor("search_submitted", { data: { searchResult: { query: "running shoes" } } });
+    expect(ev.name).toBe("search");
+    expect(ev.params.search_term).toBe("running shoes");
+  });
+
+  test("synthetic theme events (scroll) carry their params through to GA4", () => {
+    const ev = ga4EventFor("scroll", { params: { percent_scrolled: 75 }, context: { document: { location: { href: "https://shop/x" } } } });
+    expect(ev.name).toBe("scroll");
+    expect(ev.params.percent_scrolled).toBe(75);
+  });
+
+  test("engaged_view passes through as a custom GA4 event", () => {
+    const ev = ga4EventFor("engaged_view", { params: { engagement_time_msec: 15000, percent_scrolled: 60 } });
+    expect(ev.name).toBe("engaged_view");
+    expect(ev.params.engagement_time_msec).toBe(15000);
+  });
 });
 
 describe("metaEventFor", () => {

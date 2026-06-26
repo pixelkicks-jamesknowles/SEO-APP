@@ -86,6 +86,13 @@ export const action = async ({ request }) => {
   for (const { key } of PLATFORMS) {
     eventMatrix[key] = EVENTS.filter((e) => form.get(`evt:${key}:${e}`) === "on");
   }
+  // SEO engagement events (scroll / engaged_view) come from the theme app embed, not the pixel, and
+  // only make sense for GA4 + GTM. Driven by the two checkboxes below.
+  for (const key of ["ga4", "gtm"]) {
+    for (const e of ["scroll", "engaged_view"]) {
+      if (form.get(`evt:${key}:${e}`) === "on") eventMatrix[key].push(e);
+    }
+  }
   const data = {
     gtmId: form.get("gtmId") || null,
     ga4Id: form.get("ga4Id") || null,
@@ -177,6 +184,9 @@ export default function Tracking() {
   const [consent, setConsent] = useState(data.consentMode);
   const [consentSignals, setConsentSignals] = useState(data.consentSignals);
   const [debug, setDebug] = useState(data.pixelDebug);
+  const seoHas = (e) => (data.eventMatrix.ga4 || []).includes(e) || (data.eventMatrix.gtm || []).includes(e);
+  const [scrollDepth, setScrollDepth] = useState(seoHas("scroll"));
+  const [engagedView, setEngagedView] = useState(seoHas("engaged_view"));
   const [serverSide, setServerSide] = useState(data.serverSide);
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
   const [subCfg, setSubCfg] = useState({
@@ -317,6 +327,34 @@ export default function Tracking() {
                 ))}
               </tbody>
             </table>
+          </Card>
+
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeading
+                title="SEO engagement (GA4 & GTM)"
+                help="Scroll depth and engaged-content views aren't Shopify customer events, so they're captured by the “Pixelify SEO engagement” app embed (enable it in Theme editor → App embeds) and forwarded server-side to GA4/GTM. These toggles control whether the server forwards them."
+              />
+              <Text as="p" tone="subdued">
+                Enable the <b>Pixelify SEO engagement</b> app embed in your theme, then choose what to forward.
+                Sent to GA4/GTM only (not Meta). Requires Server-side on below.
+              </Text>
+              <input type="hidden" name="evt:ga4:scroll" value={scrollDepth ? "on" : ""} />
+              <input type="hidden" name="evt:gtm:scroll" value={scrollDepth ? "on" : ""} />
+              <Checkbox
+                label="Scroll depth — GA4 “scroll” events at each threshold (percent_scrolled)"
+                checked={scrollDepth}
+                onChange={setScrollDepth}
+              />
+              <input type="hidden" name="evt:ga4:engaged_view" value={engagedView ? "on" : ""} />
+              <input type="hidden" name="evt:gtm:engaged_view" value={engagedView ? "on" : ""} />
+              <Checkbox
+                label="Engaged-content views — “engaged_view” when a visitor reads (time on page + scroll)"
+                helpText="Lets SEO teams see which content actually gets consumed, not just landed on. Thresholds are configured on the app embed."
+                checked={engagedView}
+                onChange={setEngagedView}
+              />
+            </BlockStack>
           </Card>
 
           <Card>

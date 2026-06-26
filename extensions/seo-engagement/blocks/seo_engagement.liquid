@@ -1,0 +1,36 @@
+{%- comment -%}
+  SEO engagement tracking (app embed). Emits scroll-depth + engaged-content-view events to the
+  app proxy, which forwards them server-side to GA4 / server-side GTM. Enable under Theme editor →
+  App embeds. Capture is consent-gated client-side; delivery still respects the app's settings
+  (Tracking page must have GA4/GTM configured + Server-side on, and the matching event ticked).
+{%- endcomment -%}
+<script>
+  window.__pxpSeo = {
+    base: "/apps/{{ block.settings.proxy_subpath | default: 'pixelify-seo' }}",
+    scroll: {{ block.settings.scroll | default: true | json }},
+    scrollThresholds: {{ block.settings.scroll_thresholds | default: '25,50,75,100' | split: ',' | json }},
+    engaged: {{ block.settings.engaged | default: true | json }},
+    engagedSeconds: {{ block.settings.engaged_seconds | default: 15 }},
+    engagedScroll: {{ block.settings.engaged_scroll | default: 50 }},
+    requireConsent: {{ block.settings.require_consent | default: true | json }}
+  };
+</script>
+<script src="{{ 'seo-engagement.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Pixelify SEO engagement",
+  "target": "body",
+  "settings": [
+    { "type": "header", "content": "Scroll depth" },
+    { "type": "checkbox", "id": "scroll", "label": "Track scroll depth", "default": true },
+    { "type": "text", "id": "scroll_thresholds", "label": "Scroll thresholds (%) — comma separated", "default": "25,50,75,100" },
+    { "type": "header", "content": "Engaged content views" },
+    { "type": "checkbox", "id": "engaged", "label": "Track engaged-content views", "default": true },
+    { "type": "range", "id": "engaged_seconds", "label": "Engaged after", "min": 5, "max": 60, "step": 5, "default": 15, "unit": "s" },
+    { "type": "range", "id": "engaged_scroll", "label": "…and scrolled past", "min": 10, "max": 100, "step": 10, "default": 50, "unit": "%" },
+    { "type": "header", "content": "Consent" },
+    { "type": "checkbox", "id": "require_consent", "label": "Only fire with analytics consent (recommended)", "default": true }
+  ]
+}
+{% endschema %}

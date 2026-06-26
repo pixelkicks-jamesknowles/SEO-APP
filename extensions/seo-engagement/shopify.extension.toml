@@ -1,0 +1,12 @@
+api_version = "2026-07"
+uid = "73f7ee0f-5f33-49b5-a94a-78e4de347e5a"
+
+# Theme app extension — SEO engagement signals (scroll depth + engaged-content views). These are
+# NOT Shopify customer events, so they can't come from the Web Pixel sandbox; this app-embed block
+# runs in the storefront DOM, detects the milestones, and beacons them to the same app-proxy /track
+# endpoint the pixel uses. The server (proxy.$type → fanOutServerSide) forwards them to GA4 / sGTM
+# as proper `scroll` / `engaged_view` events. Consent-gated via the storefront Customer Privacy API.
+[[extensions]]
+type = "theme"
+name = "Pixelify SEO Engagement"
+handle = "seo-engagement"
