@@ -229,22 +229,6 @@ export default function Tracking() {
             </Banner>
           )}
 
-          <Banner tone="info" title="Avoiding double-counting with the Google & YouTube app">
-            <p>
-              If the store runs the native Google &amp; YouTube app, it already sends the standard GA4
-              ecommerce events (incl. <b>purchase</b>). Server-side events here de-dup safely -
-              GA4 collapses purchases on matching <b>transaction_id</b> and Meta de-dups on{" "}
-              <b>event_id</b> - but for other events, prefer to track here only what the native app
-              doesn&apos;t. GTM events require a server-side GTM container URL on the Settings page
-              (a web GTM-XXXX container can&apos;t load in the pixel sandbox).
-            </p>
-            <p>
-              <b>Google Ads:</b> no setup needed here - the server-side GA4 purchase carries the right
-              client_id, so it stitches to the on-page session that holds the gclid. Link your GA4
-              property to Google Ads and import the purchase conversion (no API or developer token).
-            </p>
-          </Banner>
-
           <Card>
             <BlockStack gap="300">
               <SectionHeading

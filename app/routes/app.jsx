@@ -25,6 +25,7 @@ export default function App() {
         <Link to="/app/sandbox">Event sandbox</Link>
         <Link to="/app/events">Live events</Link>
         <Link to="/app/settings">Settings</Link>
+        <Link to="/app/help">Help</Link>
       </NavMenu>
       {/* Bottom breathing room below every page's content (e.g. trailing Save buttons). */}
       <Box paddingBlockEnd="800">
