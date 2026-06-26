@@ -65,4 +65,31 @@ export const EVENT_SAMPLES = {
   engaged_view: ev("engaged_view", {}, { params: { engagement_time_msec: 15000, percent_scrolled: 60 } }),
 };
 
-export const SANDBOX_EVENTS = Object.keys(EVENT_SAMPLES);
+// subscription_purchase is NOT a Web Pixels event — it's built from an orders/paid order payload by
+// buildSubscriptionEvent and sent server-side to GA4. The sandbox handles it via a separate branch.
+export const SUBSCRIPTION_SAMPLE = {
+  order: {
+    id: 5500000000001,
+    currency: "GBP",
+    current_total_price: "48.00",
+    current_total_tax: "8.00",
+    total_shipping_price_set: { shop_money: { amount: "3.99" } },
+    discount_codes: [{ code: "SUB10" }],
+    line_items: [
+      {
+        sku: "COFFEE-1KG",
+        variant_id: 111,
+        title: "House Blend 1kg",
+        variant_title: "Whole bean",
+        price: "24.00",
+        quantity: 2,
+        total_discount: "0.00",
+        selling_plan_allocation: { selling_plan: { name: "Delivery every 1 month" } },
+      },
+    ],
+  },
+  // First-touch attribution a recurring order inherits (captured on the first order).
+  attribution: { source: "google", medium: "organic", campaign: "spring" },
+};
+
+export const SANDBOX_EVENTS = [...Object.keys(EVENT_SAMPLES), "subscription_purchase"];

@@ -15,8 +15,9 @@ import {
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { SectionHeading } from "../components/SectionHeading";
-import { EVENT_SAMPLES, SANDBOX_EVENTS } from "../lib/event-samples";
-import { ga4EventFor, metaEventFor, dataLayerFor, ga4Consent } from "../lib/server-side.server";
+import { EVENT_SAMPLES, SANDBOX_EVENTS, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
+import { ga4EventFor, metaEventFor, dataLayerFor, dataLayerFromGa4, ga4Consent } from "../lib/server-side.server";
+import { buildSubscriptionEvent, syntheticClientId } from "../lib/subscription";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -36,25 +37,45 @@ export const action = async ({ request }) => {
   const consentChoice = form.get("consent") || "full";
   const consent = CONSENT_MAP[consentChoice];
 
-  // Either the pasted JSON array (advanced) or the selected sample events.
-  let inputs;
+  // Normalize selection into { subscription } markers or { name, ev } sample/custom events.
+  let items;
   const advanced = (form.get("advanced") || "").trim();
   if (advanced) {
     try {
       const parsed = JSON.parse(advanced);
-      inputs = Array.isArray(parsed) ? parsed : [parsed];
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      items = arr.map((ev) => ({ name: ev.name, ev }));
     } catch (e) {
       return { error: `Couldn't parse the pasted JSON: ${e.message}` };
     }
   } else {
     const picked = form.getAll("evt");
     if (!picked.length) return { error: "Pick at least one event (or paste your own JSON)." };
-    inputs = picked.map((name) => EVENT_SAMPLES[name]).filter(Boolean);
+    items = picked
+      .map((name) =>
+        name === "subscription_purchase" ? { subscription: true } : { name, ev: EVENT_SAMPLES[name] },
+      )
+      .filter((it) => it.subscription || it.ev);
   }
 
-  const results = inputs.map((base) => {
+  const results = items.map((it) => {
+    // subscription_purchase is built from an order by buildSubscriptionEvent + sent server-side to GA4.
+    if (it.subscription) {
+      const { order, attribution } = SUBSCRIPTION_SAMPLE;
+      const clientId = syntheticClientId(order.id);
+      const se = buildSubscriptionEvent(order, { eventName: "subscription_purchase", monthDays: 28, clientId, attribution });
+      const ga4Event = { name: se.name, params: se.params };
+      return {
+        name: "subscription_purchase",
+        note: "Server-side event from the orders/paid webhook (not the Web Pixel). Recurring orders inherit the first order's client_id + source/medium/campaign, shown here.",
+        dataLayer: dataLayerFromGa4(ga4Event),
+        ga4Body: { client_id: se.clientId, events: [ga4Event] },
+        meta: { skipped: "Subscription conversions are GA4 server-side only. Consent is gated upstream by the order's marketing-consent flag." },
+      };
+    }
+
     // Apply the chosen consent state; leave undefined when consent mode is "off".
-    const ev = { ...base };
+    const ev = { ...it.ev };
     if (consent === undefined) delete ev.consent;
     else ev.consent = consent;
     const name = ev.name;
@@ -69,12 +90,7 @@ export const action = async ({ request }) => {
       ? { body: { data: [metaEventFor(name, ev)] } }
       : { skipped: "No marketing consent - Meta CAPI is not sent (Consent Mode v2)." };
 
-    return {
-      name,
-      dataLayer: dataLayerFor(name, ev),
-      ga4Body,
-      meta,
-    };
+    return { name, dataLayer: dataLayerFor(name, ev), ga4Body, meta };
   });
 
   return { results, consentChoice };
@@ -190,6 +206,9 @@ export default function Sandbox() {
           <Card key={`${r.name}-${i}`}>
             <BlockStack gap="300">
               <Text as="h2" variant="headingMd">{r.name}</Text>
+              {r.note && (
+                <Banner tone="info">{r.note}</Banner>
+              )}
 
               <BlockStack gap="100">
                 <Text as="h3" variant="headingSm">GTM dataLayer push</Text>

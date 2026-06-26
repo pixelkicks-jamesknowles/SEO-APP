@@ -167,9 +167,8 @@ export function metaUserData(ev) {
  * triggers/variables. Restructures the GA4 params into the standard `event` + `ecommerce` shape.
  * (We deliver server-side, but this is the canonical representation of the same data for GTM.)
  */
-export function dataLayerFor(name, ev) {
-  const g = ga4EventFor(name, ev);
-  const params = { ...g.params };
+export function dataLayerFromGa4(ga4Event) {
+  const params = { ...ga4Event.params };
   delete params.engagement_time_msec;
   const ecommerce = {};
   for (const k of ["currency", "value", "transaction_id", "items", "coupon", "tax", "shipping"]) {
@@ -178,9 +177,13 @@ export function dataLayerFor(name, ev) {
       delete params[k];
     }
   }
-  const push = { event: g.name, ...params };
+  const push = { event: ga4Event.name, ...params };
   if (Object.keys(ecommerce).length) push.ecommerce = ecommerce;
   return push;
+}
+
+export function dataLayerFor(name, ev) {
+  return dataLayerFromGa4(ga4EventFor(name, ev));
 }
 
 /** Build a Meta Conversions API event object for a Shopify event (incl. event_id for dedup). */
