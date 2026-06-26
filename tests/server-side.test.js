@@ -2,6 +2,8 @@ import {
   fanOutServerSide,
   ga4EventFor,
   metaEventFor,
+  metaUserData,
+  ga4Consent,
   extractCommerce,
   parseGaClientId,
   stableClientId,
@@ -9,6 +11,7 @@ import {
 } from "../app/lib/server-side.server.js";
 
 const lastBody = (call) => JSON.parse(call[1].body);
+const bodyFor = (host) => lastBody(global.fetch.mock.calls.find((c) => c[0].includes(host)));
 
 beforeEach(() => {
   global.fetch = jest.fn().mockResolvedValue({ ok: true });
@@ -29,6 +32,7 @@ const checkoutEvent = {
       order: { id: "5500000000001" },
       email: "Buyer@Example.com ",
       phone: "+44 7700 900123",
+      shippingAddress: { firstName: "Sam", lastName: "Jones", city: "Leeds", provinceCode: "ENG", zip: "LS1 1AA", countryCode: "GB" },
       lineItems: [
         { quantity: 2, title: "Air Max", variant: { sku: "AM-9", title: "UK 9", price: { amount: 60, currencyCode: "GBP" }, product: { id: "p1", title: "Air Max", vendor: "Nike", type: "Shoes" } } },
       ],
@@ -93,6 +97,60 @@ describe("metaEventFor", () => {
     expect(ev.custom_data.value).toBe(120);
     expect(ev.custom_data.contents).toHaveLength(1);
     expect(ev.custom_data.order_id).toBe("5500000000001");
+  });
+});
+
+describe("metaUserData (Event Match Quality identifiers)", () => {
+  test("hashes name/city/state/zip/country from the checkout address + external_id", () => {
+    const ud = metaUserData({ ...checkoutEvent, externalId: "cust_9", fbc: "fb.c.1" });
+    expect(ud.fn).toEqual([sha256Hex("Sam")]);
+    expect(ud.ln).toEqual([sha256Hex("Jones")]);
+    expect(ud.ct).toEqual([sha256Hex("Leeds")]);
+    expect(ud.st).toEqual([sha256Hex("ENG")]);
+    expect(ud.zp).toEqual([sha256Hex("LS1 1AA")]);
+    expect(ud.country).toEqual([sha256Hex("GB")]);
+    expect(ud.ph).toEqual([sha256Hex("447700900123")]);
+    expect(ud.external_id).toEqual([sha256Hex("cust_9")]);
+    expect(ud.fbc).toBe("fb.c.1");
+  });
+
+  test("falls back to identifiers captured earlier when no checkout is present", () => {
+    const ud = metaUserData({ name: "product_viewed", data: {}, email: "Early@Example.com", externalId: "c1" });
+    expect(ud.em).toEqual([sha256Hex("early@example.com")]);
+    expect(ud.external_id).toEqual([sha256Hex("c1")]);
+  });
+});
+
+describe("ga4Consent (Consent Mode v2)", () => {
+  test("maps marketing consent to GRANTED/DENIED ad signals", () => {
+    expect(ga4Consent({ marketing: true })).toEqual({ ad_user_data: "GRANTED", ad_personalization: "GRANTED" });
+    expect(ga4Consent({ marketing: false })).toEqual({ ad_user_data: "DENIED", ad_personalization: "DENIED" });
+    expect(ga4Consent(undefined)).toBeUndefined();
+  });
+});
+
+describe("fanOutServerSide consent gating", () => {
+  const settings = {
+    serverSide: true,
+    ga4Id: "G-1",
+    metaPixelId: "P-1",
+    eventMatrix: matrixAll,
+    serverSideKeys: JSON.stringify({ ga4ApiSecret: "s", metaCapiToken: "t" }),
+  };
+
+  test("without marketing consent: GA4 sends (flagged DENIED), Meta is skipped", async () => {
+    await fanOutServerSide(settings, { ...checkoutEvent, consent: { analytics: true, marketing: false } });
+    const urls = global.fetch.mock.calls.map((c) => c[0]);
+    expect(urls.some((u) => u.includes("graph.facebook.com"))).toBe(false);
+    const ga = bodyFor("google-analytics.com");
+    expect(ga.consent).toEqual({ ad_user_data: "DENIED", ad_personalization: "DENIED" });
+  });
+
+  test("with marketing consent: both fire and GA4 is flagged GRANTED", async () => {
+    await fanOutServerSide(settings, { ...checkoutEvent, consent: { analytics: true, marketing: true } });
+    const urls = global.fetch.mock.calls.map((c) => c[0]);
+    expect(urls.some((u) => u.includes("graph.facebook.com"))).toBe(true);
+    expect(bodyFor("google-analytics.com").consent.ad_user_data).toBe("GRANTED");
   });
 });
 

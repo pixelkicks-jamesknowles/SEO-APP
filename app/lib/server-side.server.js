@@ -127,19 +127,38 @@ export function ga4EventFor(name, ev) {
   return { name: GA4_MAP[name] || name, params };
 }
 
-/** Build a Meta Conversions API event object for a Shopify event (incl. event_id for dedup). */
-export function metaEventFor(name, ev) {
-  const c = extractCommerce(name, ev?.data);
+/** Build the hashed Meta user_data block from every identifier we can reach (drives Event Match Quality). */
+export function metaUserData(ev) {
   const checkout = ev?.data?.checkout;
+  const addr = checkout?.shippingAddress || checkout?.billingAddress || {};
   const user_data = {};
+  // Cookies + network identifiers (unhashed, as Meta expects).
   if (ev?.fbp) user_data.fbp = ev.fbp;
   if (ev?.fbc) user_data.fbc = ev.fbc;
   if (ev?.clientIp) user_data.client_ip_address = ev.clientIp;
   if (ev?.userAgent) user_data.client_user_agent = ev.userAgent;
-  const emHash = sha256Hex(checkout?.email);
-  if (emHash) user_data.em = [emHash];
-  const phHash = sha256Hex((checkout?.phone || "").replace(/\D/g, ""));
-  if (phHash) user_data.ph = [phHash];
+  // Hashed PII — checkout fields first, else identifiers captured earlier (logged-in customer).
+  const put = (key, value) => {
+    const h = sha256Hex(value);
+    if (h) user_data[key] = [h];
+  };
+  put("em", checkout?.email || ev?.email);
+  put("ph", (checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  put("fn", addr.firstName);
+  put("ln", addr.lastName);
+  put("ct", addr.city);
+  put("st", addr.provinceCode || addr.province);
+  put("zp", addr.zip);
+  put("country", addr.countryCode || addr.country);
+  // external_id (customer id) is not hashed by spec but commonly hashed for parity.
+  if (ev?.externalId) user_data.external_id = [sha256Hex(String(ev.externalId))];
+  return user_data;
+}
+
+/** Build a Meta Conversions API event object for a Shopify event (incl. event_id for dedup). */
+export function metaEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const user_data = metaUserData(ev);
 
   const custom_data = {};
   if (c.currency) custom_data.currency = c.currency;
@@ -168,10 +187,21 @@ async function postJson(url, body, headers = {}) {
   await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
-async function sendGa4(measurementId, apiSecret, clientId, event, endpoint) {
+// Google Consent Mode v2 signals for the GA4 MP `consent` block. marketing → ad signals,
+// analytics → (GA4 storage is implied by sending; we flag the ad consent state Google needs to model).
+export function ga4Consent(consent) {
+  if (!consent) return undefined; // unknown (e.g. subscription webhook) → omit, treated as granted
+  const g = (v) => (v ? "GRANTED" : "DENIED");
+  return { ad_user_data: g(consent.marketing), ad_personalization: g(consent.marketing) };
+}
+
+async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, consent } = {}) {
   const base = endpoint || "https://www.google-analytics.com";
   const url = `${base.replace(/\/$/, "")}/mp/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`;
-  await postJson(url, { client_id: clientId, events: [event] });
+  const body = { client_id: clientId, events: [event] };
+  const consentBlock = ga4Consent(consent);
+  if (consentBlock) body.consent = consentBlock;
+  await postJson(url, body);
 }
 
 async function sendMeta(pixelId, token, event) {
@@ -181,9 +211,12 @@ async function sendMeta(pixelId, token, event) {
 
 // Server-side GTM: GTM-XXXX is a *web* container the strict pixel sandbox cannot load (no gtag.js),
 // so the only server-side route is a sGTM container URL with a GA4 client — we POST the GA4 MP hit to it.
-async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, event) {
+async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, event, consent) {
   const url = `${serverUrl.replace(/\/$/, "")}/g/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`;
-  await postJson(url, { client_id: clientId, events: [event] });
+  const body = { client_id: clientId, events: [event] };
+  const consentBlock = ga4Consent(consent);
+  if (consentBlock) body.consent = consentBlock;
+  await postJson(url, body);
 }
 
 function platformWants(matrix, platform, name) {
@@ -214,12 +247,16 @@ export async function fanOutServerSide(settings, event) {
   }
 
   const clientId = event.clientId || stableClientId(event.id || event.context?.document?.location?.href);
+  const consent = event.consent; // { analytics, marketing } | undefined (treated as granted)
+  // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
+  // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
+  const marketingOk = !consent || consent.marketing;
   const jobs = [];
 
   if (platformWants(matrix, "ga4", name) && settings.ga4Id && keys.ga4ApiSecret) {
-    jobs.push(sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event)).catch(() => {}));
+    jobs.push(sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }).catch(() => {}));
   }
-  if (platformWants(matrix, "meta", name) && settings.metaPixelId && keys.metaCapiToken) {
+  if (marketingOk && platformWants(matrix, "meta", name) && settings.metaPixelId && keys.metaCapiToken) {
     jobs.push(sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEventFor(name, event)).catch(() => {}));
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
@@ -227,7 +264,7 @@ export async function fanOutServerSide(settings, event) {
     const mid = keys.gtmMeasurementId || settings.ga4Id;
     const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
     if (mid && secret) {
-      jobs.push(sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event)).catch(() => {}));
+      jobs.push(sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event), consent).catch(() => {}));
     }
   }
 

@@ -51,8 +51,9 @@ export function orderHasAnalyticsConsent(order) {
   return order?.buyer_accepts_marketing === true;
 }
 
-/** Build the GA4 `subscription_purchase` event (name + params + clientId). */
-export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId } = {}) {
+/** Build the GA4 `subscription_purchase` event (name + params + clientId). attribution (optional)
+ *  carries the first-order source/medium/campaign so recurring orders keep the original attribution. */
+export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, attribution } = {}) {
   const lines = order?.line_items || [];
   const items = lines.map((l) => {
     const qty = Math.max(1, Number(l.quantity) || 1);
@@ -84,5 +85,9 @@ export function buildSubscriptionEvent(order, { eventName = "subscription_purcha
   };
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
+  // First-touch attribution (recurring orders inherit the original order's source).
+  if (attribution?.source) params.source = attribution.source;
+  if (attribution?.medium) params.medium = attribution.medium;
+  if (attribution?.campaign) params.campaign = attribution.campaign;
   return { name: eventName, params, clientId };
 }

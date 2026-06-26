@@ -54,6 +54,7 @@ export const loader = async ({ request }) => {
     metaPixelId: t?.metaPixelId ?? "",
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
+    consentSignals: t?.consentSignals ?? true,
     serverSide: t?.serverSide ?? false,
     subscriptionTracking: t?.subscriptionTracking ?? false,
     subscriptionConfig: JSON.parse(t?.subscriptionConfig ?? "{}"),
@@ -91,6 +92,7 @@ export const action = async ({ request }) => {
     metaPixelId: form.get("metaPixelId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
+    consentSignals: form.get("consentSignals") === "on",
     pixelDebug: form.get("pixelDebug") === "on",
     serverSide: form.get("serverSide") === "on",
     subscriptionTracking: form.get("subscriptionTracking") === "on",
@@ -120,6 +122,7 @@ export const action = async ({ request }) => {
       metaPixelId: data.metaPixelId || "",
       eventMatrix: JSON.parse(data.eventMatrix || "{}"),
       consentMode: data.consentMode,
+      consentSignals: data.consentSignals,
       debug: data.pixelDebug,
       // App-proxy path the pixel beacons server-side events to. Must match [app_proxy] prefix/subpath
       // in shopify.app.toml. The pixel resolves it against the live storefront origin at send time,
@@ -172,6 +175,7 @@ export default function Tracking() {
     return m;
   });
   const [consent, setConsent] = useState(data.consentMode);
+  const [consentSignals, setConsentSignals] = useState(data.consentSignals);
   const [debug, setDebug] = useState(data.pixelDebug);
   const [serverSide, setServerSide] = useState(data.serverSide);
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
@@ -319,9 +323,17 @@ export default function Tracking() {
               {/* Polaris Checkbox doesn't post a form value, so a hidden input carries each toggle. */}
               <input type="hidden" name="consentMode" value={consent ? "on" : ""} />
               <Checkbox
-                label="Consent mode — gate all tags on the Customer Privacy API (recommended)"
+                label="Consent mode — respect the Customer Privacy API (recommended)"
                 checked={consent}
                 onChange={setConsent}
+              />
+              <input type="hidden" name="consentSignals" value={consentSignals ? "on" : ""} />
+              <Checkbox
+                label="Google Consent Mode v2 — keep sending consent-flagged events without consent"
+                helpText="Recommended for EEA/UK. Instead of dropping events when a visitor declines, send a privacy-safe, flagged hit so GA4 can model the missing conversions (Meta is skipped without marketing consent). Untick for strict gating — nothing fires until consent is granted."
+                checked={consentSignals}
+                disabled={!consent}
+                onChange={setConsentSignals}
               />
               <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
               <Checkbox

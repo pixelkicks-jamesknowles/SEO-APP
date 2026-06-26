@@ -4,6 +4,7 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { buildSubscriptionEvent, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
+import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event } from "../lib/server-side.server";
 
 export const action = async ({ request }) => {
@@ -30,12 +31,41 @@ export const action = async ({ request }) => {
       return new Response();
     }
 
-    const clientId =
-      (cfg.clientIdMode === "cookie" && noteAttr(payload, "ga_client_id")) || syntheticClientId(payload?.id);
+    // First-touch attribution: the first order for a customer sets the client_id + source; recurring
+    // orders inherit it (so they don't look like fresh direct traffic in GA4).
+    const cookieClientId = (cfg.clientIdMode === "cookie" && noteAttr(payload, "ga_client_id")) || null;
+    const key = customerKey(payload);
+    let attribution = null;
+    if (key) {
+      const where = { shopDomain_customerKey: { shopDomain: shop, customerKey: key } };
+      attribution = await prisma.customerAttribution.findUnique({ where }).catch(() => null);
+      if (!attribution) {
+        const utms = parseUtms(payload);
+        attribution =
+          (await prisma.customerAttribution
+            .create({
+              data: {
+                shopDomain: shop,
+                customerKey: key,
+                clientId: cookieClientId,
+                source: utms.source,
+                medium: utms.medium,
+                campaign: utms.campaign,
+                firstOrderId: String(payload?.id ?? ""),
+              },
+            })
+            .catch(() => null)) || { clientId: cookieClientId, ...utms };
+      }
+    }
+
+    const clientId = attribution?.clientId || cookieClientId || syntheticClientId(payload?.id);
     const event = buildSubscriptionEvent(payload, {
       eventName: cfg.eventName || "subscription_purchase",
       monthDays: Number(cfg.monthDays) || 28,
       clientId,
+      attribution: attribution
+        ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign }
+        : null,
     });
 
     await sendGa4Event(settings, event);

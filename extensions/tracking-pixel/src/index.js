@@ -53,19 +53,24 @@ register(({ analytics, browser, settings, init }) => {
     ids: { gtm: s.gtmId || null, ga4: s.ga4Id || null, meta: s.metaPixelId || null },
     matrix: s.eventMatrix && typeof s.eventMatrix === "object" ? s.eventMatrix : {},
     consentMode: s.consentMode !== false,
+    // Consent Mode v2: when true, still send consent-FLAGGED events without consent (GA4 models the
+    // gap; Meta is skipped server-side) instead of suppressing them. When false, strict gate.
+    consentSignals: s.consentSignals !== false,
     // App-proxy path (e.g. "/apps/pixelify-seo/track"). Resolved against the storefront origin at
     // send time so it works on custom domains. The app writes this on save (webPixelCreate/Update).
     proxyPath: s.proxyPath || s.proxyUrl || null,
     debug: s.debug === true,
   };
 
-  // Consent gate. With consentMode on, fire nothing until the visitor has allowed
-  // analytics + marketing processing (Customer Privacy API).
-  const consentAllows = () => {
-    if (!cfg.consentMode) return true;
+  // Logged-in customer identifiers (if any) — captured up front so even pre-checkout events
+  // (ViewContent / AddToCart) carry an em/external_id and match better in Meta.
+  const customer = init?.data?.customer || null;
+
+  // Current Customer-Privacy consent state, or null if the API isn't available.
+  const consentState = () => {
     const c = init?.customerPrivacy;
-    if (!c) return false;
-    return Boolean(c.analyticsProcessingAllowed && c.marketingAllowed);
+    if (!c) return null;
+    return { analytics: Boolean(c.analyticsProcessingAllowed), marketing: Boolean(c.marketingAllowed) };
   };
 
   // Which platforms (with an id) opted into this event in the matrix.
@@ -90,6 +95,9 @@ register(({ analytics, browser, settings, init }) => {
 
   const route = async (name, event) => {
     const wanted = platformsFor(name);
+    const consent = consentState();
+    const granted = !cfg.consentMode || Boolean(consent && consent.analytics && consent.marketing);
+
     const payload = {
       name,
       id: event?.id,
@@ -105,16 +113,25 @@ register(({ analytics, browser, settings, init }) => {
     if (cfg.debug) {
       try {
         // eslint-disable-next-line no-console
-        console.log("[pixelify-tracking]", name, { consentAllowed: consentAllows(), platforms: wanted, payload });
+        console.log("[pixelify-tracking]", name, { consentGranted: granted, platforms: wanted, payload });
       } catch {
         /* sandbox: never throw */
       }
     }
 
-    if (!consentAllows()) return;
     if (!wanted.length) return;
 
-    // Enrich with the identifiers the server-side payloads need (GA4 client_id, Meta fbp/fbc).
+    if (!granted) {
+      // No consent. Strict gate → suppress. Consent Mode v2 → send a flagged, PII-free hit so GA4
+      // can model the gap (Meta is skipped server-side without marketing consent).
+      if (!(cfg.consentMode && cfg.consentSignals)) return;
+      payload.consent = consent || { analytics: false, marketing: false };
+      dispatch(event, payload, wanted);
+      return;
+    }
+
+    // Consent granted (or consentMode off): attach every identifier we can for match quality.
+    if (cfg.consentMode) payload.consent = consent || { analytics: true, marketing: true };
     try {
       const [ga, fbp, fbc] = await Promise.all([
         browser.cookie.get("_ga"),
@@ -126,6 +143,11 @@ register(({ analytics, browser, settings, init }) => {
       if (fbc) payload.fbc = fbc;
     } catch {
       /* cookies unavailable — server falls back to a stable synthetic client_id */
+    }
+    if (customer) {
+      if (customer.id) payload.externalId = String(customer.id);
+      if (customer.email) payload.email = customer.email;
+      if (customer.phone) payload.phone = customer.phone;
     }
 
     dispatch(event, payload, wanted);

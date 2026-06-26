@@ -78,7 +78,10 @@ model TrackingSettings {
   bingUetId      String?
   // Per-platform event opt-in, e.g. {"ga4":["page_viewed","product_viewed","checkout_completed"]}
   eventMatrix    String   @default("{}") // JSON
-  consentMode    Boolean  @default(true)  // gate all tags on Customer Privacy consent
+  consentMode    Boolean  @default(true)  // respect Customer Privacy consent at all
+  // Consent Mode v2: when true (and consentMode on), still send consent-FLAGGED events without
+  // consent (GA4 models the gap; Meta is skipped without marketing consent) instead of suppressing.
+  consentSignals Boolean  @default(true)
   serverSide     Boolean  @default(false) // Meta CAPI / GA4 MP / server GTM (Pro tier)
   serverSideKeys String?  // JSON: encrypted server-side credentials
   webPixelId     String?  // gid of the WebPixel created via webPixelCreate (create-once, then update)
@@ -87,6 +90,23 @@ model TrackingSettings {
   subscriptionConfig   String  @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
   pixelDebug     Boolean  @default(false) // log every event in the storefront console (testing)
   updatedAt      DateTime @updatedAt
+}
+
+// First-touch attribution per customer, captured on the FIRST order we see and replayed onto every
+// later (recurring) order — so subscription_purchase events inherit the original GA4 client_id +
+// source/medium/campaign instead of looking like brand-new direct traffic (seo-subscription-tracking-v1 M2).
+model CustomerAttribution {
+  shopDomain   String
+  customerKey  String   // customer gid/id, or hashed email when no customer is attached
+  clientId     String?  // GA4 client_id captured at first checkout (ga_client_id / cookie)
+  source       String?
+  medium       String?
+  campaign     String?
+  firstOrderId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@id([shopDomain, customerKey])
 }
 
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
