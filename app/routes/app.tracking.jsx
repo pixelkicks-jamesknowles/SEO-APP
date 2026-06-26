@@ -33,10 +33,6 @@ const PLATFORMS = [
   { key: "gtm", label: "GTM" },
   { key: "ga4", label: "GA4" },
   { key: "meta", label: "Meta" },
-  { key: "tiktok", label: "TikTok" },
-  { key: "pinterest", label: "Pinterest" },
-  { key: "snap", label: "Snap" },
-  { key: "bing", label: "Bing" },
 ];
 
 // Light format hints so obviously-wrong IDs are caught before they reach the pixel.
@@ -52,21 +48,15 @@ export const loader = async ({ request }) => {
   const t = await prisma.trackingSettings.findUnique({
     where: { shopDomain: session.shop },
   });
-  const isPro = true; // free app — every feature available
   return {
     gtmId: t?.gtmId ?? "",
     ga4Id: t?.ga4Id ?? "",
     metaPixelId: t?.metaPixelId ?? "",
-    tiktokPixelId: t?.tiktokPixelId ?? "",
-    pinterestId: t?.pinterestId ?? "",
-    snapPixelId: t?.snapPixelId ?? "",
-    bingUetId: t?.bingUetId ?? "",
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     serverSide: t?.serverSide ?? false,
     subscriptionTracking: t?.subscriptionTracking ?? false,
     subscriptionConfig: JSON.parse(t?.subscriptionConfig ?? "{}"),
-    isPro,
   };
 };
 
@@ -98,10 +88,6 @@ export const action = async ({ request }) => {
     gtmId: form.get("gtmId") || null,
     ga4Id: form.get("ga4Id") || null,
     metaPixelId: form.get("metaPixelId") || null,
-    tiktokPixelId: form.get("tiktokPixelId") || null,
-    pinterestId: form.get("pinterestId") || null,
-    snapPixelId: form.get("snapPixelId") || null,
-    bingUetId: form.get("bingUetId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     serverSide: form.get("serverSide") === "on",
@@ -127,10 +113,6 @@ export const action = async ({ request }) => {
     gtmId: data.gtmId || "",
     ga4Id: data.ga4Id || "",
     metaPixelId: data.metaPixelId || "",
-    tiktokPixelId: data.tiktokPixelId || "",
-    pinterestId: data.pinterestId || "",
-    snapPixelId: data.snapPixelId || "",
-    bingUetId: data.bingUetId || "",
     eventMatrix: data.eventMatrix,
     consentMode: String(data.consentMode),
     proxyUrl: "", // set to the app-proxy /track URL once deployed to a real host
@@ -192,20 +174,24 @@ export default function Tracking() {
     gtmId: data.gtmId,
     ga4Id: data.ga4Id,
     metaPixelId: data.metaPixelId,
-    tiktokPixelId: data.tiktokPixelId,
-    pinterestId: data.pinterestId,
-    snapPixelId: data.snapPixelId,
-    bingUetId: data.bingUetId,
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
   const toggle = (p, e) =>
     setMatrix((m) => ({ ...m, [p]: { ...m[p], [e]: !m[p][e] } }));
 
+  // Per-column select-all: if every event is already on, clear the column; otherwise select all.
+  const columnAllOn = (p) => EVENTS.every((e) => matrix[p]?.[e]);
+  const toggleColumn = (p) =>
+    setMatrix((m) => {
+      const turnOn = !EVENTS.every((e) => m[p]?.[e]);
+      return { ...m, [p]: Object.fromEntries(EVENTS.map((e) => [e, turnOn])) };
+    });
+
   return (
     <Page
       title="Tracking"
-      subtitle="GTM, GA4, Meta, TikTok and more — fired via the Web Pixels API, consent-gated."
+      subtitle="GTM, GA4 and Meta — fired via the Web Pixels API, consent-gated."
     >
       <Form method="post">
         <BlockStack gap="400">
@@ -232,15 +218,7 @@ export default function Tracking() {
                   <TextField label="GTM container ID" name="gtmId" autoComplete="off" value={ids.gtmId} onChange={setId("gtmId")} placeholder="GTM-XXXXXXX" error={idError("gtm", ids.gtmId)} />
                   <TextField label="GA4 measurement ID" name="ga4Id" autoComplete="off" value={ids.ga4Id} onChange={setId("ga4Id")} placeholder="G-XXXXXXXXXX" error={idError("ga4", ids.ga4Id)} />
                 </FormLayout.Group>
-                <FormLayout.Group>
-                  <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} />
-                  <TextField label="TikTok Pixel ID" name="tiktokPixelId" autoComplete="off" value={ids.tiktokPixelId} onChange={setId("tiktokPixelId")} />
-                </FormLayout.Group>
-                <FormLayout.Group>
-                  <TextField label="Pinterest Tag ID" name="pinterestId" autoComplete="off" value={ids.pinterestId} onChange={setId("pinterestId")} />
-                  <TextField label="Snap Pixel ID" name="snapPixelId" autoComplete="off" value={ids.snapPixelId} onChange={setId("snapPixelId")} />
-                </FormLayout.Group>
-                <TextField label="Bing UET tag ID" name="bingUetId" autoComplete="off" value={ids.bingUetId} onChange={setId("bingUetId")} />
+                <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} />
               </FormLayout>
             </BlockStack>
           </Card>
@@ -269,9 +247,14 @@ export default function Tracking() {
                       key={p.key}
                       style={{ textAlign: "center", padding: "var(--p-space-200) var(--p-space-300)" }}
                     >
-                      <Text as="span" variant="bodySm" tone="subdued">
-                        {p.label}
-                      </Text>
+                      <BlockStack gap="050" inlineAlign="center">
+                        <Text as="span" variant="bodySm" tone="subdued">
+                          {p.label}
+                        </Text>
+                        <Button variant="plain" size="micro" onClick={() => toggleColumn(p.key)}>
+                          {columnAllOn(p.key) ? "Clear" : "All"}
+                        </Button>
+                      </BlockStack>
                     </th>
                   ))}
                 </tr>
@@ -319,29 +302,24 @@ export default function Tracking() {
               />
               <Checkbox
                 label="Server-side (Meta CAPI / GA4 Measurement Protocol)"
-                helpText={
-                  data.isPro
-                    ? "Events also sent server-side for accuracy + ad-blocker resilience."
-                    : "Pro plan — upgrade on the Plans page to enable."
-                }
+                helpText="Events also sent server-side for accuracy + ad-blocker resilience."
                 name="serverSide"
-                checked={serverSide && data.isPro}
-                disabled={!data.isPro}
+                checked={serverSide}
                 onChange={setServerSide}
               />
               <Checkbox
                 label="Subscription conversion tracking — send a server-side subscription_purchase event from orders/paid"
                 helpText={
-                  serverSide && data.isPro
+                  serverSide
                     ? "Requires the GA4 Measurement Protocol API secret on the Settings page. Carries subscription / subscription_interval (per-order + per-line) and the actual discounted amount."
-                    : "Enable Server-side above (Pro) first."
+                    : "Enable Server-side above first."
                 }
                 name="subscriptionTracking"
-                checked={subTracking && serverSide && data.isPro}
-                disabled={!serverSide || !data.isPro}
+                checked={subTracking && serverSide}
+                disabled={!serverSide}
                 onChange={setSubTracking}
               />
-              {subTracking && serverSide && data.isPro ? (
+              {subTracking && serverSide ? (
                 <FormLayout>
                   <FormLayout.Group>
                     <TextField label="Event name" name="sub_eventName" autoComplete="off" value={subCfg.eventName} onChange={setSub("eventName")} helpText="Must not be 'purchase' (avoids colliding with the native GA4 purchase)." />

@@ -11,7 +11,7 @@ export const loader = async ({ request }) => {
     prisma.recentEvent.count({ where: { shopDomain } }),
   ]);
   const platforms = tracking
-    ? ["gtmId", "ga4Id", "metaPixelId", "tiktokPixelId", "pinterestId", "snapPixelId", "bingUetId"].filter((k) => tracking[k]).length
+    ? ["gtmId", "ga4Id", "metaPixelId"].filter((k) => tracking[k]).length
     : 0;
   return {
     platforms,
