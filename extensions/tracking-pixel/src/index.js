@@ -37,15 +37,18 @@ const utmFromHref = (href) => {
 };
 
 register(({ analytics, browser, settings, init }) => {
+  // All config travels in one JSON field (settings.config) — Shopify requires every declared
+  // web-pixel field to be non-blank, so per-platform fields can't be left empty.
+  const s = safeParse(settings.config) || {};
   const cfg = {
     ids: {
-      gtm: settings.gtmId || null,
-      ga4: settings.ga4Id || null,
-      meta: settings.metaPixelId || null,
+      gtm: s.gtmId || null,
+      ga4: s.ga4Id || null,
+      meta: s.metaPixelId || null,
     },
-    matrix: safeParse(settings.eventMatrix) || {},
-    consentMode: settings.consentMode !== "false",
-    proxyUrl: settings.proxyUrl || null,
+    matrix: s.eventMatrix && typeof s.eventMatrix === "object" ? s.eventMatrix : {},
+    consentMode: s.consentMode !== false,
+    proxyUrl: s.proxyUrl || null,
   };
 
   // Consent gate. With consentMode on, fire nothing until the visitor has allowed

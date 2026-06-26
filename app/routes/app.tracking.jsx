@@ -109,13 +109,17 @@ export const action = async ({ request }) => {
 
   // Push the effective config to the Web Pixel sandbox. Settings keys MUST match the
   // extension's declared fields (extensions/tracking-pixel/shopify.extension.toml).
+  // One JSON field — the extension declares a single non-blank `config` field, so individual
+  // platform IDs can be left blank (e.g. GA4-only) without Shopify's "can't be blank" rejection.
   const pixelSettings = {
-    gtmId: data.gtmId || "",
-    ga4Id: data.ga4Id || "",
-    metaPixelId: data.metaPixelId || "",
-    eventMatrix: data.eventMatrix,
-    consentMode: String(data.consentMode),
-    proxyUrl: "", // set to the app-proxy /track URL once deployed to a real host
+    config: JSON.stringify({
+      gtmId: data.gtmId || "",
+      ga4Id: data.ga4Id || "",
+      metaPixelId: data.metaPixelId || "",
+      eventMatrix: JSON.parse(data.eventMatrix || "{}"),
+      consentMode: data.consentMode,
+      proxyUrl: "", // set to the app-proxy /track URL once deployed to a real host
+    }),
   };
   const input = { settings: JSON.stringify(pixelSettings) };
 

@@ -15,28 +15,10 @@ runtime_context = "strict"
   [extensions.settings]
   type = "object"
 
-    # `fields` is an object keyed by setting name (not an array). Keys must match the
-    # settings.<key> reads in src/index.js.
-    [extensions.settings.fields.gtmId]
-    name = "GTM container ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.ga4Id]
-    name = "GA4 measurement ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.metaPixelId]
-    name = "Meta Pixel ID"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.eventMatrix]
-    name = "Per-platform event matrix (JSON)"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.consentMode]
-    name = "Gate on consent"
-    type = "single_line_text_field"
-
-    [extensions.settings.fields.proxyUrl]
-    name = "Server-side ingest URL (app proxy)"
+    # Web-pixel settings fields are ALL required-non-blank by Shopify, so per-platform fields
+    # break the moment a merchant leaves one blank (e.g. GA4-only). Instead we expose ONE JSON
+    # field — always non-blank — that carries the whole config (ids, eventMatrix, consentMode,
+    # proxyUrl). The app writes it via webPixelCreate/Update; src/index.js parses settings.config.
+    [extensions.settings.fields.config]
+    name = "Pixelify tracking config (JSON)"
     type = "single_line_text_field"
