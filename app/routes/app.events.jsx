@@ -34,7 +34,7 @@ export default function Events() {
   return (
     <Page
       title="Live events"
-      subtitle="Server-side events from the Web Pixel — auto-refreshes every 5s"
+      subtitle="Server-side events from the Web Pixel - auto-refreshes every 5s"
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
       <Card>
@@ -42,13 +42,13 @@ export default function Events() {
           {events.length === 0 ? (
             <Text as="p" tone="subdued">
               No events yet. These appear once the app proxy is live (deployed host) and the pixel
-              is firing with consent — they don’t flow over localhost.
+              is firing with consent - they don’t flow over localhost.
             </Text>
           ) : (
             events.map((e) => (
               <InlineStack key={e.id} align="space-between" blockAlign="center" wrap={false}>
                 <InlineStack gap="200" blockAlign="center">
-                  <Badge>{e.platform || "—"}</Badge>
+                  <Badge>{e.platform || "-"}</Badge>
                   <Text as="span" variant="bodyMd">
                     {e.name}
                   </Text>

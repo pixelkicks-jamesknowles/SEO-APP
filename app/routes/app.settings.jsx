@@ -56,7 +56,7 @@ export default function Settings() {
           <BlockStack gap="300">
             <SectionHeading
               title="Server-side tracking keys"
-              help="Credentials for server-side delivery — the GA4 Measurement Protocol secret (also used by the subscription event) and the Meta CAPI token."
+              help="Credentials for server-side delivery - the GA4 Measurement Protocol secret (also used by the subscription event) and the Meta CAPI token."
             />
             <Text as="p" tone="subdued">Used by server-side fan-out (GA4 Measurement Protocol + Meta CAPI).</Text>
             <Form method="post">

@@ -120,7 +120,7 @@ export const action = async ({ request }) => {
 
   // Push the effective config to the Web Pixel sandbox. Settings keys MUST match the
   // extension's declared fields (extensions/tracking-pixel/shopify.extension.toml).
-  // One JSON field — the extension declares a single non-blank `config` field, so individual
+  // One JSON field - the extension declares a single non-blank `config` field, so individual
   // platform IDs can be left blank (e.g. GA4-only) without Shopify's "can't be blank" rejection.
   const pixelSettings = {
     config: JSON.stringify({
@@ -216,12 +216,12 @@ export default function Tracking() {
   return (
     <Page
       title="Tracking"
-      subtitle="GTM, GA4 and Meta — fired via the Web Pixels API, consent-gated."
+      subtitle="GTM, GA4 and Meta - fired via the Web Pixels API, consent-gated."
     >
       <Form method="post">
         <BlockStack gap="400">
           {actionData?.ok && !actionData?.pixelError && (
-            <Banner tone="success">Saved — web pixel synced.</Banner>
+            <Banner tone="success">Saved - web pixel synced.</Banner>
           )}
           {actionData?.pixelError && (
             <Banner tone="warning" title="Saved, but the web pixel didn’t sync">
@@ -232,14 +232,14 @@ export default function Tracking() {
           <Banner tone="info" title="Avoiding double-counting with the Google & YouTube app">
             <p>
               If the store runs the native Google &amp; YouTube app, it already sends the standard GA4
-              ecommerce events (incl. <b>purchase</b>). Server-side events here de-dup safely —
+              ecommerce events (incl. <b>purchase</b>). Server-side events here de-dup safely -
               GA4 collapses purchases on matching <b>transaction_id</b> and Meta de-dups on{" "}
-              <b>event_id</b> — but for other events, prefer to track here only what the native app
+              <b>event_id</b> - but for other events, prefer to track here only what the native app
               doesn&apos;t. GTM events require a server-side GTM container URL on the Settings page
               (a web GTM-XXXX container can&apos;t load in the pixel sandbox).
             </p>
             <p>
-              <b>Google Ads:</b> no setup needed here — the server-side GA4 purchase carries the right
+              <b>Google Ads:</b> no setup needed here - the server-side GA4 purchase carries the right
               client_id, so it stitches to the on-page session that holds the gclid. Link your GA4
               property to Google Ads and import the purchase conversion (no API or developer token).
             </p>
@@ -268,7 +268,7 @@ export default function Tracking() {
             <div style={{ padding: "var(--p-space-400)" }}>
               <SectionHeading
                 title="Events to track"
-                help="Tick which standard storefront/checkout events each platform receives. Because it uses Web Pixels, checkout and purchase events are covered — which theme scripts can't reach."
+                help="Tick which standard storefront/checkout events each platform receives. Because it uses Web Pixels, checkout and purchase events are covered - which theme scripts can't reach."
               />
               <Text as="p" tone="subdued">
                 Tick which events each platform receives. Fired via the Web Pixels API, so
@@ -342,14 +342,14 @@ export default function Tracking() {
               <input type="hidden" name="evt:ga4:scroll" value={scrollDepth ? "on" : ""} />
               <input type="hidden" name="evt:gtm:scroll" value={scrollDepth ? "on" : ""} />
               <Checkbox
-                label="Scroll depth — GA4 “scroll” events at each threshold (percent_scrolled)"
+                label="Scroll depth - GA4 “scroll” events at each threshold (percent_scrolled)"
                 checked={scrollDepth}
                 onChange={setScrollDepth}
               />
               <input type="hidden" name="evt:ga4:engaged_view" value={engagedView ? "on" : ""} />
               <input type="hidden" name="evt:gtm:engaged_view" value={engagedView ? "on" : ""} />
               <Checkbox
-                label="Engaged-content views — “engaged_view” when a visitor reads (time on page + scroll)"
+                label="Engaged-content views - “engaged_view” when a visitor reads (time on page + scroll)"
                 helpText="Lets SEO teams see which content actually gets consumed, not just landed on. Thresholds are configured on the app embed."
                 checked={engagedView}
                 onChange={setEngagedView}
@@ -366,21 +366,21 @@ export default function Tracking() {
               {/* Polaris Checkbox doesn't post a form value, so a hidden input carries each toggle. */}
               <input type="hidden" name="consentMode" value={consent ? "on" : ""} />
               <Checkbox
-                label="Consent mode — respect the Customer Privacy API (recommended)"
+                label="Consent mode - respect the Customer Privacy API (recommended)"
                 checked={consent}
                 onChange={setConsent}
               />
               <input type="hidden" name="consentSignals" value={consentSignals ? "on" : ""} />
               <Checkbox
-                label="Google Consent Mode v2 — keep sending consent-flagged events without consent"
-                helpText="Recommended for EEA/UK. Instead of dropping events when a visitor declines, send a privacy-safe, flagged hit so GA4 can model the missing conversions (Meta is skipped without marketing consent). Untick for strict gating — nothing fires until consent is granted."
+                label="Google Consent Mode v2 - keep sending consent-flagged events without consent"
+                helpText="Recommended for EEA/UK. Instead of dropping events when a visitor declines, send a privacy-safe, flagged hit so GA4 can model the missing conversions (Meta is skipped without marketing consent). Untick for strict gating - nothing fires until consent is granted."
                 checked={consentSignals}
                 disabled={!consent}
                 onChange={setConsentSignals}
               />
               <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
               <Checkbox
-                label="Debug mode — log every event to the storefront browser console"
+                label="Debug mode - log every event to the storefront browser console"
                 helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
                 checked={debug}
                 onChange={setDebug}
@@ -394,7 +394,7 @@ export default function Tracking() {
               />
               <input type="hidden" name="subscriptionTracking" value={subTracking && serverSide ? "on" : ""} />
               <Checkbox
-                label="Subscription conversion tracking — send a server-side subscription_purchase event from orders/paid"
+                label="Subscription conversion tracking - send a server-side subscription_purchase event from orders/paid"
                 helpText={
                   serverSide
                     ? "Requires the GA4 Measurement Protocol API secret on the Settings page. Carries subscription / subscription_interval (per-order + per-line) and the actual discounted amount."

@@ -24,7 +24,7 @@ export const loader = async ({ request }) => {
 export default function Index() {
   const { platforms, recentEvents, serverSide, subscriptionTracking } = useLoaderData();
   return (
-    <Page title="Pixel Kicks Tracking" subtitle="Client-side + server-side conversion tracking for any Shopify store — free.">
+    <Page title="Pixel Kicks Tracking" subtitle="Client-side + server-side conversion tracking for any Shopify store - free.">
       <Layout>
         <Layout.Section>
           <Card>
@@ -52,7 +52,7 @@ export default function Index() {
                 <List.Item>On <b>Tracking</b>, add a platform ID (GA4 / GTM / Meta / TikTok) and pick which events to send.</List.Item>
                 <List.Item>Keep <b>Consent mode</b> on so tags fire only with Customer Privacy consent.</List.Item>
                 <List.Item>For server-side / subscription events: add the GA4 Measurement Protocol secret on <b>Settings</b>, then enable Server-side + Subscription on Tracking.</List.Item>
-                <List.Item>Enable the <b>tracking pixel</b> (web pixel extension) — added automatically on install.</List.Item>
+                <List.Item>Enable the <b>tracking pixel</b> (web pixel extension) - added automatically on install.</List.Item>
               </List>
             </BlockStack>
           </Card>
