@@ -21,16 +21,9 @@ export default function App() {
         <Link to="/app" rel="home">
           Home
         </Link>
-        <Link to="/app/seo">SEO</Link>
-        <Link to="/app/audit">Audit</Link>
-        <Link to="/app/cwv">Web Vitals</Link>
         <Link to="/app/tracking">Tracking</Link>
         <Link to="/app/events">Live events</Link>
-        <Link to="/app/redirects">Redirects</Link>
-        <Link to="/app/gsc">Search Console</Link>
-        <Link to="/app/activity">Activity</Link>
         <Link to="/app/settings">Settings</Link>
-        <Link to="/app/plans">Plans</Link>
       </NavMenu>
       {/* Bottom breathing room below every page's content (e.g. trailing Save buttons). */}
       <Box paddingBlockEnd="800">

@@ -14,7 +14,6 @@ import {
 } from "@shopify/polaris";
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
-import { PLAN } from "../lib/plans";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
@@ -49,17 +48,11 @@ function idError(kind, v) {
 }
 
 export const loader = async ({ request }) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const t = await prisma.trackingSettings.findUnique({
     where: { shopDomain: session.shop },
   });
-  let isPro = false;
-  try {
-    const check = await billing.check({ plans: [PLAN.PRO], isTest: true });
-    isPro = check.hasActivePayment;
-  } catch {
-    // billing not configured / no active subscription
-  }
+  const isPro = true; // free app — every feature available
   return {
     gtmId: t?.gtmId ?? "",
     ga4Id: t?.ga4Id ?? "",

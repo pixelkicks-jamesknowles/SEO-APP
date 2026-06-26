@@ -5,7 +5,7 @@
 # During `shopify app dev`, automatically_update_urls_on_dev keeps these pointed at the tunnel.
 
 client_id = "16f6275cefd68c235d54aa800f34c189"
-name = "Pixel Kicks SEO"
+name = "Pixel Kicks Tracking"
 application_url = "https://example.com"
 embedded = true
 
@@ -14,12 +14,10 @@ automatically_update_urls_on_dev = true
 include_config_on_deploy = true
 
 [access_scopes]
-# SEO core: product/collection seo + image altText (write_products); page/article/blog SEO +
-# URL redirects (write_content); robots.txt + app embed (read/write_themes). Tracking:
-# read_orders enriches purchase events. Restored after `config link` reset these to the
-# remote app's empty defaults — applies on next deploy / dev restart (triggers re-consent).
-# TODO(verify before deploy): urlRedirectCreate may require write_online_store_pages.
-scopes = "read_products,write_products,read_content,write_content,read_themes,write_themes,read_orders"
+# Tracking-only (SEO features archived to branch archive/seo-full-featured). The orders/paid
+# subscription webhook needs read_orders; the Web Pixel declares its own customer-events access.
+# (Reducing scopes triggers merchant re-consent on next deploy.)
+scopes = "read_orders"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
