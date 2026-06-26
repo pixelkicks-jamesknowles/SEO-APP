@@ -17,11 +17,27 @@ import { eventLabel } from "../lib/event-labels";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const events = await prisma.recentEvent.findMany({
-    where: { shopDomain: session.shop },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [events, logs] = await Promise.all([
+    prisma.recentEvent.findMany({
+      where: { shopDomain: session.shop },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    }),
+    prisma.deliveryLog.findMany({
+      where: { shopDomain: session.shop, createdAt: { gte: since } },
+      select: { destination: true, ok: true },
+    }),
+  ]);
+  const byDest = {};
+  for (const l of logs) {
+    const h = (byDest[l.destination] ||= { ok: 0, fail: 0 });
+    if (l.ok) h.ok += 1;
+    else h.fail += 1;
+  }
+  const health = Object.entries(byDest)
+    .map(([destination, h]) => ({ destination, ...h, total: h.ok + h.fail }))
+    .sort((a, b) => a.destination.localeCompare(b.destination));
   return {
     events: events.map((e) => ({
       id: e.id,
@@ -29,6 +45,7 @@ export const loader = async ({ request }) => {
       payload: e.payload,
       createdAt: e.createdAt.toISOString(),
     })),
+    health,
   };
 };
 
@@ -49,8 +66,16 @@ function prettyPayload(raw) {
   }
 }
 
+const DEST_LABELS = {
+  ga4: "GA4",
+  meta: "Meta CAPI",
+  gtm: "Server-side GTM",
+  ga4_subscription: "GA4 subscription",
+  ga4_refund: "GA4 refund",
+};
+
 export default function Events() {
-  const { events } = useLoaderData();
+  const { events, health } = useLoaderData();
   const revalidator = useRevalidator();
   const [filter, setFilter] = useState("all");
   const [expanded, setExpanded] = useState(null);
@@ -80,6 +105,26 @@ export default function Events() {
       </Form>
 
       <BlockStack gap="300">
+        {health.length > 0 && (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd">Delivery health (last 24h)</Text>
+              <InlineStack gap="300" wrap>
+                {health.map((h) => (
+                  <InlineStack key={h.destination} gap="150" blockAlign="center">
+                    <Badge tone={h.fail === 0 ? "success" : "critical"}>
+                      {DEST_LABELS[h.destination] || h.destination}
+                    </Badge>
+                    <Text as="span" tone="subdued" variant="bodySm">
+                      {h.ok}/{h.total} delivered{h.fail > 0 ? ` · ${h.fail} failed` : ""}
+                    </Text>
+                  </InlineStack>
+                ))}
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        )}
+
         {events.length > 0 && (
           <Card>
             <InlineStack gap="300" blockAlign="center">

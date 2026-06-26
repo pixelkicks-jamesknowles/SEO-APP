@@ -214,8 +214,14 @@ export function metaEventFor(name, ev) {
   };
 }
 
+// Best-effort POST that never throws; returns { ok, detail } for the delivery health log.
 async function postJson(url, body, headers = {}) {
-  await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    return { ok: res.ok, detail: String(res.status) };
+  } catch (e) {
+    return { ok: false, detail: e?.message || "network error" };
+  }
 }
 
 // Google Consent Mode v2 signals for the GA4 MP `consent` block. marketing → ad signals,
@@ -232,12 +238,12 @@ async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, co
   const body = { client_id: clientId, events: [event] };
   const consentBlock = ga4Consent(consent);
   if (consentBlock) body.consent = consentBlock;
-  await postJson(url, body);
+  return postJson(url, body);
 }
 
 async function sendMeta(pixelId, token, event) {
   const url = `https://graph.facebook.com/${META_API_VERSION}/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(token)}`;
-  await postJson(url, { data: [event] });
+  return postJson(url, { data: [event] });
 }
 
 // Server-side GTM: GTM-XXXX is a *web* container the strict pixel sandbox cannot load (no gtag.js),
@@ -247,11 +253,17 @@ async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, even
   const body = { client_id: clientId, events: [event] };
   const consentBlock = ga4Consent(consent);
   if (consentBlock) body.consent = consentBlock;
-  await postJson(url, body);
+  return postJson(url, body);
 }
 
 function platformWants(matrix, platform, name) {
   return Array.isArray(matrix?.[platform]) && matrix[platform].includes(name);
+}
+
+// Known bots / crawlers / headless agents whose hits shouldn't reach ad platforms as conversions.
+const BOT_RE = /bot\b|crawl|spider|slurp|bingbot|bingpreview|yandex|baidu|duckduck|facebookexternalhit|embedly|quora|pinterest\/|slackbot|telegram|whatsapp|headless|phantom|puppeteer|playwright|lighthouse|gtmetrix|pingdom|uptime|statuscake|curl\/|wget\/|python-requests|axios\/|node-fetch|go-http|java\/|ahrefs|semrush|mj12|dotbot|petalbot/i;
+export function isBot(ua) {
+  return typeof ua === "string" && ua.length > 0 && BOT_RE.test(ua);
 }
 
 /**
@@ -260,9 +272,9 @@ function platformWants(matrix, platform, name) {
  * event: normalized event from the pixel beacon { name, id, data, context, utm, clientId, fbp, fbc, ... }.
  */
 export async function fanOutServerSide(settings, event) {
-  if (!settings?.serverSide) return;
+  if (!settings?.serverSide) return [];
   const name = event?.name;
-  if (!name) return;
+  if (!name) return [];
 
   let keys = {};
   try {
@@ -282,27 +294,34 @@ export async function fanOutServerSide(settings, event) {
   // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
   const marketingOk = !consent || consent.marketing;
-  const jobs = [];
+  const tasks = [];
+  // Each task resolves to a delivery-health record { destination, eventName, ok, detail }.
+  const track = (destination, promise) =>
+    tasks.push(
+      Promise.resolve(promise)
+        .then((r) => ({ destination, eventName: name, ok: !!r?.ok, detail: r?.detail || "" }))
+        .catch((e) => ({ destination, eventName: name, ok: false, detail: e?.message || "error" })),
+    );
 
   if (platformWants(matrix, "ga4", name) && settings.ga4Id && keys.ga4ApiSecret) {
-    jobs.push(sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }).catch(() => {}));
+    track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }));
   }
   if (marketingOk && platformWants(matrix, "meta", name) && settings.metaPixelId && keys.metaCapiToken) {
-    jobs.push(sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEventFor(name, event)).catch(() => {}));
+    track("meta", sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEventFor(name, event)));
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
   if (platformWants(matrix, "gtm", name) && settings.gtmId && keys.gtmServerUrl) {
     const mid = keys.gtmMeasurementId || settings.ga4Id;
     const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
     if (mid && secret) {
-      jobs.push(sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event), consent).catch(() => {}));
+      track("gtm", sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event), consent));
     }
   }
-  // Google Ads needs no integration here — the GA4 purchase above carries the correct client_id, so
-  // it stitches to the on-page gtag session that holds the gclid; the merchant links GA4 ↔ Google Ads
+  // Google Ads needs no integration here - the GA4 purchase above carries the correct client_id, so
+  // it stitches to the on-page gtag session that holds the gclid; the merchant links GA4 to Google Ads
   // and imports the conversion. No Google Ads API / developer token / OAuth required.
 
-  await Promise.all(jobs);
+  return Promise.all(tasks);
 }
 
 // Validate a GA4 event against the Measurement Protocol debug endpoint, which (unlike the real
@@ -338,12 +357,7 @@ export async function sendGa4Event(settings, { name, params = {}, clientId } = {
   } catch {
     return { sent: false };
   }
-  if (!keys.ga4ApiSecret) return { sent: false };
-  try {
-    await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params });
-    return { sent: true };
-  } catch (e) {
-    console.warn("[ga4 mp] subscription event send failed:", e?.message || e);
-    return { sent: false };
-  }
+  if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
+  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params });
+  return { sent: r.ok, detail: r.detail };
 }

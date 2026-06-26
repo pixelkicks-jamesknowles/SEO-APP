@@ -89,7 +89,25 @@ model TrackingSettings {
   subscriptionTracking Boolean @default(false)
   subscriptionConfig   String  @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
   pixelDebug     Boolean  @default(false) // log every event in the storefront console (testing)
+  // Send a GA4 `refund` event from refunds/create + orders/cancelled (negative conversions).
+  refundTracking Boolean  @default(false)
+  // Drop known bot / headless traffic before server-side delivery (default on).
+  botFiltering   Boolean  @default(true)
   updatedAt      DateTime @updatedAt
+}
+
+// Per-destination delivery outcomes for the in-app health panel (success/failure of each server-side
+// send). Capped per shop at write time. Powers the "Delivery health" view.
+model DeliveryLog {
+  id          String   @id @default(uuid())
+  shopDomain  String
+  destination String // ga4 | meta | gtm | ga4_subscription | ga4_refund
+  eventName   String
+  ok          Boolean
+  detail      String?  // HTTP status or error summary
+  createdAt   DateTime @default(now())
+
+  @@index([shopDomain, createdAt])
 }
 
 // First-touch attribution per customer, captured on the FIRST order we see and replayed onto every

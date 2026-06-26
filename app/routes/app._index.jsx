@@ -6,9 +6,11 @@ import prisma from "../db.server";
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-  const [tracking, recentEvents] = await Promise.all([
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [tracking, recentEvents, deliveryFailures] = await Promise.all([
     prisma.trackingSettings.findUnique({ where: { shopDomain } }),
     prisma.recentEvent.count({ where: { shopDomain } }),
+    prisma.deliveryLog.count({ where: { shopDomain, ok: false, createdAt: { gte: since } } }),
   ]);
   const keys = JSON.parse(tracking?.serverSideKeys || "{}");
   const idKeys = ["gtmId", "ga4Id", "metaPixelId"];
@@ -30,6 +32,7 @@ export const loader = async ({ request }) => {
   return {
     platforms,
     recentEvents,
+    deliveryFailures,
     serverSide,
     subscriptionTracking: tracking?.subscriptionTracking ?? false,
     warnings,
@@ -37,7 +40,7 @@ export const loader = async ({ request }) => {
 };
 
 export default function Index() {
-  const { platforms, recentEvents, serverSide, subscriptionTracking, warnings } = useLoaderData();
+  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings } = useLoaderData();
   const notConfigured = platforms === 0;
 
   return (
@@ -82,6 +85,7 @@ export default function Index() {
                   {subscriptionTracking ? "Subscription tracking on" : "Subscription tracking off"}
                 </Badge>
                 {recentEvents > 0 && <Badge tone="info">{`${recentEvents} recent event${recentEvents > 1 ? "s" : ""}`}</Badge>}
+                {deliveryFailures > 0 && <Badge tone="critical">{`${deliveryFailures} delivery failure${deliveryFailures > 1 ? "s" : ""} (24h)`}</Badge>}
               </InlineStack>
               <InlineStack gap="300">
                 <Button url="/app/tracking" variant="primary">Open Tracking</Button>

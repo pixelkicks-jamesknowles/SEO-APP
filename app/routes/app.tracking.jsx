@@ -73,6 +73,8 @@ export const loader = async ({ request }) => {
     subscriptionTracking: t?.subscriptionTracking ?? false,
     subscriptionConfig: JSON.parse(t?.subscriptionConfig ?? "{}"),
     pixelDebug: t?.pixelDebug ?? false,
+    refundTracking: t?.refundTracking ?? false,
+    botFiltering: t?.botFiltering ?? true,
   };
 };
 
@@ -115,6 +117,8 @@ export const action = async ({ request }) => {
     consentMode: form.get("consentMode") === "on",
     consentSignals: form.get("consentSignals") === "on",
     pixelDebug: form.get("pixelDebug") === "on",
+    refundTracking: form.get("refundTracking") === "on",
+    botFiltering: form.get("botFiltering") === "on",
     serverSide: form.get("serverSide") === "on",
     subscriptionTracking: form.get("subscriptionTracking") === "on",
     subscriptionConfig: JSON.stringify({
@@ -194,6 +198,8 @@ export default function Tracking() {
   const [scrollDepth, setScrollDepth] = useState(seoHas("scroll"));
   const [engagedView, setEngagedView] = useState(seoHas("engaged_view"));
   const [serverSide, setServerSide] = useState(data.serverSide);
+  const [refundTracking, setRefundTracking] = useState(data.refundTracking);
+  const [botFiltering, setBotFiltering] = useState(data.botFiltering);
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
   const [subCfg, setSubCfg] = useState({
     eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
@@ -224,7 +230,7 @@ export default function Tracking() {
   const submit = useSubmit();
   const formRef = useRef(null);
   const snapshotOf = () =>
-    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, subTracking, subCfg, ids });
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, subTracking, subCfg, ids });
   const snapshot = snapshotOf();
   const baseline = useRef(snapshot);
   const dirty = snapshot !== baseline.current;
@@ -250,6 +256,8 @@ export default function Tracking() {
     setScrollDepth(seoHas("scroll"));
     setEngagedView(seoHas("engaged_view"));
     setServerSide(data.serverSide);
+    setRefundTracking(data.refundTracking);
+    setBotFiltering(data.botFiltering);
     setSubTracking(data.subscriptionTracking);
     setSubCfg({
       eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
@@ -441,10 +449,29 @@ export default function Tracking() {
               />
               <input type="hidden" name="serverSide" value={serverSide ? "on" : ""} />
               <Checkbox
-                label="Server-side (Meta CAPI / GA4 Measurement Protocol)"
-                helpText="Events also sent server-side for accuracy + ad-blocker resilience."
+                label="Server-side delivery (Meta CAPI / GA4 Measurement Protocol)"
+                helpText="Required for anything to send. Events are delivered server-side for accuracy + ad-blocker resilience."
                 checked={serverSide}
                 onChange={setServerSide}
+              />
+              <input type="hidden" name="botFiltering" value={botFiltering ? "on" : ""} />
+              <Checkbox
+                label="Bot filtering - drop known bots and headless agents before delivery"
+                helpText="Stops crawler/headless traffic (often 20-30% of hits) from reaching ad platforms as fake conversions. Recommended on."
+                checked={botFiltering}
+                onChange={setBotFiltering}
+              />
+              <input type="hidden" name="refundTracking" value={refundTracking && serverSide ? "on" : ""} />
+              <Checkbox
+                label="Refund & cancellation tracking - send a GA4 refund event from refunds/orders cancelled"
+                helpText={
+                  serverSide
+                    ? "Nets refunds off your conversions in GA4 (and Google Ads via import), so campaigns stop optimising toward high-return orders."
+                    : "Enable Server-side delivery above first."
+                }
+                checked={refundTracking && serverSide}
+                disabled={!serverSide}
+                onChange={setRefundTracking}
               />
               <input type="hidden" name="subscriptionTracking" value={subTracking && serverSide ? "on" : ""} />
               <Checkbox
