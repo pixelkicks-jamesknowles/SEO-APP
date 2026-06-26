@@ -271,7 +271,7 @@ export function isBot(ua) {
  * event in the matrix and (b) has the credentials it needs. settings: TrackingSettings row.
  * event: normalized event from the pixel beacon { name, id, data, context, utm, clientId, fbp, fbc, ... }.
  */
-export async function fanOutServerSide(settings, event) {
+export async function fanOutServerSide(settings, event, { force = false } = {}) {
   if (!settings?.serverSide) return [];
   const name = event?.name;
   if (!name) return [];
@@ -294,6 +294,8 @@ export async function fanOutServerSide(settings, event) {
   // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
   const marketingOk = !consent || consent.marketing;
+  // force (test sends) bypasses the per-event matrix, delivering to every configured destination.
+  const wants = (p) => force || platformWants(matrix, p, name);
   const tasks = [];
   // Each task resolves to a delivery-health record { destination, eventName, ok, detail }.
   const track = (destination, promise) =>
@@ -303,14 +305,14 @@ export async function fanOutServerSide(settings, event) {
         .catch((e) => ({ destination, eventName: name, ok: false, detail: e?.message || "error" })),
     );
 
-  if (platformWants(matrix, "ga4", name) && settings.ga4Id && keys.ga4ApiSecret) {
+  if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret) {
     track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }));
   }
-  if (marketingOk && platformWants(matrix, "meta", name) && settings.metaPixelId && keys.metaCapiToken) {
+  if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {
     track("meta", sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEventFor(name, event)));
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
-  if (platformWants(matrix, "gtm", name) && settings.gtmId && keys.gtmServerUrl) {
+  if (wants("gtm") && settings.gtmId && keys.gtmServerUrl) {
     const mid = keys.gtmMeasurementId || settings.ga4Id;
     const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
     if (mid && secret) {

@@ -5,9 +5,12 @@ import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
-import { sendGa4Event, validateGa4Event, ga4EventFor } from "../lib/server-side.server";
+import { fanOutServerSide, validateGa4Event, ga4EventFor } from "../lib/server-side.server";
 import { buildSubscriptionEvent } from "../lib/subscription";
+import { recordDeliveries } from "../lib/delivery.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
+
+const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM" };
 import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
@@ -60,22 +63,30 @@ export const action = async ({ request }) => {
       event = { name: "pixelify_test", params: { debug_mode: 1, source: "pixelify-admin" }, clientId: "test.0" };
     }
 
-    // Validate first (the real endpoint always returns 204, even for a bad secret/payload).
+    // Validate the GA4 payload first (the real endpoint always returns 204, even for a bad secret).
     const v = await validateGa4Event(tracking, event);
     if (!v.ok) {
       return { testError: `GA4 rejected the event: ${v.messages.join("; ")}. Check the measurement ID and secret belong to the same data stream.` };
     }
-    const res = await sendGa4Event(tracking, event);
-    await logActivity(shopDomain, `Sent GA4 ${intent === "test_purchase" ? "test purchase" : "test"} event`);
-    if (!res.sent) return { testError: "Send failed after validating. Check the GA4 secret and that GA4 + Server-side are configured." };
-    const okMessages = {
-      test_purchase:
-        "Validated and sent a pixelify_test_purchase event (items + value). Check GA4 → Realtime or DebugView. This tests the server→GA4 leg; the real pixel→server leg needs a checkout on a deployed store.",
-      test_subscription:
-        "Validated and sent a pixelify_test_subscription event (subscription + interval + items). Check GA4 → Realtime or DebugView. The real event fires from orders/paid on a deployed store.",
-      test: "Validated and sent a pixelify_test event. Look in GA4 → Reports → Realtime (a minute or two) or Admin → DebugView. The Admin → Events list can take ~24h, so check Realtime.",
+    // Send through the REAL fan-out (force = bypass the event matrix) so it exercises GA4 + Meta CAPI
+    // + server-side GTM, and logs each outcome to Delivery health.
+    const results = await fanOutServerSide(tracking, event, { force: true });
+    await recordDeliveries(shopDomain, results);
+    await logActivity(shopDomain, `Sent ${intent} to ${results.length} destination(s)`);
+
+    const summary = results.map((r) => `${DEST_LABEL[r.destination] || r.destination} ${r.ok ? "ok" : `failed (${r.detail})`}`).join(", ");
+    const allOk = results.length > 0 && results.every((r) => r.ok);
+    const scope = {
+      test_purchase: "purchase-shaped (items + value)",
+      test_subscription: "subscription-shaped (subscription + interval + items)",
+      test: "a simple test",
+    }[intent];
+    if (!allOk) {
+      return { testError: `Some destinations failed - ${summary}. Fix the failing credential, then retry.` };
+    }
+    return {
+      testOk: `Sent ${scope} test event to every configured destination: ${summary}. Check GA4 Realtime / DebugView (and Meta Test Events), and the Delivery health panel on Live events. This verifies your credentials + the server-side pipeline; it does not test the storefront checkout capture, which needs a real checkout on a deployed store.`,
     };
-    return { testOk: okMessages[intent] };
   }
 
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
@@ -198,8 +209,8 @@ export default function Settings() {
         <Card>
           <BlockStack gap="300">
             <SectionHeading
-              title="Verify GA4"
-              description="Send a pixelify_test event straight to GA4 using the saved secret, then watch it land in GA4 DebugView. The fastest way to confirm credentials work."
+              title="Verify delivery"
+              description="Sends a distinctly-named test event to every configured destination (GA4, Meta CAPI, server-side GTM) and logs the result to Delivery health. Confirms your credentials and the server-side pipeline work. It does not test the storefront checkout capture - that needs a real checkout on a deployed store."
             />
             <BlockStack gap="150">
               <InlineStack gap="200" blockAlign="center">
@@ -218,7 +229,7 @@ export default function Settings() {
             <InlineStack gap="200" blockAlign="center">
               <Form method="post">
                 <input type="hidden" name="intent" value="test" />
-                <Button submit loading={busy} disabled={!canTest}>Send GA4 test event</Button>
+                <Button submit loading={busy} disabled={!canTest}>Send test event</Button>
               </Form>
               <Form method="post">
                 <input type="hidden" name="intent" value="test_purchase" />

@@ -108,11 +108,13 @@ export default function Help() {
               Nothing is sent, so it is safe to experiment and to build GTM tags against.
             </List.Item>
             <List.Item>
-              <b>Settings test buttons</b>: <i>Send GA4 test event</i> (a ping), <i>Send test purchase</i>
-              {" "}(items + value - the conversion that needs an app, since it fires in the checkout
-              sandbox), and <i>Send test subscription</i> (subscription + interval + items). Each
-              validates the payload against GA4 first, then sends a distinctly-named event so it never
-              pollutes real revenue.
+              <b>Settings verify buttons</b>: <i>Send test event</i> (a ping), <i>Send test purchase</i>
+              {" "}(items + value), and <i>Send test subscription</i> (subscription + interval + items).
+              Each validates against GA4, then delivers to <b>every configured destination</b> (GA4,
+              Meta CAPI, server-side GTM) and logs the outcome to Delivery health, under a distinctly
+              named event so it never pollutes real revenue. This verifies your credentials and the
+              server-side pipeline - it does not test the storefront checkout capture (that needs a real
+              checkout on a deployed store).
             </List.Item>
             <List.Item>
               <b>Debug mode</b> (Tracking page): logs every event to the storefront browser console.
