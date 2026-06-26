@@ -121,7 +121,10 @@ export const action = async ({ request }) => {
       eventMatrix: JSON.parse(data.eventMatrix || "{}"),
       consentMode: data.consentMode,
       debug: data.pixelDebug,
-      proxyUrl: "", // set to the app-proxy /track URL once deployed to a real host
+      // App-proxy path the pixel beacons server-side events to. Must match [app_proxy] prefix/subpath
+      // in shopify.app.toml. The pixel resolves it against the live storefront origin at send time,
+      // so no deployed host needs to be hard-coded here.
+      proxyPath: "/apps/pixelify-seo/track",
     }),
   };
   const input = { settings: JSON.stringify(pixelSettings) };
@@ -211,6 +214,17 @@ export default function Tracking() {
               {actionData.pixelError}
             </Banner>
           )}
+
+          <Banner tone="info" title="Avoiding double-counting with the Google & YouTube app">
+            <p>
+              If the store runs the native Google &amp; YouTube app, it already sends the standard GA4
+              ecommerce events (incl. <b>purchase</b>). Server-side events here de-dup safely —
+              GA4 collapses purchases on matching <b>transaction_id</b> and Meta de-dups on{" "}
+              <b>event_id</b> — but for other events, prefer to track here only what the native app
+              doesn&apos;t. GTM events require a server-side GTM container URL on the Settings page
+              (a web GTM-XXXX container can&apos;t load in the pixel sandbox).
+            </p>
+          </Banner>
 
           <Card>
             <BlockStack gap="300">

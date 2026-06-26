@@ -31,10 +31,12 @@ export const action = async ({ request, params }) => {
       await prisma.recentEvent.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } });
     }
   }
-  // Server-side fan-out: forward to GA4 Measurement Protocol / Meta CAPI.
+  // Server-side fan-out: forward to GA4 Measurement Protocol / Meta CAPI / sGTM.
   if (body?.event) {
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
-    await fanOutServerSide(settings, body.event);
+    // The real visitor IP for Meta user_data — the pixel can't read it, but Shopify forwards it.
+    const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
+    await fanOutServerSide(settings, { ...body.event, clientIp: body.event.clientIp || clientIp });
   }
   return new Response(null, { status: 204 });
 };

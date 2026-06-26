@@ -10,7 +10,11 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop } });
   const keys = JSON.parse(tracking?.serverSideKeys || "{}");
-  return { hasGa4Secret: Boolean(keys.ga4ApiSecret), hasCapiToken: Boolean(keys.metaCapiToken) };
+  return {
+    hasGa4Secret: Boolean(keys.ga4ApiSecret),
+    hasCapiToken: Boolean(keys.metaCapiToken),
+    gtmServerUrl: keys.gtmServerUrl || "",
+  };
 };
 
 export const action = async ({ request }) => {
@@ -21,6 +25,10 @@ export const action = async ({ request }) => {
   const keys = JSON.parse(tracking?.serverSideKeys || "{}");
   if (form.get("ga4ApiSecret")) keys.ga4ApiSecret = form.get("ga4ApiSecret");
   if (form.get("metaCapiToken")) keys.metaCapiToken = form.get("metaCapiToken");
+  // Server-side GTM container URL (blank clears it). Trimmed; "" removes the key.
+  const gtmServerUrl = (form.get("gtmServerUrl") || "").trim();
+  if (gtmServerUrl) keys.gtmServerUrl = gtmServerUrl;
+  else delete keys.gtmServerUrl;
   const serverSideKeys = JSON.stringify(keys);
   await prisma.trackingSettings.upsert({
     where: { shopDomain },
@@ -32,12 +40,13 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const busy = nav.state === "submitting";
   const [ga4Secret, setGa4Secret] = useState("");
   const [capiToken, setCapiToken] = useState("");
+  const [gtmUrl, setGtmUrl] = useState(savedGtmUrl);
 
   return (
     <Page title="Settings" subtitle="Server-side delivery credentials.">
@@ -69,6 +78,16 @@ export default function Settings() {
                   value={capiToken}
                   onChange={setCapiToken}
                   helpText={hasCapiToken ? "A token is saved. Enter a new one to replace it." : undefined}
+                />
+                <TextField
+                  label="Server-side GTM container URL"
+                  name="gtmServerUrl"
+                  autoComplete="off"
+                  type="url"
+                  value={gtmUrl}
+                  onChange={setGtmUrl}
+                  placeholder="https://sgtm.yourdomain.com"
+                  helpText="Required for GTM events. A web container (GTM-XXXX) can't load in the pixel sandbox, so GTM events are delivered to your server-side GTM container's GA4 client. Uses the GA4 measurement ID + secret above. Leave blank to disable GTM."
                 />
                 <Button submit variant="primary" loading={busy}>Save keys</Button>
               </BlockStack>

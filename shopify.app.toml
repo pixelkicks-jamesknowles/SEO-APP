@@ -29,23 +29,29 @@ redirect_urls = [ "https://example.com/api/auth" ]
 [webhooks]
 api_version = "2026-04"
 
-  # NOTE: [webhooks.privacy_compliance], all [[webhooks.subscriptions]] (app/uninstalled,
-  # app/scopes_update, products/update, collections/update) and [app_proxy] were removed so
-  # `--use-localhost` works — Shopify rejects localhost / internal domains for these URIs.
-  # RESTORE ALL before deploying to a real host; the handlers (app/routes/webhooks.*,
-  # proxy.$type.jsx) already exist. Template:
-  #   [webhooks.privacy_compliance]
-  #   customer_deletion_url = "/webhooks/customers/redact"
-  #   customer_data_request_url = "/webhooks/customers/data_request"
-  #   shop_deletion_url = "/webhooks/shop/redact"
-  #   [[webhooks.subscriptions]]
-  #   uri = "/webhooks/app/uninstalled"   # + app/scopes_update, products/create (auto-apply),
-  #                                       #   products/update (auto-301), collections/update
-  #   topics = [ "app/uninstalled" ]
-  #   [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
-  #   uri = "/webhooks/orders/paid"
-  #   topics = [ "orders/paid" ]
-  #   [app_proxy]
-  #   url = "https://<host>/proxy"
-  #   subpath = "pixelify-seo"
-  #   prefix = "apps"
+  # GDPR mandatory compliance webhooks (required for any distributed app).
+  [webhooks.privacy_compliance]
+  customer_deletion_url = "/webhooks/customers/redact"
+  customer_data_request_url = "/webhooks/customers/data_request"
+  shop_deletion_url = "/webhooks/shop/redact"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  # Server-side subscription_purchase → GA4 (seo-subscription-tracking-v1).
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
+
+# App Proxy — the Web Pixel beacons server-side events to /apps/pixelify-seo/track on the storefront,
+# which Shopify signs and forwards here. `url` must point at the deployed app host (same origin as
+# application_url). subpath/prefix MUST match proxyPath in app/routes/app.tracking.jsx.
+[app_proxy]
+url = "https://example.com/proxy"
+subpath = "pixelify-seo"
+prefix = "apps"
