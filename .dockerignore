@@ -1,0 +1,12 @@
+node_modules
+build
+.git
+.gitignore
+.env
+.env.*
+tests
+coverage
+*.md
+.shopify
+.cache
+npm-debug.log*
