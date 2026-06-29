@@ -148,9 +148,10 @@ export default function Events() {
           <BlockStack gap="200">
             {filtered.length === 0 ? (
               <Text as="p" tone="subdued">
-                No events yet. These appear once the app proxy is live (a deployed host) and the pixel
-                is firing with consent. They don&apos;t flow over localhost - use a tunnel or deploy to
-                see them, or preview payloads now in the Event sandbox.
+                No events yet. Events appear here as visitors trigger them on your storefront (with
+                consent). Check that you&apos;ve added a destination and turned on Server-side delivery on
+                the Tracking page, then browse the store to generate some. You can preview payloads
+                anytime in the Event sandbox.
               </Text>
             ) : (
               filtered.map((e) => {

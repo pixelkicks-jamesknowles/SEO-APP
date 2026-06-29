@@ -63,8 +63,8 @@ export default function Accuracy() {
       <BlockStack gap="400">
         {!hasData ? (
           <Banner tone="info">
-            No data yet. These figures populate once the app is deployed and live storefront events +
-            paid orders start flowing. They don&apos;t accrue over localhost.
+            No data yet. These figures populate as paid orders and storefront events start flowing.
+            Browse and place a test order on your storefront to see them appear.
           </Banner>
         ) : (
           <>

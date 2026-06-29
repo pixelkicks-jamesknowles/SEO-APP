@@ -93,9 +93,8 @@ export default function Help() {
               in Theme editor, App embeds, then tick those events on the Tracking page.
             </List.Item>
             <List.Item>
-              Verify on Settings with <b>Send GA4 test event / purchase / subscription</b>, then in GA4
-              Realtime / DebugView. The app proxy and webhooks need a deployed (public) host - they do
-              not work on localhost, so deploy or use a tunnel to test live storefront delivery.
+              Verify on Settings with <b>Send GA4 test event / purchase / subscription</b>, then watch
+              them in GA4 Realtime / DebugView and on the Live events page.
             </List.Item>
           </List>
         </Section>
@@ -122,9 +121,10 @@ export default function Help() {
               events fire and respect consent without configuring any destination.
             </List.Item>
             <List.Item>
-              <b><Link to="/app/events">Live events</Link></b>: once deployed, server-side events stream
-              here with expandable payloads, plus a <b>Delivery health (last 24h)</b> panel showing each
-              destination&apos;s success / failure counts. (Does not work over localhost.)
+              <b><Link to="/app/events">Live events</Link></b>: server-side events stream here as visitors
+              trigger them, with expandable payloads, plus a <b>Delivery health (last 24h)</b> panel
+              showing each destination&apos;s success / failure counts. See also <b><Link to="/app/accuracy">Accuracy</Link></b>
+              for purchase-capture and delivery-success rates.
             </List.Item>
             <List.Item>
               <b>GA4 DebugView / Realtime</b> and <b>Meta Test Events</b>: the source of truth. Note GA4
