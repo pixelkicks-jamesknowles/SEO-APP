@@ -6,7 +6,7 @@
 
 client_id = "16f6275cefd68c235d54aa800f34c189"
 name = "Pixel Kicks Tracking"
-application_url = "https://example.com"
+application_url = "https://respectful-liberation-production-18bc.up.railway.app"
 embedded = true
 
 [build]
@@ -24,46 +24,48 @@ optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://respectful-liberation-production-18bc.up.railway.app/auth/callback",
+  "https://respectful-liberation-production-18bc.up.railway.app/auth/shopify/callback",
+  "https://respectful-liberation-production-18bc.up.railway.app/api/auth/callback",
+]
 
 [webhooks]
 api_version = "2026-04"
 
-  # ⚠️ DEPLOY: the webhook subscriptions + [app_proxy] below are commented out so `shopify app dev
-  # --use-localhost` works — Shopify rejects localhost/internal hosts for webhook + proxy URIs.
-  # UNCOMMENT ALL of this before `shopify app deploy` to a real host (handlers already exist:
-  # app/routes/webhooks.* + proxy.$type.jsx). The app proxy + orders/paid + GDPR webhooks do NOT
-  # function under --use-localhost; use a tunnel (plain `shopify app dev`) to exercise them.
-  #
-  #   [webhooks.privacy_compliance]
-  #   customer_deletion_url = "/webhooks/customers/redact"
-  #   customer_data_request_url = "/webhooks/customers/data_request"
-  #   shop_deletion_url = "/webhooks/shop/redact"
-  #
-  #   [[webhooks.subscriptions]]
-  #   uri = "/webhooks/app/uninstalled"
-  #   topics = [ "app/uninstalled" ]
-  #
-  #   [[webhooks.subscriptions]]
-  #   uri = "/webhooks/app/scopes_update"
-  #   topics = [ "app/scopes_update" ]
-  #
-  #   [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
-  #   uri = "/webhooks/orders/paid"
-  #   topics = [ "orders/paid" ]
-  #
-  #   [[webhooks.subscriptions]]          # GA4 refund event (negative conversions)
-  #   uri = "/webhooks/refunds/create"
-  #   topics = [ "refunds/create" ]
-  #
-  #   [[webhooks.subscriptions]]
-  #   uri = "/webhooks/orders/cancelled"
-  #   topics = [ "orders/cancelled" ]
-  #
-  # # App Proxy — the Web Pixel + SEO-engagement embed beacon to /apps/pixelify-seo/track, which
-  # # Shopify signs and forwards here. `url` is the deployed host (same origin as application_url);
-  # # subpath/prefix MUST match proxyPath in app/routes/app.tracking.jsx + the seo-engagement embed.
-  # [app_proxy]
-  # url = "https://example.com/proxy"
-  # subpath = "pixelify-seo"
-  # prefix = "apps"
+  # Deployed to Railway. To go back to `shopify app dev --use-localhost`, re-comment the blocks below
+  # (Shopify rejects localhost/internal hosts for webhook + proxy URIs); for tunnel dev use plain
+  # `shopify app dev`, which works with these in place.
+
+  [webhooks.privacy_compliance]
+  customer_deletion_url = "/webhooks/customers/redact"
+  customer_data_request_url = "/webhooks/customers/data_request"
+  shop_deletion_url = "/webhooks/shop/redact"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
+  uri = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
+
+  [[webhooks.subscriptions]]          # GA4 refund event (negative conversions)
+  uri = "/webhooks/refunds/create"
+  topics = [ "refunds/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/cancelled"
+  topics = [ "orders/cancelled" ]
+
+# App Proxy — the Web Pixel + SEO-engagement embed beacon to /apps/pixelify-seo/track, which Shopify
+# signs and forwards here. `url` is the deployed host (same origin as application_url); subpath/prefix
+# MUST match proxyPath in app/routes/app.tracking.jsx + the seo-engagement embed.
+[app_proxy]
+url = "https://respectful-liberation-production-18bc.up.railway.app/proxy"
+subpath = "pixelify-seo"
+prefix = "apps"
