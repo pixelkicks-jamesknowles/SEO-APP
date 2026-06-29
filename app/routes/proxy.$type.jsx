@@ -1,7 +1,7 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { fanOutServerSide, isBot } from "../lib/server-side.server";
-import { recordDeliveries } from "../lib/delivery.server";
+import { recordDeliveries, recordVisit, getFirstTouch } from "../lib/delivery.server";
 
 // App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/track here.
 //   track -> bot-filter, record the event, fan out server-side to GA4 / Meta CAPI / sGTM, log outcomes.
@@ -41,9 +41,18 @@ export const action = async ({ request, params }) => {
     await prisma.recentEvent.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } });
   }
 
-  // Server-side fan-out + delivery health logging.
   const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
-  const results = await fanOutServerSide(settings, { ...body.event, clientIp: body.event.clientIp || clientIp });
+  const event = { ...body.event, clientIp: body.event.clientIp || clientIp };
+
+  // First-touch attribution: capture the source on UTM-tagged visits; on a conversion, attach the
+  // visitor's original source so it isn't mis-credited to direct in a later/returning session.
+  await recordVisit(shopDomain, event.clientId, event.utm);
+  if (event.name === "checkout_completed") {
+    event.firstTouch = await getFirstTouch(shopDomain, event.clientId);
+  }
+
+  // Server-side fan-out + delivery health logging.
+  const results = await fanOutServerSide(settings, event);
   await recordDeliveries(shopDomain, results);
 
   return new Response(null, { status: 204 });

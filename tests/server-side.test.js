@@ -115,6 +115,14 @@ describe("dataLayerFor", () => {
     expect(dl.ecommerce.currency).toBe("GBP");
   });
 
+  test("attaches first-touch source as custom params when present", () => {
+    const ev = ga4EventFor("checkout_completed", { ...checkoutEvent, firstTouch: { source: "google", medium: "organic", campaign: "spring" } });
+    expect(ev.params.first_source).toBe("google");
+    expect(ev.params.first_medium).toBe("organic");
+    expect(ev.params.first_campaign).toBe("spring");
+    expect(ev.params.transaction_id).toBe("5500000000001"); // still a full purchase
+  });
+
   test("scroll has no ecommerce block", () => {
     const dl = dataLayerFor("scroll", { params: { percent_scrolled: 50 } });
     expect(dl.event).toBe("scroll");

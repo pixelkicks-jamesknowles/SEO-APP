@@ -6,10 +6,15 @@ import prisma from "../db.server";
 import { buildSubscriptionEvent, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
 import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event } from "../lib/server-side.server";
+import { bumpDaily } from "../lib/delivery.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
   try {
+    // Count every paid order (Shopify's source of truth) for the Accuracy match-rate, regardless of
+    // whether subscription tracking is on.
+    await bumpDaily(shop, { ordersPaid: 1 });
+
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
     if (!settings?.serverSide || !settings?.subscriptionTracking) return new Response();
 

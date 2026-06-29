@@ -127,6 +127,37 @@ model CustomerAttribution {
   @@id([shopDomain, customerKey])
 }
 
+// Per-day reconciliation counters per shop, powering the Accuracy dashboard. ordersPaid comes from
+// the orders/paid webhook (Shopify's source of truth); purchasesDelivered counts checkout_completed
+// events we delivered to >=1 destination; eventsSent/Failed are total server-side send outcomes.
+model TrackingDaily {
+  shopDomain         String
+  date               String   // YYYY-MM-DD (UTC)
+  ordersPaid         Int      @default(0)
+  purchasesDelivered Int      @default(0)
+  eventsSent         Int      @default(0)
+  eventsFailed       Int      @default(0)
+  updatedAt          DateTime @updatedAt
+
+  @@id([shopDomain, date])
+}
+
+// First-touch attribution per anonymous visitor (keyed on the GA4 client_id), so a conversion in a
+// later/direct session still carries its original source/medium/campaign instead of looking direct.
+// Written only when a visit arrives with UTMs (first-touch is never overwritten).
+model VisitorAttribution {
+  shopDomain String
+  clientId   String
+  source     String?
+  medium     String?
+  campaign   String?
+  visits     Int      @default(1)
+  firstSeen  DateTime @default(now())
+  lastSeen   DateTime @updatedAt
+
+  @@id([shopDomain, clientId])
+}
+
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
 // order id). Purged on a TTL by the existing cron.audit job.
 model ProcessedWebhook {
