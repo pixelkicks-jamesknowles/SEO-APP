@@ -23,8 +23,9 @@ Artifacts already in the repo: `Dockerfile`, `.dockerignore`, `railway.json`.
 ## Step 1 — Railway project + Postgres
 1. In the **agency Railway account**, create a new project.
 2. **+ New → Database → PostgreSQL.** Railway provisions it and exposes `DATABASE_URL`.
-3. **+ New → GitHub repo** (or `railway up` from the CLI). Point the service at this repo and set
-   **Settings → Root Directory = `app/pixelify-seo`** so it builds just this app via its `Dockerfile`.
+3. **+ New → GitHub repo** → the standalone **SEO-APP** repo (the app is at its root, so leave
+   **Root Directory** empty / `/`). Railway builds it via the `Dockerfile`. *(If you ever deploy from
+   the `pixelify` monorepo instead, set Root Directory = `app/pixelify-seo`.)*
 4. Railway detects `railway.json` / `Dockerfile` and builds automatically.
 
 ## Step 2 — Environment variables (on the app service)
