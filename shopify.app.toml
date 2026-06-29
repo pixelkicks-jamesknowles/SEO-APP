@@ -11,7 +11,6 @@ embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [access_scopes]
 # Tracking-only (SEO features archived to branch archive/seo-full-featured).
@@ -50,17 +49,21 @@ api_version = "2026-04"
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
-  [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
-  uri = "/webhooks/orders/paid"
-  topics = [ "orders/paid" ]
-
-  [[webhooks.subscriptions]]          # GA4 refund event (negative conversions)
-  uri = "/webhooks/refunds/create"
-  topics = [ "refunds/create" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/orders/cancelled"
-  topics = [ "orders/cancelled" ]
+  # ⚠️ ORDER webhooks need Protected Customer Data access (Partner Dashboard → API access →
+  # Protected customer data). RE-ENABLE these three once granted, then re-run `npm run deploy`.
+  # They power subscription + refund tracking; the pixel/proxy/GA4/Meta path works without them.
+  #
+  #   [[webhooks.subscriptions]]          # server-side subscription_purchase → GA4 (seo-subscription-tracking-v1)
+  #   uri = "/webhooks/orders/paid"
+  #   topics = [ "orders/paid" ]
+  #
+  #   [[webhooks.subscriptions]]          # GA4 refund event (negative conversions)
+  #   uri = "/webhooks/refunds/create"
+  #   topics = [ "refunds/create" ]
+  #
+  #   [[webhooks.subscriptions]]
+  #   uri = "/webhooks/orders/cancelled"
+  #   topics = [ "orders/cancelled" ]
 
 # App Proxy — the Web Pixel + SEO-engagement embed beacon to /apps/pixelify-seo/track, which Shopify
 # signs and forwards here. `url` is the deployed host (same origin as application_url); subpath/prefix
