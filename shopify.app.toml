@@ -4,7 +4,7 @@
 # deployed host in application_url, [auth].redirect_urls, and [app_proxy].url (same origin).
 # During `shopify app dev`, automatically_update_urls_on_dev keeps these pointed at the tunnel.
 
-client_id = "16f6275cefd68c235d54aa800f34c189"
+client_id = "31805a879297077ae82cb978d093a0d3"
 name = "Pixel Kicks Tracking"
 application_url = "https://respectful-liberation-production-18bc.up.railway.app"
 embedded = true
