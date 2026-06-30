@@ -1,6 +1,7 @@
 // Pure first-touch attribution helpers for subscription tracking (seo-subscription-tracking-v1 M2).
 // The first order we see for a customer establishes the GA4 client_id + source/medium/campaign;
-// every later (recurring) order inherits it so it isn't mis-attributed to direct traffic. No IO here.
+// every later (recurring) order inherits it so it isn't mis-attributed to direct traffic.
+import { sha256Hex } from "./server-side.server";
 
 const UTM = { source: "utm_source", medium: "utm_medium", campaign: "utm_campaign" };
 
@@ -15,7 +16,7 @@ export function parseUtms(order) {
         if (v) out[k] = v;
       }
     } catch {
-      /* malformed landing_site — fall through to note_attributes */
+      /* malformed landing_site - fall through to note_attributes */
     }
   }
   const na = order?.note_attributes || [];
@@ -26,9 +27,10 @@ export function parseUtms(order) {
   return out;
 }
 
-/** Stable per-customer key: the customer id when present, else a normalized email, else null. */
+/** Stable per-customer key: the customer id when present, else a HASHED email, else null.
+ *  The email is sha256-hashed so no raw PII is persisted (same email still maps to the same key). */
 export function customerKey(order) {
   if (order?.customer?.id) return String(order.customer.id);
   const email = order?.email || order?.customer?.email;
-  return email ? `e:${String(email).trim().toLowerCase()}` : null;
+  return email ? `e:${sha256Hex(email)}` : null;
 }

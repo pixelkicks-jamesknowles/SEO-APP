@@ -1,5 +1,6 @@
 import { parseUtms, customerKey } from "../app/lib/attribution.js";
 import { buildSubscriptionEvent } from "../app/lib/subscription.js";
+import { sha256Hex } from "../app/lib/server-side.server.js";
 
 describe("parseUtms", () => {
   test("reads UTMs from the landing_site query string", () => {
@@ -26,8 +27,10 @@ describe("customerKey", () => {
   test("prefers the customer id", () => {
     expect(customerKey({ customer: { id: 42 }, email: "a@b.com" })).toBe("42");
   });
-  test("falls back to a normalized email", () => {
-    expect(customerKey({ email: " A@B.com " })).toBe("e:a@b.com");
+  test("falls back to a hashed email (no raw PII)", () => {
+    const key = customerKey({ email: " A@B.com " });
+    expect(key).toBe(`e:${sha256Hex("a@b.com")}`);
+    expect(key).not.toContain("@"); // never stores the raw address
   });
   test("is null with neither", () => {
     expect(customerKey({})).toBeNull();

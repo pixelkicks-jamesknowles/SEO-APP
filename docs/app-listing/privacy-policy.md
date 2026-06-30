@@ -45,11 +45,13 @@ signals are sent so analytics platforms can model conversions appropriately.
   merchant's instruction and is then governed by the merchant's relationship with those providers.
 - Our hosting/infrastructure provider: [hosting provider, e.g. Railway] (compute + database).
 
-## Retention
-We retain only what's needed to operate: per-store settings; a rolling buffer of recent events
-(capped at 50 per store) and delivery logs (capped at 300) for diagnostics; and a minimal
-first-touch attribution record per customer. We do not maintain a long-term store of customer PII.
-On uninstall or merchant request, data is deleted.
+## Retention & data minimisation
+We do **not store customer PII at rest**. Customer identifiers (email, phone, name, address, IP) are
+used only in transit to deliver events, and are hashed (SHA-256) before being sent to Meta. The
+diagnostics buffer of recent events (capped at 50 per store) has these identifiers **redacted** before
+storage, and the attribution record keys on a **hashed** email, never the raw address. We retain only
+per-store settings, capped diagnostics (events + delivery logs), and minimal pseudonymous attribution
+(GA4 client_id + source/medium/campaign). On uninstall or merchant request, data is deleted.
 
 ## GDPR / data subject requests
 We support Shopify's mandatory compliance webhooks: customer data request, customer redaction, and

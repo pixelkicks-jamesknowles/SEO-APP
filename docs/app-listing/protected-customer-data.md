@@ -14,11 +14,13 @@ App functionality, Analytics, and Marketing or advertising — the App's sole pu
 the merchant's own conversion/analytics events to the merchant's own GA4, Meta and GTM destinations.
 
 ## How we protect it (data-minimisation)
-- **PII is hashed (SHA-256) before transmission** to Meta; we never send raw email/phone/name/address.
-- We **do not build a customer database**. Storage is limited to: per-store settings; a rolling
-  buffer of the 50 most recent events and 300 most recent delivery logs (diagnostics only); and a
-  minimal first-touch attribution record (GA4 client id + UTM source/medium/campaign) keyed per
-  customer for recurring-order attribution.
+- **No customer PII is stored at rest.** Identifiers are used only in transit; **hashed (SHA-256)
+  before transmission** to Meta (we never send raw email/phone/name/address).
+- The diagnostics buffer (50 most recent events) has email/phone/address/IP/cookies **redacted before
+  storage**; the attribution record keys on a **hashed** email, never the raw address.
+- We **do not build a customer database**. Storage is limited to: per-store settings; capped
+  diagnostics (events + delivery logs); and minimal pseudonymous attribution (GA4 client_id + UTM
+  source/medium/campaign).
 - Data is sent **only** to destinations the merchant explicitly configures with their own
   credentials. No data is shared with us for our own purposes, sold, or used for our advertising.
 - **Consent-aware:** honours the Shopify Customer Privacy API; marketing destinations receive nothing

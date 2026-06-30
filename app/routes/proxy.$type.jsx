@@ -2,6 +2,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { fanOutServerSide, isBot } from "../lib/server-side.server";
 import { recordDeliveries, recordVisit, getFirstTouch } from "../lib/delivery.server";
+import { redactEvent } from "../lib/redact";
 
 // App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/track here.
 //   track -> bot-filter, record the event, fan out server-side to GA4 / Meta CAPI / sGTM, log outcomes.
@@ -22,13 +23,14 @@ export const action = async ({ request, params }) => {
     return new Response(null, { status: 204 });
   }
 
-  // Buffer the raw event for the Live events inspector (cap 50 most recent per shop).
+  // Buffer the event for the Live events inspector (cap 50 most recent per shop). PII is redacted
+  // before storage - nothing identifiable is persisted (the full event is still used in transit below).
   await prisma.recentEvent.create({
     data: {
       shopDomain,
       name: body.event?.name ?? "event",
       platform: body.platform ?? null,
-      payload: JSON.stringify(body).slice(0, 4000),
+      payload: JSON.stringify({ platforms: body.platforms, event: redactEvent(body.event) }).slice(0, 4000),
     },
   });
   const stale = await prisma.recentEvent.findMany({
