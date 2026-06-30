@@ -2,6 +2,18 @@ import { redirect } from "@remix-run/node";
 import { Form, useLoaderData } from "@remix-run/react";
 import { login } from "../../shopify.server";
 
+// TODO: confirm / replace these before launch.
+const SUPPORT_EMAIL = "support@pushon.co.uk";
+const PRIVACY_URL = "https://www.pushon.co.uk/pixel-kicks-tracking/privacy"; // host privacy-policy.md here
+
+export const meta = () => [
+  { title: "Pixel Kicks Tracking by PushON" },
+  { name: "description", content: "Accurate server-side conversion tracking for Shopify. GA4, Meta and GTM, with no theme code." },
+  { property: "og:title", content: "Pixel Kicks Tracking" },
+  { property: "og:description", content: "Server-side GA4, Meta and GTM tracking for Shopify that survives ad blockers, ITP and checkout." },
+  { property: "og:type", content: "website" },
+];
+
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
   if (url.searchParams.get("shop")) {
@@ -16,6 +28,16 @@ const FEATURES = [
   ["Consent-ready", "Google Consent Mode v2, bot filtering and event deduplication built in."],
 ];
 
+// Normalise whatever the merchant types into a clean myshopify.com domain before submit.
+function normaliseShop(e) {
+  const input = e.currentTarget.elements.shop;
+  if (!input) return;
+  let v = (input.value || "").trim().toLowerCase();
+  v = v.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (v && !v.includes(".")) v = `${v}.myshopify.com`;
+  input.value = v;
+}
+
 export default function App() {
   const { showForm } = useLoaderData();
   return (
@@ -26,9 +48,12 @@ export default function App() {
         <p className="pk-tag">
           Accurate server-side conversion tracking for Shopify. GA4, Meta and GTM, with no theme code.
         </p>
+        <p className="pk-sub">
+          Runs alongside your existing GA4 setup and the Google &amp; YouTube app, with no double-counting.
+        </p>
 
         {showForm && (
-          <Form className="pk-form" method="post" action="/auth/login">
+          <Form className="pk-form" method="post" action="/auth/login" onSubmit={normaliseShop}>
             <label className="pk-label" htmlFor="shop">Install on your store</label>
             <div className="pk-row">
               <input className="pk-input" id="shop" type="text" name="shop" placeholder="your-store.myshopify.com" />
@@ -46,6 +71,14 @@ export default function App() {
             </li>
           ))}
         </ul>
+
+        <footer className="pk-footer">
+          <a className="pk-link" href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy policy</a>
+          <span className="pk-dot">·</span>
+          <a className="pk-link" href={`mailto:${SUPPORT_EMAIL}`}>Support</a>
+          <span className="pk-dot">·</span>
+          <span className="pk-credit">Built by PushON</span>
+        </footer>
       </div>
     </main>
   );
@@ -77,7 +110,8 @@ const CSS = `
   }
   .pk-title { font-size: 30px; font-weight: 800; margin: 0 0 10px; letter-spacing: -0.02em; line-height: 1.1; color: #050C44; }
   .pk-accent { color: #FF530D; }
-  .pk-tag { font-size: 15px; line-height: 1.55; color: #3a4163; margin: 0 0 30px; }
+  .pk-tag { font-size: 15px; line-height: 1.55; color: #3a4163; margin: 0 0 8px; }
+  .pk-sub { font-size: 13px; line-height: 1.5; color: #767ca0; margin: 0 0 30px; }
 
   .pk-form { margin: 0 0 30px; }
   .pk-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 8px; color: #050C44; }
@@ -104,6 +138,12 @@ const CSS = `
   .pk-feature { display: flex; flex-direction: column; gap: 3px; }
   .pk-feature-title { font-size: 14px; font-weight: 700; color: #050C44; }
   .pk-feature-body { font-size: 13px; line-height: 1.5; color: #5a6182; }
+
+  .pk-footer { margin-top: 28px; padding-top: 20px; border-top: 1px solid #ECEEF4; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #767ca0; }
+  .pk-link { color: #050C44; text-decoration: none; font-weight: 600; }
+  .pk-link:hover { color: #FF530D; text-decoration: underline; }
+  .pk-dot { color: #c3c7da; }
+  .pk-credit { color: #767ca0; }
 
   @media (max-width: 600px) { .pk-card { padding: 32px 24px; } }
 `;
