@@ -4,7 +4,7 @@ import { login } from "../../shopify.server";
 
 // TODO: confirm / replace these before launch.
 const SUPPORT_EMAIL = "support@pushon.co.uk";
-const PRIVACY_URL = "https://www.pushon.co.uk/pixel-kicks-tracking/privacy"; // host privacy-policy.md here
+const PRIVACY_URL = "https://www.pushon.co.uk/privacy-policy/"; // host privacy-policy.md here
 
 export const meta = () => [
   { title: "Pixel Kicks Tracking by PushON" },
