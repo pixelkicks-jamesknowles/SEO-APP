@@ -16,33 +16,12 @@ const FEATURES = [
   ["Consent-ready", "Google Consent Mode v2, bot filtering and event deduplication built in."],
 ];
 
-// PushON play ident (rounded triangle), Neon orange.
-function Ident() {
-  return (
-    <svg className="pk-ident" viewBox="0 0 100 100" aria-hidden="true">
-      <path d="M34 24 L76 50 L34 76 Z" fill="none" stroke="#FF530D" strokeWidth="11" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 export default function App() {
   const { showForm } = useLoaderData();
   return (
     <main className="pk">
       <style>{CSS}</style>
-      <svg className="pk-wave pk-wave-tr" viewBox="0 0 480 320" aria-hidden="true">
-        <path d="M40 220 C120 80 220 80 280 180 S420 280 520 140" fill="none" stroke="#FF530D" strokeWidth="60" strokeLinecap="round" />
-      </svg>
-      <svg className="pk-wave pk-wave-bl" viewBox="0 0 480 320" aria-hidden="true">
-        <path d="M-40 180 C60 300 180 300 240 180 S380 60 500 140" fill="none" stroke="#FF530D" strokeWidth="60" strokeLinecap="round" />
-      </svg>
-
       <div className="pk-card">
-        <div className="pk-brand">
-          <Ident />
-          <span className="pk-wordmark">PushON</span>
-        </div>
-
         <h1 className="pk-title">Pixel Kicks <span className="pk-accent">Tracking</span></h1>
         <p className="pk-tag">
           Accurate server-side conversion tracking for Shopify. GA4, Meta and GTM, with no theme code.
@@ -68,50 +47,34 @@ export default function App() {
           ))}
         </ul>
       </div>
-
-      <p className="pk-foot">eCommerce. Delivered.</p>
     </main>
   );
 }
 
-// PushON brand: Night #050C44, Neon #FF530D, Regent #F4F8FE, white.
+// PushON accents (Night #050C44, Neon #FF530D) on a clean light background.
 const CSS = `
   .pk {
-    position: relative;
     min-height: 100vh;
     margin: 0;
-    overflow: hidden;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 20px;
     padding: 48px 20px;
     box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    color: #fff;
-    background: #050C44;
+    color: #050C44;
+    background: #fff;
   }
-  .pk-wave { position: absolute; width: 520px; max-width: 60vw; opacity: 0.9; z-index: 0; pointer-events: none; }
-  .pk-wave-tr { top: -40px; right: -60px; }
-  .pk-wave-bl { bottom: -50px; left: -70px; transform: rotate(8deg); }
-
   .pk-card {
-    position: relative;
-    z-index: 1;
     width: 100%;
     max-width: 560px;
     background: #fff;
-    border-radius: 20px;
+    border: 1px solid #e6e8f0;
+    border-radius: 18px;
     padding: 44px;
-    box-shadow: 0 20px 60px rgba(5,12,68,0.45);
+    box-shadow: 0 1px 2px rgba(5,12,68,0.04), 0 10px 30px rgba(5,12,68,0.07);
     box-sizing: border-box;
-    color: #050C44;
   }
-  .pk-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
-  .pk-ident { width: 34px; height: 34px; }
-  .pk-wordmark { font-size: 22px; font-weight: 800; color: #FF530D; letter-spacing: -0.01em; }
-
   .pk-title { font-size: 30px; font-weight: 800; margin: 0 0 10px; letter-spacing: -0.02em; line-height: 1.1; color: #050C44; }
   .pk-accent { color: #FF530D; }
   .pk-tag { font-size: 15px; line-height: 1.55; color: #3a4163; margin: 0 0 30px; }
@@ -142,7 +105,5 @@ const CSS = `
   .pk-feature-title { font-size: 14px; font-weight: 700; color: #050C44; }
   .pk-feature-body { font-size: 13px; line-height: 1.5; color: #5a6182; }
 
-  .pk-foot { position: relative; z-index: 1; font-size: 12px; font-weight: 600; color: #F4F8FE; opacity: 0.7; margin: 0; }
-
-  @media (max-width: 600px) { .pk-card { padding: 32px 24px; } .pk-wave { display: none; } }
+  @media (max-width: 600px) { .pk-card { padding: 32px 24px; } }
 `;
