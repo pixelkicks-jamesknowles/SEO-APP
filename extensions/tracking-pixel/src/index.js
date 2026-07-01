@@ -168,13 +168,28 @@ register(({ analytics, browser, settings, init }) => {
   // One signed beacon to the app proxy carrying the full normalized event. The server (proxy.$type
   // → fanOutServerSide) builds and POSTs the real GA4 MP / Meta CAPI / sGTM payloads using the
   // stored credentials. In the strict sandbox you can't inject gtag/fbq, so server-side IS the path.
+  const dbg = (...args) => {
+    if (!cfg.debug) return;
+    try {
+      // eslint-disable-next-line no-console
+      console.log("[pixelify-tracking]", ...args);
+    } catch {
+      /* sandbox: never throw */
+    }
+  };
   const dispatch = (event, payload, platforms) => {
     const url = proxyUrlFor(event);
+    dbg("beacon →", url || "(no proxy URL — config.proxyPath missing)", { platforms });
     if (!url) return; // app proxy not configured yet (e.g. pre-deploy)
     try {
-      browser.sendBeacon(url, JSON.stringify({ platforms, event: payload }));
-    } catch {
-      /* best-effort; never throw inside the sandbox */
+      // Shopify's sandbox browser.sendBeacon resolves a Promise<boolean>; surface success/failure in
+      // debug so we can tell a blocked/failed beacon apart from one that never fired.
+      const r = browser.sendBeacon(url, JSON.stringify({ platforms, event: payload }));
+      if (r && typeof r.then === "function") {
+        r.then((ok) => dbg("beacon result", ok)).catch((e) => dbg("beacon rejected", e && e.message));
+      }
+    } catch (e) {
+      dbg("beacon threw", e && e.message);
     }
   };
 
