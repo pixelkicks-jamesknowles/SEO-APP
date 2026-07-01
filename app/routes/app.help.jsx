@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, List, Banner, Box, Collapsible, Icon } from "@shopify/polaris";
+import { Page, Card, BlockStack, Text, List, Banner, Box, Collapsible, Icon } from "@shopify/polaris";
 import { ChevronDownIcon, ChevronUpIcon } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server";
 
@@ -299,13 +299,15 @@ function AccordionSection({ id, title, summary, open, onToggle, children }) {
           boxSizing: "border-box",
         }}
       >
-        <InlineStack align="space-between" blockAlign="center" gap="300" wrap={false}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--p-space-300)", width: "100%" }}>
           <BlockStack gap="050">
             <Text as="h2" variant="headingMd">{title}</Text>
             <Text as="p" tone="subdued" variant="bodySm">{summary}</Text>
           </BlockStack>
-          <Icon source={open ? ChevronUpIcon : ChevronDownIcon} tone="subdued" />
-        </InlineStack>
+          <span style={{ flexShrink: 0, display: "inline-flex" }}>
+            <Icon source={open ? ChevronUpIcon : ChevronDownIcon} tone="subdued" />
+          </span>
+        </div>
       </button>
       <Collapsible open={open} id={`help-${id}`} transition={{ duration: "150ms", timingFunction: "ease-in-out" }}>
         <Box paddingInline="400" paddingBlockEnd="400">
