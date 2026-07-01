@@ -130,6 +130,14 @@ export default function Help() {
               <b>GA4 DebugView / Realtime</b> and <b>Meta Test Events</b>: the source of truth. Note GA4
               Admin → Events can lag ~24h, so check Realtime, not there.
             </List.Item>
+            <List.Item>
+              <b>Custom parameters</b> (subscription_interval, source/medium/campaign, item_subscription,
+              etc.) show in <b>Realtime</b> immediately, but only appear in <b>standard reports and
+              Explore</b> after you register them as <b>Custom dimensions</b> (GA4 Admin → Custom
+              definitions). That takes ~24-48h and is <b>not retroactive</b> - so a blank parameter
+              dropdown on the standard Events report usually just means it is not registered yet, not that
+              the data is missing. Standard fields (value, currency, transaction_id, items) need no setup.
+            </List.Item>
           </List>
         </Section>
 
