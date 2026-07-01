@@ -159,18 +159,28 @@ export const action = async ({ request }) => {
 
   let webPixelId = existing?.webPixelId || null;
   let pixelError = null;
+  const createPixel = async () => {
+    const res = await admin.graphql(CREATE_PIXEL, { variables: { webPixel: input } });
+    const json = await res.json();
+    const errs = json.data?.webPixelCreate?.userErrors ?? [];
+    if (errs.length) pixelError = errs.map((e) => e.message).join("; ");
+    else webPixelId = json.data?.webPixelCreate?.webPixel?.id ?? null;
+  };
   try {
     if (webPixelId) {
       const res = await admin.graphql(UPDATE_PIXEL, { variables: { id: webPixelId, webPixel: input } });
       const json = await res.json();
       const errs = json.data?.webPixelUpdate?.userErrors ?? [];
-      if (errs.length) pixelError = errs.map((e) => e.message).join("; ");
+      // The stored pixel can vanish (app reinstall, dev-store reset, manual delete). When the update
+      // can't find it, drop the stale ID and create a fresh pixel so the save self-heals.
+      if (errs.some((e) => /couldn't be found|could not be found|does not exist/i.test(e.message))) {
+        webPixelId = null;
+        await createPixel();
+      } else if (errs.length) {
+        pixelError = errs.map((e) => e.message).join("; ");
+      }
     } else {
-      const res = await admin.graphql(CREATE_PIXEL, { variables: { webPixel: input } });
-      const json = await res.json();
-      const errs = json.data?.webPixelCreate?.userErrors ?? [];
-      if (errs.length) pixelError = errs.map((e) => e.message).join("; ");
-      else webPixelId = json.data?.webPixelCreate?.webPixel?.id ?? null;
+      await createPixel();
     }
   } catch (e) {
     pixelError = e.message;
