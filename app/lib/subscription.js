@@ -51,43 +51,84 @@ export function orderHasAnalyticsConsent(order) {
   return order?.buyer_accepts_marketing === true;
 }
 
-/** Build the GA4 `subscription_purchase` event (name + params + clientId). attribution (optional)
- *  carries the first-order source/medium/campaign so recurring orders keep the original attribution. */
-export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, attribution } = {}) {
-  const lines = order?.line_items || [];
-  const items = lines.map((l) => {
-    const qty = Math.max(1, Number(l.quantity) || 1);
-    const gross = (Number(l.price) || 0) * qty;
-    const disc = Number(l.total_discount) || 0;
-    const isSub = lineIsSubscription(l);
-    return {
-      item_id: l.sku || String(l.variant_id || ""),
-      item_name: l.title || "",
-      item_variant: l.variant_title || "",
-      price: round2((gross - disc) / qty),
-      quantity: qty,
-      discount: round2(disc / qty),
-      item_subscription: isSub,
-      item_subscription_interval: isSub ? parseIntervalDays(linePlanName(l), { monthDays }) : 0,
-    };
-  });
-  const subItems = items.filter((i) => i.item_subscription);
+/** True if any line on the order is a subscription line. */
+export function orderHasSubscription(order) {
+  return (order?.line_items || []).some(lineIsSubscription);
+}
+
+/** Numeric selling-plan id for a line (REST selling_plan_allocation / GraphQL sellingPlan), or null.
+ *  Used to look the line's cadence up in an `intervals` map resolved from the Admin API. */
+export function linePlanId(line) {
+  const id = line?.selling_plan_allocation?.selling_plan?.id ?? line?.sellingPlan?.id;
+  if (id == null) return null;
+  return String(id).match(/\d+/g)?.pop() || null;
+}
+
+/** Normalize one Shopify REST order line into a GA4 item (net-of-discount unit price + subscription tags).
+ *  intervals (optional): { [sellingPlanId]: days } resolved from the Admin API — authoritative when
+ *  present; otherwise the interval falls back to parsing the selling-plan name. */
+function toGaLine(l, monthDays, intervals) {
+  const qty = Math.max(1, Number(l.quantity) || 1);
+  const gross = (Number(l.price) || 0) * qty;
+  const disc = Number(l.total_discount) || 0;
+  const isSub = lineIsSubscription(l);
+  const planId = linePlanId(l);
+  const resolved = planId && intervals ? intervals[planId] : undefined;
+  return {
+    item_id: l.sku || String(l.variant_id || ""),
+    item_name: l.title || "",
+    item_variant: l.variant_title || "",
+    price: round2((gross - disc) / qty),
+    quantity: qty,
+    discount: round2(disc / qty),
+    item_subscription: isSub,
+    item_subscription_interval: isSub ? (resolved ?? parseIntervalDays(linePlanName(l), { monthDays })) : 0,
+  };
+}
+
+const attach = (params, attribution) => {
+  if (attribution?.source) params.source = attribution.source;
+  if (attribution?.medium) params.medium = attribution.medium;
+  if (attribution?.campaign) params.campaign = attribution.campaign;
+};
+
+/** Build the GA4 `subscription_purchase` event — SCOPED TO THE SUBSCRIPTION LINE ITEMS ONLY:
+ *  items = subscription lines, value = their line-item subtotal (net of line discounts, no order-level
+ *  tax/shipping). The regular `purchase` event (buildOrderPurchaseEvent) carries the whole order.
+ *  attribution (optional) carries the first-order source so recurring orders keep the original one. */
+export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, attribution, intervals } = {}) {
+  const subItems = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals)).filter((i) => i.item_subscription);
+  const params = {
+    transaction_id: String(order?.id ?? ""),
+    // Subscription-only subtotal — the sum of the subscription lines' net totals (price × qty).
+    value: round2(subItems.reduce((s, i) => s + i.price * i.quantity, 0)),
+    currency: order?.currency || "USD",
+    subscription: subItems.length > 0,
+    // Order-level interval = the first subscription line's; per-item intervals are authoritative.
+    subscription_interval: subItems[0]?.item_subscription_interval || 0,
+    items: subItems,
+  };
+  const coupon = order?.discount_codes?.[0]?.code;
+  if (coupon) params.coupon = coupon;
+  attach(params, attribution);
+  return { name: eventName, params, clientId };
+}
+
+/** Build the regular GA4 `purchase` event for a subscription order (fired server-side from
+ *  orders/paid so it doesn't depend on the pixel/consent). Carries the WHOLE order — all line items,
+ *  full value, tax + shipping — matching a normal purchase. transaction_id = order id. */
+export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDays = 28, clientId, attribution, intervals } = {}) {
+  const items = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals));
   const params = {
     transaction_id: String(order?.id ?? ""),
     value: Number(order?.current_total_price ?? order?.total_price ?? 0),
     currency: order?.currency || "USD",
     tax: Number(order?.current_total_tax ?? 0),
     shipping: Number(order?.total_shipping_price_set?.shop_money?.amount ?? 0),
-    subscription: subItems.length > 0,
-    // Order-level interval = the first subscription line's; per-item intervals are authoritative.
-    subscription_interval: subItems[0]?.item_subscription_interval || 0,
     items,
   };
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
-  // First-touch attribution (recurring orders inherit the original order's source).
-  if (attribution?.source) params.source = attribution.source;
-  if (attribution?.medium) params.medium = attribution.medium;
-  if (attribution?.campaign) params.campaign = attribution.campaign;
+  attach(params, attribution);
   return { name: eventName, params, clientId };
 }

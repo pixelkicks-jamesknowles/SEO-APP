@@ -5,6 +5,8 @@ import {
   noteAttr,
   orderHasAnalyticsConsent,
   buildSubscriptionEvent,
+  buildOrderPurchaseEvent,
+  orderHasSubscription,
 } from "../app/lib/subscription.js";
 
 describe("parseIntervalDays", () => {
@@ -83,33 +85,35 @@ describe("buildSubscriptionEvent", () => {
     ],
   };
 
-  test("order-level dims + value + coupon", () => {
+  test("scoped to subscription lines: value = sub subtotal, coupon, order dims", () => {
     const { name, params } = buildSubscriptionEvent(order, {});
     expect(name).toBe("subscription_purchase");
     expect(params.transaction_id).toBe("7821117129046");
-    expect(params.value).toBe(28.05);
+    // Subscription-only subtotal = beef net (2.95*16 - 2.40 = 44.80); the non-sub Treats are excluded.
+    expect(params.value).toBe(44.8);
     expect(params.currency).toBe("GBP");
     expect(params.coupon).toBe("WELCOME5");
     expect(params.subscription).toBe(true);
     expect(params.subscription_interval).toBe(7); // first sub line
   });
 
-  test("per-item discounted price/discount + per-item subscription flags", () => {
+  test("items contains only the subscription line(s)", () => {
     const { params } = buildSubscriptionEvent(order, {});
+    expect(params.items).toHaveLength(1);
     const beef = params.items[0];
+    expect(beef.item_id).toBe("SKU-BEEF-500");
     expect(beef.item_subscription).toBe(true);
     expect(beef.item_subscription_interval).toBe(7);
     expect(beef.price).toBe(2.8); // (2.95*16 - 2.40)/16 = 2.8
     expect(beef.discount).toBe(0.15); // 2.40/16
-    const treats = params.items[1];
-    expect(treats.item_subscription).toBe(false);
-    expect(treats.item_subscription_interval).toBe(0);
   });
 
-  test("one-time-only order → subscription false, interval 0", () => {
+  test("one-time-only order → subscription false, interval 0, empty items, zero value", () => {
     const { params } = buildSubscriptionEvent({ id: 1, currency: "GBP", current_total_price: "5.00", line_items: [{ sku: "X", price: "5.00", quantity: 1 }] }, {});
     expect(params.subscription).toBe(false);
     expect(params.subscription_interval).toBe(0);
+    expect(params.items).toHaveLength(0);
+    expect(params.value).toBe(0);
   });
 
   test("custom eventName + monthDays flow through", () => {
@@ -117,5 +121,57 @@ describe("buildSubscriptionEvent", () => {
     const { name, params } = buildSubscriptionEvent(o, { eventName: "sub_buy", monthDays: 30 });
     expect(name).toBe("sub_buy");
     expect(params.subscription_interval).toBe(30);
+  });
+
+  test("Admin-API intervals override an unparseable plan name", () => {
+    const o = {
+      id: 3,
+      line_items: [{ sku: "S", price: "10", quantity: 1, selling_plan_allocation: { selling_plan: { id: 987654, name: "Subscribe & Save" } } }],
+    };
+    // Name has no cadence word → parse would give 0; the resolved map wins.
+    const bare = buildSubscriptionEvent(o, {});
+    expect(bare.params.subscription_interval).toBe(0);
+    const resolved = buildSubscriptionEvent(o, { intervals: { 987654: 7 } });
+    expect(resolved.params.subscription_interval).toBe(7);
+    expect(resolved.params.items[0].item_subscription_interval).toBe(7);
+  });
+});
+
+describe("orderHasSubscription", () => {
+  test("true when any line carries a selling plan", () => {
+    expect(orderHasSubscription({ line_items: [{ sku: "A" }, { sku: "B", selling_plan_allocation: { selling_plan: { name: "Weekly" } } }] })).toBe(true);
+    expect(orderHasSubscription({ line_items: [{ sku: "A" }, { sku: "B" }] })).toBe(false);
+    expect(orderHasSubscription({})).toBe(false);
+  });
+});
+
+describe("buildOrderPurchaseEvent", () => {
+  const mixedOrder = {
+    id: 42,
+    currency: "GBP",
+    current_total_price: "49.80",
+    current_total_tax: "3.00",
+    total_shipping_price_set: { shop_money: { amount: "4.00" } },
+    line_items: [
+      { sku: "SUB", title: "Coffee", price: "20.00", quantity: 2, total_discount: "0.00", selling_plan_allocation: { selling_plan: { name: "Monthly" } } },
+      { sku: "OTP", title: "Mug", price: "9.80", quantity: 1, total_discount: "0.00" },
+    ],
+  };
+
+  test("regular purchase carries the WHOLE order (all items + full value + tax/shipping)", () => {
+    const { name, params } = buildOrderPurchaseEvent(mixedOrder, {});
+    expect(name).toBe("purchase");
+    expect(params.transaction_id).toBe("42");
+    expect(params.value).toBe(49.8); // full order total, both products
+    expect(params.tax).toBe(3);
+    expect(params.shipping).toBe(4);
+    expect(params.items).toHaveLength(2);
+  });
+
+  test("subscription_purchase for the SAME mixed order carries only the subscription product", () => {
+    const { params } = buildSubscriptionEvent(mixedOrder, {});
+    expect(params.items).toHaveLength(1);
+    expect(params.items[0].item_id).toBe("SUB");
+    expect(params.value).toBe(40); // 20.00 * 2, the subscription line only
   });
 });

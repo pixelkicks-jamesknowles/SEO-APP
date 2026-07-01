@@ -273,6 +273,15 @@ export function isBot(ua) {
   return typeof ua === "string" && ua.length > 0 && BOT_RE.test(ua);
 }
 
+// True if a checkout_completed pixel event contains a subscription line. Shopify exposes
+// checkout.lineItems[].sellingPlanAllocation.sellingPlan on Checkout-Extensibility stores. When true,
+// the GA4 `purchase` is delivered server-side from the orders/paid webhook instead (avoids double-
+// counting GA4 revenue); Meta/GTM still fire from the pixel to keep their cookie-based match quality.
+export function checkoutHasSubscription(event) {
+  const lines = event?.data?.checkout?.lineItems || [];
+  return lines.some((li) => li?.sellingPlanAllocation?.sellingPlan || li?.sellingPlan);
+}
+
 /**
  * Fan a normalized pixel event out to every server-side destination that (a) is opted into this
  * event in the matrix and (b) has the credentials it needs. settings: TrackingSettings row.
@@ -312,7 +321,11 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
         .catch((e) => ({ destination, eventName: name, ok: false, detail: e?.message || "error" })),
     );
 
-  if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret) {
+  // For a subscription checkout, the GA4 purchase comes from the orders/paid webhook (all items) plus
+  // a scoped subscription_purchase — so suppress the pixel's GA4 purchase here to avoid doubling GA4
+  // revenue. Meta/GTM below still fire (they aren't sent by the webhook and want the pixel's cookies).
+  const suppressGa4Purchase = name === "checkout_completed" && checkoutHasSubscription(event);
+  if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret && !suppressGa4Purchase) {
     track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }));
   }
   if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {

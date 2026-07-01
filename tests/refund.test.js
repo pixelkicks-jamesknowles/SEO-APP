@@ -1,4 +1,4 @@
-import { buildRefundEvent, buildCancellationEvent } from "../app/lib/refund.js";
+import { buildRefundEvent, buildCancellationEvent, buildSubscriptionRefundEvent, buildSubscriptionCancellationEvent } from "../app/lib/refund.js";
 import { isBot } from "../app/lib/server-side.server.js";
 
 describe("buildRefundEvent", () => {
@@ -35,6 +35,63 @@ describe("buildCancellationEvent", () => {
     expect(ev.params.transaction_id).toBe("9");
     expect(ev.params.value).toBe(48);
     expect(ev.params.items).toHaveLength(1);
+  });
+});
+
+describe("buildSubscriptionRefundEvent", () => {
+  test("reverses only the subscription line(s) of a mixed refund", () => {
+    const refund = {
+      order_id: 100,
+      transactions: [{ amount: "29.80", currency: "GBP", kind: "refund" }],
+      refund_line_items: [
+        { quantity: 2, subtotal: "20.00", line_item: { sku: "SUB", title: "Coffee", price: "10.00", selling_plan_allocation: { selling_plan: { name: "Monthly" } } } },
+        { quantity: 1, subtotal: "9.80", line_item: { sku: "OTP", title: "Mug", price: "9.80" } },
+      ],
+    };
+    const ev = buildSubscriptionRefundEvent(refund, { clientId: "c.1" });
+    expect(ev.name).toBe("subscription_refund");
+    expect(ev.params.transaction_id).toBe("100");
+    expect(ev.params.value).toBe(20); // subscription line subtotal only, excludes the Mug
+    expect(ev.params.currency).toBe("GBP");
+    expect(ev.params.items).toHaveLength(1);
+    expect(ev.params.items[0].item_id).toBe("SUB");
+  });
+
+  test("custom event name; falls back to price×qty when no subtotal", () => {
+    const refund = {
+      order_id: 7,
+      refund_line_items: [{ quantity: 3, line_item: { sku: "SUB", price: "4.00", selling_plan_allocation: { selling_plan: { name: "Weekly" } } } }],
+    };
+    const ev = buildSubscriptionRefundEvent(refund, { eventName: "sub_refund" });
+    expect(ev.name).toBe("sub_refund");
+    expect(ev.params.value).toBe(12); // 4.00 * 3
+  });
+
+  test("returns null when nothing subscription-related was refunded", () => {
+    const refund = { order_id: 9, refund_line_items: [{ quantity: 1, line_item: { sku: "OTP", price: "5.00" } }] };
+    expect(buildSubscriptionRefundEvent(refund, {})).toBeNull();
+  });
+});
+
+describe("buildSubscriptionCancellationEvent", () => {
+  test("reverses the subscription lines of a cancelled order", () => {
+    const order = {
+      id: 55,
+      currency: "USD",
+      line_items: [
+        { sku: "SUB", title: "Box", price: "30.00", quantity: 1, total_discount: "5.00", selling_plan_allocation: { selling_plan: { name: "Monthly" } } },
+        { sku: "OTP", title: "Card", price: "2.00", quantity: 1 },
+      ],
+    };
+    const ev = buildSubscriptionCancellationEvent(order, { clientId: "c.2" });
+    expect(ev.name).toBe("subscription_refund");
+    expect(ev.params.transaction_id).toBe("55");
+    expect(ev.params.value).toBe(25); // 30.00 - 5.00 discount, subscription line only
+    expect(ev.params.items).toHaveLength(1);
+  });
+
+  test("returns null for an order with no subscription line", () => {
+    expect(buildSubscriptionCancellationEvent({ id: 1, line_items: [{ sku: "X", price: "1", quantity: 1 }] }, {})).toBeNull();
   });
 });
 

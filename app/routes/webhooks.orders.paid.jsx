@@ -3,7 +3,8 @@
 // always 200 once accepted so Shopify never retries (which would duplicate); GA4 send is fire-and-log.
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { buildSubscriptionEvent, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
+import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, linePlanId, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
+import { resolveIntervalDays } from "../lib/subscription.server";
 import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
@@ -17,6 +18,9 @@ export const action = async ({ request }) => {
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
     if (!settings?.serverSide || !settings?.subscriptionTracking) return new Response();
+    // Only subscription orders get server-side conversion events. A non-subscription order's purchase
+    // is delivered by the storefront pixel (checkout_completed); firing here would double-count it.
+    if (!orderHasSubscription(payload)) return new Response();
 
     // Idempotency — dedupe on the Shopify webhook id (fallback: order id).
     const dedupeKey = webhookId || `order:${payload?.id}`;
@@ -64,24 +68,28 @@ export const action = async ({ request }) => {
     }
 
     const clientId = attribution?.clientId || cookieClientId || syntheticClientId(payload?.id);
-    const event = buildSubscriptionEvent(payload, {
-      eventName: cfg.eventName || "subscription_purchase",
-      monthDays: Number(cfg.monthDays) || 28,
-      clientId,
-      attribution: attribution
-        ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign }
-        : null,
-    });
+    const attr = attribution
+      ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign }
+      : null;
+    const monthDays = Number(cfg.monthDays) || 28;
+    // Resolve each subscription line's cadence from the Admin API (authoritative); the builder falls
+    // back to parsing the plan name for any id this can't resolve.
+    const intervals = await resolveIntervalDays(shop, (payload.line_items || []).map(linePlanId), { monthDays });
+    const opts = { monthDays, clientId, attribution: attr, intervals };
+    // Two events per subscription order: the scoped subscription_purchase (subscription lines only)
+    // and the regular purchase (whole order). Both server-side so they fire without the pixel/consent.
+    const subEvent = buildSubscriptionEvent(payload, { eventName: cfg.eventName || "subscription_purchase", ...opts });
+    const purchaseEvent = buildOrderPurchaseEvent(payload, opts);
 
-    const sent = await sendGa4Event(settings, event);
-    // Log the delivery so the subscription order shows in Live events / Delivery health AND counts
-    // toward Accuracy purchase-capture (isPurchase). Without this a subscription-only order reads as
-    // 0% captured even though it was tracked. NOTE: an *initial* subscription order also fires the
-    // pixel's checkout_completed, so both can count for one order (match can exceed 100% for that
-    // order); recurring renewals — the bulk of subscription volume — have no checkout, so this is the
-    // only signal. If double-counting becomes material, dedupe per order id here vs the pixel event.
+    const [subRes, buyRes] = await Promise.all([sendGa4Event(settings, subEvent), sendGa4Event(settings, purchaseEvent)]);
+    // Only the `purchase` counts toward Accuracy capture (isPurchase); subscription_purchase is a
+    // supplementary custom event and must not double-count. NOTE: an *initial* subscription order also
+    // fires the pixel's checkout_completed (Meta/GTM), which recordDeliveries counts too — so match
+    // can exceed 100% for that one order. Recurring renewals have no checkout, so this webhook purchase
+    // is their only capture signal. Dedupe per order id vs the pixel event if this becomes material.
     await recordDeliveries(shop, [
-      { destination: "ga4", eventName: event.name, ok: !!sent?.sent, detail: sent?.detail || "", isPurchase: true },
+      { destination: "ga4", eventName: purchaseEvent.name, ok: !!buyRes?.sent, detail: buyRes?.detail || "", isPurchase: true },
+      { destination: "ga4", eventName: subEvent.name, ok: !!subRes?.sent, detail: subRes?.detail || "" },
     ]);
     await prisma.processedWebhook
       .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "orders/paid" } })
