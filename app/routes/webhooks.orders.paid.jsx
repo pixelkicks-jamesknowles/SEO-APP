@@ -34,11 +34,16 @@ export const action = async ({ request }) => {
       cfg = {};
     }
 
-    // Consent gate — respect the merchant's consentMode unless explicitly opted out per shop.
+    // Consent — mirror the pixel's Consent Mode v2. When consentSignals (GCMv2) is on we still send,
+    // FLAGGED, so GA4 can model the gap; only strict gating (consentSignals off) hard-drops without
+    // consent. buyer_accepts_marketing is the email opt-in (not the storefront cookie consent), so
+    // it's a coarse signal — GCMv2 flagging is what avoids silently dropping subscription conversions.
     const respectConsent = cfg.respectConsent !== false;
-    if (settings.consentMode && respectConsent && !orderHasAnalyticsConsent(payload)) {
+    const marketingConsent = orderHasAnalyticsConsent(payload);
+    if (settings.consentMode && respectConsent && !marketingConsent && !settings.consentSignals) {
       return new Response();
     }
+    const consent = settings.consentMode ? { analytics: marketingConsent, marketing: marketingConsent } : undefined;
 
     // First-touch attribution: the first order for a customer sets the client_id + source; recurring
     // orders inherit it (so they don't look like fresh direct traffic in GA4).
@@ -81,7 +86,10 @@ export const action = async ({ request }) => {
     const subEvent = buildSubscriptionEvent(payload, { eventName: cfg.eventName || "subscription_purchase", ...opts });
     const purchaseEvent = buildOrderPurchaseEvent(payload, opts);
 
-    const [subRes, buyRes] = await Promise.all([sendGa4Event(settings, subEvent), sendGa4Event(settings, purchaseEvent)]);
+    const [subRes, buyRes] = await Promise.all([
+      sendGa4Event(settings, subEvent, { consent }),
+      sendGa4Event(settings, purchaseEvent, { consent }),
+    ]);
     // Only the `purchase` counts toward Accuracy capture (isPurchase); subscription_purchase is a
     // supplementary custom event and must not double-count. NOTE: an *initial* subscription order also
     // fires the pixel's checkout_completed (Meta/GTM), which recordDeliveries counts too — so match

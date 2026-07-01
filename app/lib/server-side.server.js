@@ -371,7 +371,7 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
-export async function sendGa4Event(settings, { name, params = {}, clientId } = {}) {
+export async function sendGa4Event(settings, { name, params = {}, clientId } = {}, { consent } = {}) {
   if (!settings?.serverSide || !settings.ga4Id || !name) return { sent: false };
   let keys = {};
   try {
@@ -380,6 +380,8 @@ export async function sendGa4Event(settings, { name, params = {}, clientId } = {
     return { sent: false };
   }
   if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
-  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params });
+  // consent (optional): { analytics, marketing } → GA4 Consent Mode v2 flags, mirroring the pixel so
+  // consent-declined server-side conversions are modeled rather than dropped.
+  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params }, { consent });
   return { sent: r.ok, detail: r.detail };
 }
