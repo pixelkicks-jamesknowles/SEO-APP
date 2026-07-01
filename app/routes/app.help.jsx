@@ -145,12 +145,43 @@ export default function Help() {
 
         <Section title="Subscription conversion tracking" help="Recurring revenue GA4 normally never sees.">
           <Text as="p">
-            When enabled, a paid order fires a server-side subscription_purchase event to GA4. It uses a
-            distinct event name so it never collides with the native purchase, carries subscription /
-            subscription_interval per order and per line, and recurring orders inherit the first
-            order&apos;s client_id and source/medium/campaign, so they keep their original attribution
-            instead of looking like fresh direct traffic.
+            When enabled, a subscription order fires <b>two</b> server-side events to GA4: the regular
+            {" "}<b>purchase</b> (the whole order - all items and full value, so revenue is complete) and a
+            scoped <b>subscription_purchase</b> (the subscription line items only). subscription_purchase
+            uses a distinct name so it never collides with the native purchase, and carries subscription /
+            subscription_interval per order and per line, with the cadence read from the plan&apos;s
+            delivery policy. Recurring orders inherit the first order&apos;s client_id and
+            source/medium/campaign, so they keep their original attribution instead of looking like fresh
+            direct traffic.
           </Text>
+          <Text as="p" tone="subdued">
+            To avoid double-counting, the pixel&apos;s GA4 purchase is suppressed for subscription orders
+            (the webhook delivers it instead); Meta still fires from the pixel to keep its match quality.
+          </Text>
+          <Text as="p" fontWeight="semibold">
+            Reporting subscription revenue in GA4
+          </Text>
+          <Text as="p">
+            subscription_purchase&apos;s value is the discounted subscription amount and lands in GA4&apos;s
+            {" "}<b>Event value</b> metric - it is deliberately <b>not</b> added to Total Revenue (that stays
+            driven by <b>purchase</b>), so the subscription line is never counted twice.
+          </Text>
+          <List type="number">
+            <List.Item>
+              GA4 <b>Explore → Blank (Free form)</b>. Add dimension <b>Event name</b>, metrics <b>Event
+              value</b> + <b>Event count</b>, and filter <i>Event name exactly matches</i>{" "}
+              <b>subscription_purchase</b>. That is your subscription order count + revenue.
+            </List.Item>
+            <List.Item>
+              To split by cadence, register <b>subscription_interval</b> as an event-scoped custom dimension
+              (Admin → Custom definitions), then add it as a breakdown. Item-scoped
+              {" "}<b>item_subscription</b> / <b>item_subscription_interval</b> work the same way.
+            </List.Item>
+            <List.Item>
+              Optionally mark <b>subscription_purchase</b> as a <b>Key event</b> (Admin → Key events) to
+              count it as a conversion in standard reports.
+            </List.Item>
+          </List>
         </Section>
 
         <Section title="Refund & cancellation tracking" help="Negative conversions so ads optimise correctly.">
