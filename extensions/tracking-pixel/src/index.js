@@ -53,6 +53,14 @@ const gaSessionId = (cookie) => {
   return parts.length >= 3 && /^\d+$/.test(parts[2]) ? parts[2] : null;
 };
 
+// Stable numeric hash (for deriving a GA4 session_id from Shopify's session cookie).
+const hashNum = (s) => {
+  if (typeof s !== "string" || !s) return null;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return String(h);
+};
+
 register(({ analytics, browser, settings, init }) => {
   // All config travels in one JSON field (settings.config) — Shopify requires every declared
   // web-pixel field to be non-blank, so per-platform fields can't be left empty.
@@ -129,14 +137,20 @@ register(({ analytics, browser, settings, init }) => {
     if (cfg.consentMode) payload.consent = consent || { analytics: true, marketing: true };
     try {
       const ga4Suffix = (cfg.ids.ga4 || "").replace(/^G-/, "");
-      const [ga, gaSession, fbp, fbc] = await Promise.all([
+      const [ga, gaSession, shopifyY, shopifyS, fbp, fbc] = await Promise.all([
         browser.cookie.get("_ga"),
         ga4Suffix ? browser.cookie.get(`_ga_${ga4Suffix}`) : Promise.resolve(null),
+        browser.cookie.get("_shopify_y"),
+        browser.cookie.get("_shopify_s"),
         browser.cookie.get("_fbp"),
         browser.cookie.get("_fbc"),
       ]);
-      payload.clientId = gaClientId(ga);
-      const sid = gaSessionId(gaSession);
+      // client_id: GA's own (stitches to gtag if present), else Shopify's persistent visitor id so a
+      // visitor is ONE user. Without a fallback the server derives a per-EVENT id and every event counts
+      // as a new user/session in GA4 (there's no _ga cookie on a server-side-only storefront).
+      payload.clientId = gaClientId(ga) || shopifyY || null;
+      // session_id: GA's if present, else a stable number from Shopify's per-session cookie.
+      const sid = gaSessionId(gaSession) || hashNum(shopifyS);
       if (sid) payload.sessionId = sid;
       if (fbp) payload.fbp = fbp;
       if (fbc) payload.fbc = fbc;
