@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { buildRefundEvent, buildSubscriptionRefundEvent } from "../lib/refund";
 import { syntheticClientId } from "../lib/subscription";
+import { fetchOrderSubscriptions } from "../lib/subscription.server";
 import { sendGa4Event } from "../lib/server-side.server";
 import { recordDeliveries } from "../lib/delivery.server";
 
@@ -29,6 +30,13 @@ export const action = async ({ request }) => {
     const event = buildRefundEvent(payload, { clientId });
     const r = await sendGa4Event(settings, event);
     const deliveries = [{ destination: "ga4_refund", eventName: "refund", ok: r.sent, detail: r.detail }];
+    // REST refund payloads carry no selling-plan data, so pull it from the Admin API and graft it onto
+    // the refunded line items — then buildSubscriptionRefundEvent can pick out the subscription portion.
+    const { planByLineId } = await fetchOrderSubscriptions(shop, payload?.order_id);
+    for (const rli of payload.refund_line_items || []) {
+      const plan = planByLineId[String(rli.line_item_id ?? rli.line_item?.id)];
+      if (plan && rli.line_item) rli.line_item.selling_plan_allocation = { selling_plan: { id: plan.id, name: plan.name } };
+    }
     // Reverse the subscription_purchase too, but only for the subscription portion of the refund.
     const subRefund = buildSubscriptionRefundEvent(payload, { eventName: refundEventName(settings), clientId });
     if (subRefund) {

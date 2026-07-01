@@ -3,8 +3,8 @@
 // always 200 once accepted so Shopify never retries (which would duplicate); GA4 send is fire-and-log.
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, linePlanId, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
-import { resolveIntervalDays } from "../lib/subscription.server";
+import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
+import { fetchOrderSubscriptions } from "../lib/subscription.server";
 import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
@@ -18,11 +18,8 @@ export const action = async ({ request }) => {
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
     if (!settings?.serverSide || !settings?.subscriptionTracking) return new Response();
-    // Only subscription orders get server-side conversion events. A non-subscription order's purchase
-    // is delivered by the storefront pixel (checkout_completed); firing here would double-count it.
-    if (!orderHasSubscription(payload)) return new Response();
 
-    // Idempotency — dedupe on the Shopify webhook id (fallback: order id).
+    // Idempotency — dedupe on the Shopify webhook id (fallback: order id). Before the Admin API call.
     const dedupeKey = webhookId || `order:${payload?.id}`;
     const seen = await prisma.processedWebhook.findUnique({ where: { webhookId: dedupeKey } }).catch(() => null);
     if (seen) return new Response();
@@ -33,6 +30,19 @@ export const action = async ({ request }) => {
     } catch {
       cfg = {};
     }
+    const monthDays = Number(cfg.monthDays) || 28;
+
+    // REST orders/paid payloads carry NO selling-plan data, so fetch it from the Admin API and graft
+    // it onto the line items — then the pure builders (which read selling_plan_allocation) work as-is.
+    const { planByLineId, intervals } = await fetchOrderSubscriptions(shop, payload?.id, { monthDays });
+    for (const line of payload.line_items || []) {
+      const plan = planByLineId[String(line.id)];
+      if (plan) line.selling_plan_allocation = { selling_plan: { id: plan.id, name: plan.name } };
+    }
+    // Only subscription orders get server-side conversion events; a non-subscription order's purchase
+    // comes from the storefront pixel (firing here would double-count it). If the Admin lookup failed
+    // we can't confirm a subscription, so we skip (best-effort) rather than risk a wrong/duplicate send.
+    if (!orderHasSubscription(payload)) return new Response();
 
     // Consent — mirror the pixel's Consent Mode v2. When consentSignals (GCMv2) is on we still send,
     // FLAGGED, so GA4 can model the gap; only strict gating (consentSignals off) hard-drops without
@@ -76,10 +86,6 @@ export const action = async ({ request }) => {
     const attr = attribution
       ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign }
       : null;
-    const monthDays = Number(cfg.monthDays) || 28;
-    // Resolve each subscription line's cadence from the Admin API (authoritative); the builder falls
-    // back to parsing the plan name for any id this can't resolve.
-    const intervals = await resolveIntervalDays(shop, (payload.line_items || []).map(linePlanId), { monthDays });
     const opts = { monthDays, clientId, attribution: attr, intervals };
     // Two events per subscription order: the scoped subscription_purchase (subscription lines only)
     // and the regular purchase (whole order). Both server-side so they fire without the pixel/consent.
