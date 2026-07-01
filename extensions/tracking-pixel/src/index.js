@@ -45,6 +45,14 @@ const gaClientId = (gaCookie) => {
   return `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
 };
 
+// GA4 session_id from a `_ga_<container>` cookie value ("GS1.1.<session_id>.<n>…" → "<session_id>"),
+// so server-side events attribute to the same GA4 session gtag created (GA4 MP best practice).
+const gaSessionId = (cookie) => {
+  if (typeof cookie !== "string") return null;
+  const parts = cookie.split(".");
+  return parts.length >= 3 && /^\d+$/.test(parts[2]) ? parts[2] : null;
+};
+
 register(({ analytics, browser, settings, init }) => {
   // All config travels in one JSON field (settings.config) — Shopify requires every declared
   // web-pixel field to be non-blank, so per-platform fields can't be left empty.
@@ -133,12 +141,16 @@ register(({ analytics, browser, settings, init }) => {
     // Consent granted (or consentMode off): attach every identifier we can for match quality.
     if (cfg.consentMode) payload.consent = consent || { analytics: true, marketing: true };
     try {
-      const [ga, fbp, fbc] = await Promise.all([
+      const ga4Suffix = (cfg.ids.ga4 || "").replace(/^G-/, "");
+      const [ga, gaSession, fbp, fbc] = await Promise.all([
         browser.cookie.get("_ga"),
+        ga4Suffix ? browser.cookie.get(`_ga_${ga4Suffix}`) : Promise.resolve(null),
         browser.cookie.get("_fbp"),
         browser.cookie.get("_fbc"),
       ]);
       payload.clientId = gaClientId(ga);
+      const sid = gaSessionId(gaSession);
+      if (sid) payload.sessionId = sid;
       if (fbp) payload.fbp = fbp;
       if (fbc) payload.fbc = fbc;
     } catch {

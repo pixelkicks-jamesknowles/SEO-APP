@@ -92,6 +92,14 @@ describe("ga4EventFor", () => {
     expect(ev.params.search_term).toBe("running shoes");
   });
 
+  test("forwards session_id (GA4 session attribution) when the pixel captured it", () => {
+    const ev = ga4EventFor("checkout_completed", { ...checkoutEvent, sessionId: "1712345678" });
+    expect(ev.params.session_id).toBe("1712345678");
+    expect(ev.params.engagement_time_msec).toBe(1);
+    const none = ga4EventFor("checkout_completed", checkoutEvent);
+    expect(none.params.session_id).toBeUndefined();
+  });
+
   test("synthetic theme events (scroll) carry their params through to GA4", () => {
     const ev = ga4EventFor("scroll", { params: { percent_scrolled: 75 }, context: { document: { location: { href: "https://shop/x" } } } });
     expect(ev.name).toBe("scroll");

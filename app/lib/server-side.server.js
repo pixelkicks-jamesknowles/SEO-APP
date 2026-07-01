@@ -115,6 +115,9 @@ export function extractCommerce(name, data) {
 export function ga4EventFor(name, ev) {
   const c = extractCommerce(name, ev?.data);
   const params = { engagement_time_msec: 1 };
+  // session_id (from the pixel's `_ga_<container>` cookie) so this server-side hit attributes to the
+  // same GA4 session gtag created — GA4 MP best practice for report visibility.
+  if (ev?.sessionId) params.session_id = String(ev.sessionId);
   const url = ev?.context?.document?.location?.href;
   if (url) params.page_location = url;
   if (c.currency) params.currency = c.currency;
@@ -381,7 +384,8 @@ export async function sendGa4Event(settings, { name, params = {}, clientId } = {
   }
   if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
   // consent (optional): { analytics, marketing } → GA4 Consent Mode v2 flags, mirroring the pixel so
-  // consent-declined server-side conversions are modeled rather than dropped.
-  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params }, { consent });
+  // consent-declined server-side conversions are modeled rather than dropped. engagement_time_msec is
+  // added (GA4 MP best practice) so these server-side conversions register as engaged activity.
+  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params: { engagement_time_msec: 1, ...params } }, { consent });
   return { sent: r.ok, detail: r.detail };
 }
