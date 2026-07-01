@@ -6,7 +6,7 @@ import prisma from "../db.server";
 import { buildSubscriptionEvent, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
 import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event } from "../lib/server-side.server";
-import { bumpDaily } from "../lib/delivery.server";
+import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
@@ -73,7 +73,16 @@ export const action = async ({ request }) => {
         : null,
     });
 
-    await sendGa4Event(settings, event);
+    const sent = await sendGa4Event(settings, event);
+    // Log the delivery so the subscription order shows in Live events / Delivery health AND counts
+    // toward Accuracy purchase-capture (isPurchase). Without this a subscription-only order reads as
+    // 0% captured even though it was tracked. NOTE: an *initial* subscription order also fires the
+    // pixel's checkout_completed, so both can count for one order (match can exceed 100% for that
+    // order); recurring renewals — the bulk of subscription volume — have no checkout, so this is the
+    // only signal. If double-counting becomes material, dedupe per order id here vs the pixel event.
+    await recordDeliveries(shop, [
+      { destination: "ga4", eventName: event.name, ok: !!sent?.sent, detail: sent?.detail || "", isPurchase: true },
+    ]);
     await prisma.processedWebhook
       .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "orders/paid" } })
       .catch(() => {}); // a race just means we already sent once

@@ -36,7 +36,11 @@ export async function recordDeliveries(shopDomain, results) {
 
   const ok = results.filter((r) => r.ok).length;
   const failed = results.length - ok;
-  const purchaseDelivered = ok > 0 && results.some((r) => r.eventName === "checkout_completed");
+  // A paid order counts as "captured" when we delivered a purchase-type event: the pixel's
+  // checkout_completed, or a server-side subscription purchase (flagged isPurchase). Recurring
+  // subscription renewals never fire a storefront checkout, so the orders/paid webhook is the only
+  // capture signal for them — without this they'd read as permanent misses in the match rate.
+  const purchaseDelivered = results.some((r) => r.ok && (r.eventName === "checkout_completed" || r.isPurchase));
   await bumpDaily(shopDomain, {
     eventsSent: ok,
     eventsFailed: failed,
