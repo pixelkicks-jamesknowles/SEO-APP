@@ -64,9 +64,12 @@ register(({ analytics, browser, settings, init }) => {
     // Consent Mode v2: when true, still send consent-FLAGGED events without consent (GA4 models the
     // gap; Meta is skipped server-side) instead of suppressing them. When false, strict gate.
     consentSignals: s.consentSignals !== false,
-    // App-proxy path (e.g. "/apps/pixelify-seo/track"). Resolved against the storefront origin at
-    // send time so it works on custom domains. The app writes this on save (webPixelCreate/Update).
-    proxyPath: s.proxyPath || s.proxyUrl || null,
+    // Absolute cross-origin URL on the app's OWN host. The strict pixel sandbox blocks requests to the
+    // shop's origin (RestrictedUrlError), so we cannot beacon to an app proxy on the shop domain -
+    // we send here directly. shopDomain travels in the body (a direct request has no proxy signature).
+    // Both written by the app on save (webPixelCreate/Update).
+    trackUrl: s.trackUrl || null,
+    shop: s.shopDomain || null,
     debug: s.debug === true,
   };
 
@@ -84,22 +87,6 @@ register(({ analytics, browser, settings, init }) => {
   // Which platforms (with an id) opted into this event in the matrix.
   const platformsFor = (name) =>
     PLATFORMS.filter((p) => cfg.ids[p] && (cfg.matrix[p] || []).includes(name));
-
-  // Absolute app-proxy URL from the event's storefront origin + the configured proxy path.
-  const proxyUrlFor = (event) => {
-    if (!cfg.proxyPath) return null;
-    if (cfg.proxyPath.startsWith("http")) return cfg.proxyPath; // pre-absolutized
-    const loc = event?.context?.document?.location;
-    let origin = loc?.origin;
-    if (!origin && loc?.href) {
-      try {
-        origin = new URL(loc.href).origin;
-      } catch {
-        origin = null;
-      }
-    }
-    return origin ? `${origin}${cfg.proxyPath}` : null;
-  };
 
   const route = async (name, event) => {
     const wanted = platformsFor(name);
@@ -178,13 +165,13 @@ register(({ analytics, browser, settings, init }) => {
     }
   };
   const dispatch = (event, payload, platforms) => {
-    const url = proxyUrlFor(event);
-    dbg("beacon →", url || "(no proxy URL — config.proxyPath missing)", { platforms });
-    if (!url) return; // app proxy not configured yet (e.g. pre-deploy)
+    const url = cfg.trackUrl;
+    dbg("beacon →", url || "(no trackUrl — re-save the Tracking page)", { platforms });
+    if (!url) return; // not configured yet (e.g. pre-deploy / pre-save)
     try {
-      // Shopify's sandbox browser.sendBeacon resolves a Promise<boolean>; surface success/failure in
-      // debug so we can tell a blocked/failed beacon apart from one that never fired.
-      const r = browser.sendBeacon(url, JSON.stringify({ platforms, event: payload }));
+      // Cross-origin beacon to the app host (the sandbox allows this; same-origin is blocked). Shopify's
+      // sandbox browser.sendBeacon resolves a Promise<boolean>; surface success/failure in debug.
+      const r = browser.sendBeacon(url, JSON.stringify({ shop: cfg.shop, platforms, event: payload }));
       if (r && typeof r.then === "function") {
         r.then((ok) => dbg("beacon result", ok)).catch((e) => dbg("beacon rejected", e && e.message));
       }

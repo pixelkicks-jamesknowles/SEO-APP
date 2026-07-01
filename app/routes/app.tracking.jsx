@@ -140,6 +140,10 @@ export const action = async ({ request }) => {
   // extension's declared fields (extensions/tracking-pixel/shopify.extension.toml).
   // One JSON field - the extension declares a single non-blank `config` field, so individual
   // platform IDs can be left blank (e.g. GA4-only) without Shopify's "can't be blank" rejection.
+  // The Web Pixel's strict sandbox blocks same-origin requests, so it CANNOT use the app proxy - it
+  // must beacon cross-origin to the app's own host. Hard-code that absolute URL (+ the shop, since a
+  // direct request carries no app-proxy signature) into the pixel config here.
+  const appHost = (process.env.SHOPIFY_APP_URL || new URL(request.url).origin).replace(/\/$/, "");
   const pixelSettings = {
     config: JSON.stringify({
       gtmId: data.gtmId || "",
@@ -149,10 +153,8 @@ export const action = async ({ request }) => {
       consentMode: data.consentMode,
       consentSignals: data.consentSignals,
       debug: data.pixelDebug,
-      // App-proxy path the pixel beacons server-side events to. Must match [app_proxy] prefix/subpath
-      // in shopify.app.toml. The pixel resolves it against the live storefront origin at send time,
-      // so no deployed host needs to be hard-coded here.
-      proxyPath: "/apps/pixelify-seo/track",
+      trackUrl: `${appHost}/pixel/track`,
+      shopDomain,
     }),
   };
   const input = { settings: JSON.stringify(pixelSettings) };
