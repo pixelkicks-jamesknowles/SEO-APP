@@ -25,6 +25,18 @@ describe("buildRefundEvent", () => {
     });
     expect(ev.params.value).toBe(15.5);
   });
+
+  test("excludes pending / failed refund transactions (money not actually returned)", () => {
+    const ev = buildRefundEvent({
+      order_id: 8,
+      transactions: [
+        { amount: "10.00", currency: "USD", kind: "refund", status: "success" },
+        { amount: "5.00", currency: "USD", kind: "refund", status: "pending" },
+        { amount: "3.00", currency: "USD", kind: "refund", status: "failure" },
+      ],
+    });
+    expect(ev.params.value).toBe(10); // only the settled refund counts
+  });
 });
 
 describe("buildCancellationEvent", () => {

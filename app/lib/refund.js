@@ -17,7 +17,12 @@ function lineItem(li, quantity) {
 /** refunds/create payload -> GA4 `refund` event (partial or full). transaction_id matches the order. */
 export function buildRefundEvent(refund, { clientId } = {}) {
   const txns = refund?.transactions || [];
-  const refundTxns = txns.filter((t) => !t.kind || t.kind === "refund");
+  // Only sum transactions explicitly marked as refunds AND that actually settled — a `pending`/`failure`
+  // refund transaction represents money not (yet) returned, so summing it over-states the reversal and
+  // over-nets the conversion. Status is optional in some payloads, so absent status is treated as valid.
+  // If none are marked as refunds (kind-less payload), fall back to summing all transactions rather than
+  // mis-including a non-refund (e.g. a void/sale) line.
+  const refundTxns = txns.filter((t) => t.kind === "refund" && (t.status == null || t.status === "success"));
   const value = round2((refundTxns.length ? refundTxns : txns).reduce((s, t) => s + (Number(t.amount) || 0), 0));
   const currency = txns[0]?.currency || "USD";
   const items = (refund?.refund_line_items || []).map((rli) => lineItem(rli.line_item, rli.quantity));
@@ -64,8 +69,16 @@ export function buildSubscriptionCancellationEvent(order, { eventName = "subscri
   const subLines = (order?.line_items || []).filter(lineIsSubscription);
   if (!subLines.length) return null;
   const items = subLines.map((li) => lineItem(li, li?.quantity));
+  // Mirror buildSubscriptionEvent's value math EXACTLY (round the per-unit net, then × qty, then sum) so
+  // the cancellation reverses to the same figure the subscription_purchase originally sent — otherwise
+  // the two rounding paths can diverge by a cent and leave residual conversion value in the ad platform.
   const value = round2(
-    subLines.reduce((s, li) => s + (Number(li.price) || 0) * (Number(li.quantity) || 0) - (Number(li.total_discount) || 0), 0),
+    subLines.reduce((s, li) => {
+      const qty = Math.max(1, Number(li.quantity) || 1);
+      const gross = (Number(li.price) || 0) * qty;
+      const disc = Number(li.total_discount) || 0;
+      return s + round2((gross - disc) / qty) * qty;
+    }, 0),
   );
   const params = { transaction_id: String(order?.id ?? ""), currency: order?.currency || "USD", value };
   if (items.length) params.items = items;

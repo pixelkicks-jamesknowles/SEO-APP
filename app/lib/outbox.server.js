@@ -9,6 +9,9 @@ import { deliverOne } from "./server-side.server";
 // sends: the original + 5 retries) is dead-lettered. Exported for the unit test + the cron summary.
 export const BACKOFF_MINUTES = [1, 5, 30, 120, 720];
 export const MAX_ATTEMPTS = BACKOFF_MINUTES.length + 1;
+// How long a drained row is leased (nextAttemptAt pushed out) while it's being processed, so an
+// overlapping cron tick can't grab and re-send it. Longer than any single send's timeout.
+const LEASE_MINUTES = 5;
 
 /** Minutes until the next attempt for a row that has already been tried `attempts` times, or null if
  *  it has exhausted its retries (→ caller marks it dead). Pure. */
@@ -58,6 +61,14 @@ export async function drainOutbox({ limit = 200 } = {}) {
     })
     .catch(() => []);
   if (!due.length) return { processed: 0, delivered: 0, requeued: 0, dead: 0 };
+
+  // Lease the claimed rows by pushing nextAttemptAt out, so a cron tick that overlaps this one (a long
+  // run + a fresh fire) won't re-select the same rows and send the conversion twice. Each row is still
+  // re-scheduled to its real backoff below; the lease only covers the in-flight processing window.
+  const leaseUntil = minutesFromNow(LEASE_MINUTES);
+  await prisma.deliveryOutbox
+    .updateMany({ where: { id: { in: due.map((r) => r.id) }, status: "pending" }, data: { nextAttemptAt: leaseUntil } })
+    .catch(() => {});
 
   // Cache settings per shop across this batch (many rows usually share a shop).
   const settingsCache = new Map();

@@ -20,15 +20,31 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   const ua = body.event.userAgent || "";
   if (settings.botFiltering !== false && isBot(ua)) return;
 
-  // Buffer for the Live events inspector (cap 50/shop). PII is redacted before storage.
-  await prisma.recentEvent.create({
-    data: {
-      shopDomain,
-      name: body.event?.name ?? "event",
-      platform: body.platform ?? null,
-      payload: JSON.stringify({ platforms: body.platforms, event: redactEvent(body.event) }).slice(0, 4000),
-    },
-  });
+  // Idempotency: a beacon can be replayed (sendBeacon retry, double navigation, network replay). Claim
+  // the event id up front (create-wins-the-race, same pattern as the webhooks) so a redelivery doesn't
+  // produce a second server-side send — GA4 MP does not dedup non-purchase events, so without this a
+  // replayed page_view/add_to_cart is double-counted. Reuses ProcessedWebhook (TTL-purged by the cron).
+  const eventId = typeof body.event.id === "string" ? body.event.id : null;
+  if (eventId) {
+    const claimed = await prisma.processedWebhook
+      .create({ data: { webhookId: `ingest:${shopDomain}:${eventId}`, shopDomain, topic: "ingest" } })
+      .then(() => true)
+      .catch(() => false); // create failed → row already exists → this event was already ingested
+    if (!claimed) return;
+  }
+
+  // Buffer for the Live events inspector (cap 50/shop). PII is redacted before storage. Best-effort:
+  // a buffer-write failure must not abort delivery (every other DB call in this path is best-effort too).
+  await prisma.recentEvent
+    .create({
+      data: {
+        shopDomain,
+        name: body.event?.name ?? "event",
+        platform: body.platform ?? null,
+        payload: JSON.stringify({ platforms: body.platforms, event: redactEvent(body.event) }).slice(0, 4000),
+      },
+    })
+    .catch(() => {});
   // Cap the buffer at ~50/shop. Prune probabilistically (not on every event) to avoid a
   // findMany+deleteMany on every storefront hit — see pruneCap.
   await pruneCap(prisma.recentEvent, shopDomain, 50);

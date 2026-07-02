@@ -7,6 +7,10 @@ import { normalizeParams } from "./currency";
 const FX_BASE = "USD";
 const FX_ENDPOINT = process.env.FX_RATES_URL || `https://api.exchangerate.host/latest?base=${FX_BASE}`;
 const today = () => new Date().toISOString().slice(0, 10);
+// Don't normalize on a stale snapshot: if the daily refresh has been failing, an FX rate that's days old
+// silently skews every reported conversion value. Past this many days we treat rates as unavailable and
+// ship amounts un-normalized (a no-op) rather than converting on drifted numbers.
+const MAX_FX_AGE_DAYS = 7;
 
 /** Fetch today's USD-based rates into FxRate (once/day). Best-effort — returns a small summary. */
 export async function refreshFxRates() {
@@ -30,12 +34,16 @@ export async function refreshFxRates() {
   }
 }
 
-// Most recent stored rates map (today's if present, else the newest snapshot), or null.
+// Most recent stored rates map (today's if present, else the newest snapshot within MAX_FX_AGE_DAYS),
+// or null. A snapshot older than the cap is ignored so we never convert on a drifted rate.
 async function currentRates() {
   const row =
     (await prisma.fxRate.findUnique({ where: { base_date: { base: FX_BASE, date: today() } } }).catch(() => null)) ||
     (await prisma.fxRate.findFirst({ where: { base: FX_BASE }, orderBy: { date: "desc" } }).catch(() => null));
   if (!row) return null;
+  // Reject a stale fallback snapshot (row.date is YYYY-MM-DD UTC).
+  const ageDays = (Date.now() - Date.parse(`${row.date}T00:00:00Z`)) / 86_400_000;
+  if (!(ageDays <= MAX_FX_AGE_DAYS)) return null;
   try {
     return JSON.parse(row.rates);
   } catch {

@@ -1,0 +1,89 @@
+/* eslint-disable import/first -- jest.mock() must be declared above the imports it intercepts */
+// Integration test for the durable-retry state machine (outbox.server.drainOutbox). Exercises the REAL
+// deliverOne → sendGa4 → fetch path so a queued job is re-sent byte-identically; only Prisma and the
+// network (fetch) are mocked. Covers the three terminal transitions: delivered / requeued / dead-letter.
+jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./helpers/prisma-mock").makePrismaMock() }));
+
+import prisma from "../app/db.server.js";
+import { drainOutbox, BACKOFF_MINUTES, MAX_ATTEMPTS } from "../app/lib/outbox.server.js";
+
+// A shop with GA4 configured (plaintext keys — decryptSecret passes non-"enc:" values through unchanged).
+const SETTINGS = { shopDomain: "s.myshopify.com", ga4Id: "G-TEST", serverSideKeys: JSON.stringify({ ga4ApiSecret: "secret" }) };
+
+// One pending GA4 job row, `attempts` already spent.
+const row = (attempts, id = "row1") => ({
+  id,
+  shopDomain: SETTINGS.shopDomain,
+  destination: "ga4",
+  eventName: "purchase",
+  payload: JSON.stringify({ event: { name: "purchase", params: { value: 10 } }, clientId: "1.1", consent: null }),
+  attempts,
+  status: "pending",
+  nextAttemptAt: new Date(Date.now() - 1000),
+});
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  prisma.trackingSettings.findUnique.mockResolvedValue(SETTINGS);
+});
+
+test("delivered: a job that now succeeds is marked delivered and hits the GA4 endpoint", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+  prisma.deliveryOutbox.findMany.mockResolvedValue([row(1)]);
+
+  const summary = await drainOutbox();
+
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(global.fetch.mock.calls[0][0]).toContain("google-analytics.com/mp/collect");
+  expect(prisma.deliveryOutbox.update).toHaveBeenCalledWith(
+    expect.objectContaining({ where: { id: "row1" }, data: expect.objectContaining({ status: "delivered" }) }),
+  );
+  expect(summary).toMatchObject({ processed: 1, delivered: 1, requeued: 0, dead: 0 });
+});
+
+test("requeued: a transient failure bumps attempts and schedules the next backoff (not dead yet)", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
+  prisma.deliveryOutbox.findMany.mockResolvedValue([row(1)]); // 1 attempt spent → next is BACKOFF_MINUTES[1]
+
+  const before = Date.now();
+  const summary = await drainOutbox();
+
+  const call = prisma.deliveryOutbox.update.mock.calls[0][0];
+  expect(call.where).toEqual({ id: "row1" });
+  expect(call.data.attempts).toBe(2);
+  expect(call.data.status).toBeUndefined(); // still pending
+  // nextAttemptAt is ~BACKOFF_MINUTES[1] (5m) in the future.
+  const delayMin = (new Date(call.data.nextAttemptAt).getTime() - before) / 60000;
+  expect(delayMin).toBeGreaterThan(BACKOFF_MINUTES[1] - 0.5);
+  expect(delayMin).toBeLessThan(BACKOFF_MINUTES[1] + 0.5);
+  expect(summary).toMatchObject({ processed: 1, delivered: 0, requeued: 1, dead: 0 });
+});
+
+test("dead-letter: the final failed attempt marks the row dead (no further retries)", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
+  // MAX_ATTEMPTS-1 spent → this failure is the last one, so attempts hits MAX_ATTEMPTS → dead.
+  prisma.deliveryOutbox.findMany.mockResolvedValue([row(MAX_ATTEMPTS - 1)]);
+
+  const summary = await drainOutbox();
+
+  expect(prisma.deliveryOutbox.update).toHaveBeenCalledWith(
+    expect.objectContaining({ data: expect.objectContaining({ status: "dead", attempts: MAX_ATTEMPTS }) }),
+  );
+  expect(summary).toMatchObject({ processed: 1, delivered: 0, requeued: 0, dead: 1 });
+});
+
+test("a shop whose settings vanished doesn't crash — the row is retried later", async () => {
+  global.fetch = jest.fn();
+  prisma.trackingSettings.findUnique.mockResolvedValue(null); // uninstalled mid-flight
+  prisma.deliveryOutbox.findMany.mockResolvedValue([row(1)]);
+
+  const summary = await drainOutbox();
+
+  expect(global.fetch).not.toHaveBeenCalled(); // deliverOne never attempted without settings
+  expect(summary).toMatchObject({ processed: 1, delivered: 0, requeued: 1 });
+});
+
+test("nothing due → a clean no-op summary", async () => {
+  prisma.deliveryOutbox.findMany.mockResolvedValue([]);
+  expect(await drainOutbox()).toMatchObject({ processed: 0, delivered: 0, requeued: 0, dead: 0 });
+});
