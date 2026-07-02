@@ -87,3 +87,32 @@ test("nothing due → a clean no-op summary", async () => {
   prisma.deliveryOutbox.findMany.mockResolvedValue([]);
   expect(await drainOutbox()).toMatchObject({ processed: 0, delivered: 0, requeued: 0, dead: 0 });
 });
+
+test("leases the batch with a compare-and-swap token before processing", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+  prisma.deliveryOutbox.findMany.mockResolvedValue([row(1)]);
+
+  await drainOutbox();
+
+  // The lease updateMany stamps a token and only touches rows still due (nextAttemptAt <= now).
+  expect(prisma.deliveryOutbox.updateMany).toHaveBeenCalledTimes(1);
+  const lease = prisma.deliveryOutbox.updateMany.mock.calls[0][0];
+  expect(lease.data.leaseToken).toEqual(expect.any(String));
+  expect(lease.data.leaseToken.length).toBeGreaterThan(0);
+  expect(lease.where.nextAttemptAt).toEqual({ lte: expect.any(Date) });
+  // The rows to process are re-selected by that same token.
+  expect(prisma.deliveryOutbox.findMany.mock.calls[1][0].where.leaseToken).toBe(lease.data.leaseToken);
+});
+
+test("concurrency: rows won by another tick (empty claim re-query) are not processed or re-sent", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+  // First findMany = the due batch; second findMany = rows carrying OUR token → empty, because a
+  // concurrent tick leased them first (its lease pushed nextAttemptAt out, so our CAS matched nothing).
+  prisma.deliveryOutbox.findMany.mockResolvedValueOnce([row(1)]).mockResolvedValueOnce([]);
+
+  const summary = await drainOutbox();
+
+  expect(global.fetch).not.toHaveBeenCalled(); // nothing re-sent
+  expect(prisma.deliveryOutbox.update).not.toHaveBeenCalled(); // no status transition on rows we don't own
+  expect(summary).toMatchObject({ processed: 0, delivered: 0, requeued: 0, dead: 0 });
+});

@@ -1,5 +1,5 @@
 import prisma from "../db.server";
-import { fanOutServerSide, isBot } from "./server-side.server";
+import { fanOutServerSide, isBot, sha256Hex } from "./server-side.server";
 import { recordDeliveries, recordVisit, getFirstTouch, pruneCap } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { fxHooks } from "./fx.server";
@@ -24,7 +24,17 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   // the event id up front (create-wins-the-race, same pattern as the webhooks) so a redelivery doesn't
   // produce a second server-side send — GA4 MP does not dedup non-purchase events, so without this a
   // replayed page_view/add_to_cart is double-counted. Reuses ProcessedWebhook (TTL-purged by the cron).
-  const eventId = typeof body.event.id === "string" ? body.event.id : null;
+  //
+  // When the pixel supplies no string id, fall back to a content hash of the event's stable identifying
+  // fields so a byte-identical replay is still deduped. This needs a timestamp for entropy — without one
+  // two legitimate repeat events (e.g. two page_views) would hash the same, and dropping a real event
+  // (undercount) is worse than the double-count we're guarding, so we skip the claim in that case.
+  const rawId = typeof body.event.id === "string" ? body.event.id.trim() : "";
+  const eventId = rawId
+    ? rawId
+    : body.event.timestamp
+      ? `h:${sha256Hex([body.event.name, body.event.timestamp, body.event.clientId ?? "", JSON.stringify(body.event.data ?? null)].join("|"))}`
+      : null;
   if (eventId) {
     const claimed = await prisma.processedWebhook
       .create({ data: { webhookId: `ingest:${shopDomain}:${eventId}`, shopDomain, topic: "ingest" } })

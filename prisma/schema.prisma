@@ -142,6 +142,9 @@ model DeliveryOutbox {
   status        String   @default("pending") // pending | delivered | dead
   lastDetail    String?
   nextAttemptAt DateTime @default(now())
+  // Per-drain claim token: the cron worker stamps this when it leases a batch, then re-selects only the
+  // rows carrying its token, so two overlapping ticks can't process (and re-send) the same row.
+  leaseToken    String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

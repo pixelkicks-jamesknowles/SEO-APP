@@ -110,6 +110,27 @@ test("a redelivered event id is deduped — no second server-side send", async (
   expect(prisma.recentEvent.create).not.toHaveBeenCalled();
 });
 
+test("id-less event: a content hash (name+timestamp+clientId+data) is claimed for dedup", async () => {
+  const ev = { name: "product_added_to_cart", clientId: "1.1", timestamp: "2026-07-02T10:00:00.000Z", userAgent: "Mozilla/5.0 Chrome/120", data: { id: "v1" } };
+  await ingestEvent(SHOP, { event: ev }, undefined);
+  expect(prisma.processedWebhook.create).toHaveBeenCalledTimes(1);
+  expect(prisma.processedWebhook.create.mock.calls[0][0].data.webhookId).toMatch(new RegExp(`^ingest:${SHOP}:h:[0-9a-f]{64}$`));
+});
+
+test("id-less replay: the same payload hashes the same → deduped, no second send", async () => {
+  prisma.processedWebhook.create.mockRejectedValueOnce(new Error("unique constraint"));
+  const ev = { name: "product_added_to_cart", clientId: "1.1", timestamp: "2026-07-02T10:00:00.000Z", userAgent: "Mozilla/5.0 Chrome/120", data: { id: "v1" } };
+  await ingestEvent(SHOP, { event: ev }, undefined);
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(prisma.recentEvent.create).not.toHaveBeenCalled();
+});
+
+test("id-less and timestamp-less event: no claim (won't risk dropping a legit repeat), still delivers", async () => {
+  await ingestEvent(SHOP, { event: { name: "page_viewed", clientId: "1.1", userAgent: "Mozilla/5.0 Chrome/120" } }, undefined);
+  expect(prisma.processedWebhook.create).not.toHaveBeenCalled();
+  expect(gaCalls()).toHaveLength(1);
+});
+
 test("UTM-tagged visit records first-touch attribution", async () => {
   await ingestEvent(
     SHOP,

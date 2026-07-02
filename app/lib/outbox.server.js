@@ -2,6 +2,7 @@
 // queued in DeliveryOutbox as the PLATFORM-READY job (no secrets — those are re-read from settings at
 // retry time), then re-sent by the /cron/tick worker with exponential backoff until it succeeds or is
 // dead-lettered. This is what turns "best-effort" into "eventually delivered" for the accuracy promise.
+import crypto from "node:crypto";
 import prisma from "../db.server";
 import { deliverOne } from "./server-side.server";
 
@@ -62,13 +63,19 @@ export async function drainOutbox({ limit = 200 } = {}) {
     .catch(() => []);
   if (!due.length) return { processed: 0, delivered: 0, requeued: 0, dead: 0 };
 
-  // Lease the claimed rows by pushing nextAttemptAt out, so a cron tick that overlaps this one (a long
-  // run + a fresh fire) won't re-select the same rows and send the conversion twice. Each row is still
-  // re-scheduled to its real backoff below; the lease only covers the in-flight processing window.
+  // Lease the batch with a compare-and-swap: stamp a unique token on the still-due rows and push
+  // nextAttemptAt out. Because the lease WHERE also requires `nextAttemptAt <= now`, a concurrent tick
+  // that already leased a row (pushing it to the future) can't match it again — Postgres row locks
+  // serialize the two UPDATEs, so exactly one token lands per row. We then re-select ONLY the rows
+  // carrying our token and process just those, so two overlapping ticks never re-send the same row.
+  const leaseToken = crypto.randomUUID();
   const leaseUntil = minutesFromNow(LEASE_MINUTES);
+  const ids = due.map((r) => r.id);
   await prisma.deliveryOutbox
-    .updateMany({ where: { id: { in: due.map((r) => r.id) }, status: "pending" }, data: { nextAttemptAt: leaseUntil } })
+    .updateMany({ where: { id: { in: ids }, status: "pending", nextAttemptAt: { lte: new Date() } }, data: { nextAttemptAt: leaseUntil, leaseToken } })
     .catch(() => {});
+  const claimed = await prisma.deliveryOutbox.findMany({ where: { id: { in: ids }, leaseToken } }).catch(() => []);
+  if (!claimed.length) return { processed: 0, delivered: 0, requeued: 0, dead: 0 };
 
   // Cache settings per shop across this batch (many rows usually share a shop).
   const settingsCache = new Map();
@@ -82,7 +89,7 @@ export async function drainOutbox({ limit = 200 } = {}) {
   let delivered = 0;
   let requeued = 0;
   let dead = 0;
-  for (const row of due) {
+  for (const row of claimed) {
     const settings = await getSettings(row.shopDomain);
     let parsed = {};
     try {
@@ -110,5 +117,5 @@ export async function drainOutbox({ limit = 200 } = {}) {
       await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { attempts, nextAttemptAt: minutesFromNow(delay), lastDetail: (result.detail || "").slice(0, 200) || null } }).catch(() => {});
     }
   }
-  return { processed: due.length, delivered, requeued, dead };
+  return { processed: claimed.length, delivered, requeued, dead };
 }
