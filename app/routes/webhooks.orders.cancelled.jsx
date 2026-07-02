@@ -7,6 +7,8 @@ import { syntheticClientId } from "../lib/subscription";
 import { fetchOrderSubscriptions } from "../lib/subscription.server";
 import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { recordDeliveries } from "../lib/delivery.server";
+import { enqueue } from "../lib/outbox.server";
+import { normalizeForShop } from "../lib/fx.server";
 
 const refundEventName = (settings) => {
   try {
@@ -36,7 +38,9 @@ export const action = async ({ request }) => {
     const event = buildCancellationEvent(payload, { clientId });
     // Margin mode: reverse the same (margin) value the purchase sent.
     withValueMode(event.params, settings.valueMode, settings.marginPct);
+    await normalizeForShop(settings, event.params); // multi-currency (no-op if off)
     const r = await sendGa4Event(settings, event);
+    if (!r.sent && r.job) await enqueue(shop, r.job, r.detail); // durable retry
     const deliveries = [{ destination: "ga4_refund", eventName: "refund", ok: r.sent, detail: r.detail }];
     // REST payloads carry no selling-plan data, so pull it from the Admin API and graft it onto the
     // line items — then buildSubscriptionCancellationEvent can pick out the subscription lines.
@@ -48,7 +52,9 @@ export const action = async ({ request }) => {
     // Reverse the subscription_purchase for the cancelled order's subscription lines.
     const subRefund = buildSubscriptionCancellationEvent(payload, { eventName: refundEventName(settings), clientId });
     if (subRefund) {
+      await normalizeForShop(settings, subRefund.params);
       const sr = await sendGa4Event(settings, subRefund);
+      if (!sr.sent && sr.job) await enqueue(shop, sr.job, sr.detail);
       deliveries.push({ destination: "ga4_refund", eventName: subRefund.name, ok: sr.sent, detail: sr.detail });
     }
     await recordDeliveries(shop, deliveries);

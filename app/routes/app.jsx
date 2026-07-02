@@ -22,9 +22,11 @@ export default function App() {
           Home
         </Link>
         <Link to="/app/tracking">Tracking</Link>
+        <Link to="/app/wizard">Setup check</Link>
         <Link to="/app/sandbox">Event sandbox</Link>
         <Link to="/app/events">Live events</Link>
         <Link to="/app/accuracy">Accuracy</Link>
+        <Link to="/app/attribution">Attribution</Link>
         <Link to="/app/settings">Settings</Link>
         <Link to="/app/help">Help</Link>
       </NavMenu>

@@ -1,11 +1,13 @@
 import { useLoaderData, useRevalidator } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, Box, ProgressBar, Divider } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { computeHealth } from "../lib/health.server";
 import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
+  const health = await computeHealth(session.shop);
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const rows = await prisma.trackingDaily.findMany({
     where: { shopDomain: session.shop, date: { gte: since } },
@@ -26,6 +28,9 @@ export const loader = async ({ request }) => {
       eventsSent: sum("eventsSent"),
       eventsFailed: sum("eventsFailed"),
     },
+    alerts: health.alerts,
+    outboxPending: health.outboxPending,
+    outboxDead: health.outboxDead,
   };
 };
 
@@ -47,7 +52,7 @@ function Stat({ title, value, sub, progress, tone }) {
 }
 
 export default function Accuracy() {
-  const { days, totals } = useLoaderData();
+  const { days, totals, alerts, outboxPending, outboxDead } = useLoaderData();
   const revalidator = useRevalidator();
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
@@ -68,12 +73,11 @@ export default function Accuracy() {
           </Banner>
         ) : (
           <>
-            {matchRate != null && matchRate < 90 && (
-              <Banner tone="warning" title={`Only ${matchRate}% of paid orders captured as purchase events`}>
-                The gap is usually visitors who declined consent, or the pixel not firing on some
-                checkouts. Compare with GA4, and check Consent settings on the Tracking page.
+            {alerts.map((a) => (
+              <Banner key={a.kind} tone={a.severity === "critical" ? "critical" : "warning"} title={a.title}>
+                {a.body}
               </Banner>
-            )}
+            ))}
 
             <InlineStack gap="400" wrap>
               <Stat
@@ -91,6 +95,12 @@ export default function Accuracy() {
                 tone={deliveryRate != null && deliveryRate < 98 ? "critical" : "success"}
               />
               <Stat title="Events sent (30d)" value={totals.eventsSent.toLocaleString()} sub="Server-side deliveries" />
+              <Stat
+                title="Retry queue"
+                value={(outboxPending || 0).toLocaleString()}
+                sub={outboxDead > 0 ? `${outboxDead} gave up after retries` : "Failed sends awaiting retry"}
+                tone={outboxDead > 0 ? "critical" : undefined}
+              />
             </InlineStack>
 
             <Card>

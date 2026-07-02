@@ -1,6 +1,9 @@
 import prisma from "../db.server";
 import { fanOutServerSide, isBot } from "./server-side.server";
 import { recordDeliveries, recordVisit, getFirstTouch, pruneCap } from "./delivery.server";
+import { enqueueFailures } from "./outbox.server";
+import { fxHooks } from "./fx.server";
+import { googleAdsHook } from "./google-ads.server";
 import { redactEvent } from "./redact";
 
 // Shared storefront-event ingestion: bot-filter, buffer for Live events (PII-redacted), first-touch
@@ -38,6 +41,12 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     event.firstTouch = await getFirstTouch(shopDomain, event.clientId);
   }
 
-  const results = await fanOutServerSide(settings, event);
+  // Delivery hooks: currency normalization (fx) + extra destinations (Google Ads Enhanced Conversions).
+  // Both are no-ops unless the shop opted in; merged into one hooks object for buildJobs.
+  const fx = await fxHooks(settings);
+  const hooks = { ...fx, ...googleAdsHook(settings) };
+  const results = await fanOutServerSide(settings, event, { hooks });
   await recordDeliveries(shopDomain, results);
+  // Durable retry: queue any destination that failed so /cron/tick re-sends it with backoff.
+  await enqueueFailures(shopDomain, results);
 }

@@ -1,17 +1,28 @@
-import { useLoaderData } from "@remix-run/react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
 import { Page, Layout, Card, Text, BlockStack, InlineStack, Badge, Button, List, Banner } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { readServerSideKeys } from "../lib/secrets.server";
+import { computeHealth, dismissAlert } from "../lib/health.server";
+
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const form = await request.formData();
+  if (form.get("_action") === "dismissAlert") {
+    await dismissAlert(session.shop, form.get("kind"));
+  }
+  return { ok: true };
+};
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [tracking, recentEvents, deliveryFailures] = await Promise.all([
+  const [tracking, recentEvents, deliveryFailures, health] = await Promise.all([
     prisma.trackingSettings.findUnique({ where: { shopDomain } }),
     prisma.recentEvent.count({ where: { shopDomain } }),
     prisma.deliveryLog.count({ where: { shopDomain, ok: false, createdAt: { gte: since } } }),
+    computeHealth(shopDomain),
   ]);
   const keys = readServerSideKeys(tracking);
   const idKeys = ["gtmId", "ga4Id", "metaPixelId"];
@@ -37,12 +48,14 @@ export const loader = async ({ request }) => {
     serverSide,
     subscriptionTracking: tracking?.subscriptionTracking ?? false,
     warnings,
+    alerts: health.alerts,
   };
 };
 
 export default function Index() {
-  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings } = useLoaderData();
+  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts } = useLoaderData();
   const notConfigured = platforms === 0;
+  const dismisser = useFetcher();
 
   return (
     <Page
@@ -50,6 +63,19 @@ export default function Index() {
       subtitle="Free, server-side conversion & SEO tracking for any Shopify store."
     >
       <Layout>
+        {alerts.map((a) => (
+          <Layout.Section key={a.kind}>
+            <Banner
+              tone={a.severity === "critical" ? "critical" : "warning"}
+              title={a.title}
+              action={{ content: "View Accuracy", url: "/app/accuracy" }}
+              onDismiss={() => dismisser.submit({ _action: "dismissAlert", kind: a.kind }, { method: "post" })}
+            >
+              <p>{a.body}</p>
+            </Banner>
+          </Layout.Section>
+        ))}
+
         {notConfigured && (
           <Layout.Section>
             <Banner

@@ -130,6 +130,25 @@ For each installed store:
    the genuine Web Pixel `checkout_completed` → app proxy → fan-out, and `orders/paid`. Watch it in
    **Live events** + GA4 Realtime. (This is the only thing that exercises the checkout-capture leg.)
 
+## Step 8 — Background worker (required for retries + FX)
+There's no in-process scheduler, so a cron service must poke `/cron/tick`. It drains the delivery
+retry outbox (re-sends failed GA4/Meta/GTM/Google-Ads events with backoff), refreshes the daily FX
+snapshot, and purges stale rows.
+1. Set `CRON_SECRET` on the app service (random string).
+2. Add a **Railway cron service** (or any external scheduler) that runs every ~5 minutes:
+   `curl -fsS -H "x-cron-secret: $CRON_SECRET" https://<your-app>/cron/tick`
+3. Confirm: hitting it returns a JSON summary (`{ ok, outbox, fx, purged }`). Without the header it 403s.
+
+## Step 9 — Google Ads Enhanced Conversions (optional, gated)
+Stays completely hidden until configured, so skip unless wanted.
+1. Get **Google Ads API access** (a developer token — approval can take a while).
+2. Create a Google Cloud OAuth **Web application** client; add redirect URI
+   `<SHOPIFY_APP_URL>/google/oauth/callback`.
+3. Set `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`.
+4. In-app **Settings → Google Ads**: Connect Google, then enter the customer ID + conversion action
+   ID and enable uploads. Purchases with an on-page `gclid` (or hashed customer data) then upload
+   directly, alongside the GA4 path.
+
 ---
 
 ## Backups (do this — the DB holds OAuth tokens)

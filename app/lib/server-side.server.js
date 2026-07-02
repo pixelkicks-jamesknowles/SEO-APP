@@ -294,6 +294,33 @@ async function sendMeta(pixelId, token, event) {
   return postJson(url, { data: [event] });
 }
 
+// Send a Meta CAPI test event (tagged with a test_event_code so it shows under Test Events, not live
+// reporting) to verify the pixel id + CAPI token end-to-end. Returns { ok, messages }.
+export async function validateMetaEvent(settings, { testEventCode } = {}) {
+  const keys = readServerSideKeys(settings);
+  if (!settings?.metaPixelId) return { ok: false, messages: ["No Meta pixel ID set."] };
+  if (!keys.metaCapiToken) return { ok: false, messages: ["No Meta CAPI access token saved."] };
+  const url = `https://graph.facebook.com/${META_API_VERSION}/${encodeURIComponent(settings.metaPixelId)}/events?access_token=${encodeURIComponent(keys.metaCapiToken)}`;
+  const event = {
+    event_name: "PageView",
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: `pixelify-test-${Date.now()}`,
+    action_source: "website",
+    user_data: { client_user_agent: "pixelify-diagnostics" },
+  };
+  const body = { data: [event] };
+  if (testEventCode) body.test_event_code = testEventCode;
+  try {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && (json.events_received >= 1 || json.events_received === undefined)) return { ok: true, messages: [] };
+    const msg = json?.error?.message || `HTTP ${res.status}`;
+    return { ok: false, messages: [msg] };
+  } catch (e) {
+    return { ok: false, messages: [e?.message || "Request to Meta failed."] };
+  }
+}
+
 // Server-side GTM: GTM-XXXX is a *web* container the strict pixel sandbox cannot load (no gtag.js),
 // so the only server-side route is a sGTM container URL with a GA4 client — we POST the GA4 MP hit to it.
 async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, event, consent) {
@@ -324,15 +351,49 @@ export function checkoutHasSubscription(event) {
 }
 
 /**
- * Fan a normalized pixel event out to every server-side destination that (a) is opted into this
- * event in the matrix and (b) has the credentials it needs. settings: TrackingSettings row.
- * event: normalized event from the pixel beacon { name, id, data, context, utm, clientId, fbp, fbc, ... }.
+ * Deliver ONE already-built job to its destination, re-reading the shop's credentials from settings
+ * at call time (jobs never carry secrets, so this is safe after a credential rotation). Shared by the
+ * live fan-out and the retry worker (outbox.server.js), so a queued retry sends byte-identically.
+ * job: { destination, eventName, event, clientId?, consent? }. Returns { ok, detail }.
  */
-export async function fanOutServerSide(settings, event, { force = false } = {}) {
+export async function deliverOne(settings, job) {
+  const keys = readServerSideKeys(settings);
+  const { destination, event, clientId, consent } = job || {};
+  switch (destination) {
+    case "ga4":
+      if (!settings?.ga4Id || !keys.ga4ApiSecret) return { ok: false, detail: "GA4 not configured" };
+      return sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, event, { consent });
+    case "meta":
+      if (!settings?.metaPixelId || !keys.metaCapiToken) return { ok: false, detail: "Meta not configured" };
+      return sendMeta(settings.metaPixelId, keys.metaCapiToken, event);
+    case "gtm": {
+      if (!keys.gtmServerUrl) return { ok: false, detail: "sGTM not configured" };
+      const mid = keys.gtmMeasurementId || settings?.ga4Id;
+      const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
+      if (!mid || !secret) return { ok: false, detail: "sGTM measurement id/secret missing" };
+      return sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, event, consent);
+    }
+    case "google_ads": {
+      // Dynamically imported so this module stays prisma-free (google-ads.server reads the DB token).
+      const { deliverGoogleAds } = await import("./google-ads.server");
+      return deliverGoogleAds(settings, job);
+    }
+    default:
+      return { ok: false, detail: `unknown destination: ${destination}` };
+  }
+}
+
+/**
+ * Build the delivery jobs for a normalized pixel event — every server-side destination that (a) is
+ * opted into this event in the matrix and (b) has the credentials it needs. Pure (no IO), so it's
+ * unit-testable and mirrors exactly what fan-out will attempt. Returns [{ destination, eventName,
+ * event, clientId, consent }]. `hooks` lets later features mutate the built GA4/Meta payloads (e.g.
+ * currency normalization) and contribute extra jobs (e.g. Google Ads) without bloating this core.
+ */
+export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   if (!settings?.serverSide) return [];
   const name = event?.name;
   if (!name) return [];
-
   const keys = readServerSideKeys(settings);
   let matrix = {};
   try {
@@ -346,49 +407,56 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
   // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
   const marketingOk = !consent || consent.marketing;
-  // force (test sends) bypasses the per-event matrix, delivering to every configured destination.
-  // Custom / lead events (window.pxp.track) bypass the per-event matrix — they go to every configured
-  // destination (still credential- and consent-gated). force = test sends.
+  // force (test sends) and custom/lead events (window.pxp.track) bypass the per-event matrix — they go
+  // to every configured destination (still credential- and consent-gated).
   const wants = (p) => force || event?.custom || platformWants(matrix, p, name);
-  const tasks = [];
-  // Each task resolves to a delivery-health record { destination, eventName, ok, detail }.
-  const track = (destination, promise) =>
-    tasks.push(
-      Promise.resolve(promise)
-        .then((r) => ({ destination, eventName: name, ok: !!r?.ok, detail: r?.detail || "" }))
-        .catch((e) => ({ destination, eventName: name, ok: false, detail: e?.message || "error" })),
-    );
 
   // Build the GA4 event once; apply value-based optimisation (margin) to the purchase conversion.
   const ga4Event = ga4EventFor(name, event);
   const isPurchaseConv = name === "checkout_completed";
   if (isPurchaseConv) withValueMode(ga4Event.params, settings.valueMode, settings.marginPct);
+  hooks.normalizeParams?.(ga4Event.params);
 
+  const jobs = [];
   // For a subscription checkout, the GA4 purchase comes from the orders/paid webhook (all items) plus
   // a scoped subscription_purchase — so suppress the pixel's GA4 purchase here to avoid doubling GA4
   // revenue. Meta/GTM below still fire (they aren't sent by the webhook and want the pixel's cookies).
   const suppressGa4Purchase = isPurchaseConv && checkoutHasSubscription(event);
   if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret && !suppressGa4Purchase) {
-    track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4Event, { consent }));
+    jobs.push({ destination: "ga4", eventName: name, event: ga4Event, clientId, consent });
   }
   if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {
     const metaEvent = metaEventFor(name, event);
     if (isPurchaseConv) withValueMode(metaEvent.custom_data, settings.valueMode, settings.marginPct);
-    track("meta", sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEvent));
+    hooks.normalizeParams?.(metaEvent.custom_data);
+    jobs.push({ destination: "meta", eventName: name, event: metaEvent });
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
-  if (wants("gtm") && settings.gtmId && keys.gtmServerUrl) {
-    const mid = keys.gtmMeasurementId || settings.ga4Id;
-    const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
-    if (mid && secret) {
-      track("gtm", sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4Event, consent));
-    }
+  if (wants("gtm") && settings.gtmId && keys.gtmServerUrl && (keys.gtmMeasurementId || settings.ga4Id)) {
+    jobs.push({ destination: "gtm", eventName: name, event: ga4Event, clientId, consent });
   }
-  // Google Ads needs no integration here - the GA4 purchase above carries the correct client_id, so
-  // it stitches to the on-page gtag session that holds the gclid; the merchant links GA4 to Google Ads
-  // and imports the conversion. No Google Ads API / developer token / OAuth required.
+  // Extra jobs from later features (e.g. Google Ads Enhanced Conversions on a purchase).
+  for (const extra of hooks.extraJobs?.(event, ga4Event, { clientId, consent, isPurchaseConv }) || []) {
+    jobs.push(extra);
+  }
+  return jobs;
+}
 
-  return Promise.all(tasks);
+/**
+ * Fan a normalized pixel event out to every configured server-side destination. Delivers each job via
+ * deliverOne and returns a delivery-health record per job (incl. the job itself, so a caller can queue
+ * the failures for retry — see enqueueFailures in outbox.server.js).
+ * event: normalized event from the pixel beacon { name, id, data, context, utm, clientId, fbp, fbc, ... }.
+ */
+export async function fanOutServerSide(settings, event, { force = false, hooks } = {}) {
+  const jobs = buildJobs(settings, event, { force, hooks });
+  return Promise.all(
+    jobs.map((job) =>
+      deliverOne(settings, job)
+        .then((r) => ({ destination: job.destination, eventName: job.eventName, ok: !!r?.ok, detail: r?.detail || "", job }))
+        .catch((e) => ({ destination: job.destination, eventName: job.eventName, ok: false, detail: e?.message || "error", job })),
+    ),
+  );
 }
 
 // Validate a GA4 event against the Measurement Protocol debug endpoint, which (unlike the real
@@ -418,6 +486,10 @@ export async function sendGa4Event(settings, { name, params = {}, clientId } = {
   // consent (optional): { analytics, marketing } → GA4 Consent Mode v2 flags, mirroring the pixel so
   // consent-declined server-side conversions are modeled rather than dropped. engagement_time_msec is
   // added (GA4 MP best practice) so these server-side conversions register as engaged activity.
-  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId || stableClientId(params.transaction_id), { name, params: { engagement_time_msec: 1, ...params } }, { consent });
-  return { sent: r.ok, detail: r.detail };
+  const resolvedClientId = clientId || stableClientId(params.transaction_id);
+  const event = { name, params: { engagement_time_msec: 1, ...params } };
+  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, resolvedClientId, event, { consent });
+  // `job` mirrors a buildJobs "ga4" job so a failed webhook send can be queued for retry (outbox)
+  // and re-sent byte-identically by deliverOne.
+  return { sent: r.ok, detail: r.detail, job: { destination: "ga4", eventName: name, event, clientId: resolvedClientId, consent } };
 }

@@ -34,70 +34,80 @@ model Session {
 // Per-shop install + billing snapshot. No business data — SEO config lives below;
 // products/collections/metafields stay in Shopify.
 model Shop {
-  shopDomain    String   @id
-  plan          String?  // free | starter | growth | pro
+  shopDomain      String   @id
+  plan            String? // free | starter | growth | pro
   subscriptionGid String?
-  billingStatus String?
-  installedAt   DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  billingStatus   String?
+  installedAt     DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 // SEO core settings (spec seo-app-v1 §4). Templates + toggles are deterministic;
 // no per-resource copy is stored here (that's written to native seo.title/description).
 model SeoSettings {
-  shopDomain         String   @id
+  shopDomain      String   @id
   // Deterministic meta templates, e.g. {"product":"{{product.title}} — {{product.type}} | {{shop.name}}"}
-  metaTemplates      String   @default("{}") // JSON: { product, collection, page, article, blog }
-  altTemplate        String?  // e.g. "{{product.title}} – {{variant}}"
+  metaTemplates   String   @default("{}") // JSON: { product, collection, page, article, blog }
+  altTemplate     String? // e.g. "{{product.title}} – {{variant}}"
   // Which JSON-LD nodes the app emits. The dedup pass suppresses any the theme already emits.
-  schemaToggles      String   @default("{}") // JSON: { product, breadcrumb, organization, faq, video, article }
+  schemaToggles   String   @default("{}") // JSON: { product, breadcrumb, organization, faq, video, article }
   // Nodes the app must NOT emit because the host theme/another app owns them
   // (e.g. AggregateRating when the Reviews app emits it). The single-emitter rule.
-  suppressedNodes    String   @default("[]") // JSON array of node types
-  organization       String   @default("{}") // JSON: name, logo, sameAs[] for Organization schema
-  robotsRules        String?  // managed robots.txt additions
-  llmsTxtEnabled     Boolean  @default(false)
-  autoApply          Boolean  @default(false) // apply meta templates to new products on create
-  indexnowKey        String?  // IndexNow key, served as a key-file via the app proxy
-  cruxApiKey         String?  // Google CrUX API key for Core Web Vitals field data
-  monitoring         Boolean  @default(false) // scheduled re-audit + regression alerts
-  alertWebhook       String?  // Slack-compatible incoming webhook for regression alerts
-  updatedAt          DateTime @updatedAt
+  suppressedNodes String   @default("[]") // JSON array of node types
+  organization    String   @default("{}") // JSON: name, logo, sameAs[] for Organization schema
+  robotsRules     String? // managed robots.txt additions
+  llmsTxtEnabled  Boolean  @default(false)
+  autoApply       Boolean  @default(false) // apply meta templates to new products on create
+  indexnowKey     String? // IndexNow key, served as a key-file via the app proxy
+  cruxApiKey      String? // Google CrUX API key for Core Web Vitals field data
+  monitoring      Boolean  @default(false) // scheduled re-audit + regression alerts
+  alertWebhook    String? // Slack-compatible incoming webhook for regression alerts
+  updatedAt       DateTime @updatedAt
 }
 
 // Tracking module settings (spec seo-app-v1 §9). Platform IDs + per-platform event
 // matrix + consent. Web Pixel reads an effective copy via app proxy / metafield.
 model TrackingSettings {
-  shopDomain     String   @id
-  gtmId          String?
-  ga4Id          String?
-  metaPixelId    String?
-  tiktokPixelId  String?
-  pinterestId    String?
-  snapPixelId    String?
-  bingUetId      String?
+  shopDomain           String   @id
+  gtmId                String?
+  ga4Id                String?
+  metaPixelId          String?
+  tiktokPixelId        String?
+  pinterestId          String?
+  snapPixelId          String?
+  bingUetId            String?
   // Per-platform event opt-in, e.g. {"ga4":["page_viewed","product_viewed","checkout_completed"]}
-  eventMatrix    String   @default("{}") // JSON
-  consentMode    Boolean  @default(true)  // respect Customer Privacy consent at all
+  eventMatrix          String   @default("{}") // JSON
+  consentMode          Boolean  @default(true) // respect Customer Privacy consent at all
   // Consent Mode v2: when true (and consentMode on), still send consent-FLAGGED events without
   // consent (GA4 models the gap; Meta is skipped without marketing consent) instead of suppressing.
-  consentSignals Boolean  @default(true)
-  serverSide     Boolean  @default(false) // Meta CAPI / GA4 MP / server GTM (Pro tier)
-  serverSideKeys String?  // JSON: encrypted server-side credentials
-  webPixelId     String?  // gid of the WebPixel created via webPixelCreate (create-once, then update)
+  consentSignals       Boolean  @default(true)
+  serverSide           Boolean  @default(false) // Meta CAPI / GA4 MP / server GTM (Pro tier)
+  serverSideKeys       String? // JSON: encrypted server-side credentials
+  webPixelId           String? // gid of the WebPixel created via webPixelCreate (create-once, then update)
   // Server-side subscription conversion event (orders/paid → GA4). See seo-subscription-tracking-v1.
-  subscriptionTracking Boolean @default(false)
-  subscriptionConfig   String  @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
-  pixelDebug     Boolean  @default(false) // log every event in the storefront console (testing)
+  subscriptionTracking Boolean  @default(false)
+  subscriptionConfig   String   @default("{}") // JSON: { eventName, monthDays, respectConsent, clientIdMode }
+  pixelDebug           Boolean  @default(false) // log every event in the storefront console (testing)
   // Send a GA4 `refund` event from refunds/create + orders/cancelled (negative conversions).
-  refundTracking Boolean  @default(false)
+  refundTracking       Boolean  @default(false)
   // Drop known bot / headless traffic before server-side delivery (default on).
-  botFiltering   Boolean  @default(true)
+  botFiltering         Boolean  @default(true)
   // Value-based optimisation: send margin (revenue × marginPct) as the conversion `value` instead of
   // raw revenue, so ad platforms optimise for profit. Opt-in; raw revenue kept as a `revenue` param.
-  valueMode      String   @default("revenue") // "revenue" | "margin"
-  marginPct      Int      @default(0)          // whole percent, applied when valueMode = "margin"
-  updatedAt      DateTime @updatedAt
+  valueMode            String   @default("revenue") // "revenue" | "margin"
+  marginPct            Int      @default(0) // whole percent, applied when valueMode = "margin"
+  // Multi-currency normalization: convert every conversion's value/currency to reportingCurrency
+  // before delivery so ad platforms optimise on comparable numbers across markets. Off by default.
+  reportingCurrency    String? // ISO 4217, e.g. "USD"; null → no normalization
+  fxMode               String   @default("off") // "off" | "on"
+  // Post-purchase & lifecycle events (orders/edited value delta, fulfillments/create → GA4). Opt-in.
+  lifecycleTracking    Boolean  @default(false)
+  // Google Ads Enhanced Conversions (direct upload via the Google Ads API). Gated: inert unless the
+  // GOOGLE_ADS_* / GOOGLE_OAUTH_* env vars are set AND the merchant has connected + configured below.
+  googleAdsEnabled     Boolean  @default(false)
+  googleAdsConfig      String   @default("{}") // JSON: { customerId, loginCustomerId, conversionActionId }
+  updatedAt            DateTime @updatedAt
 }
 
 // Per-destination delivery outcomes for the in-app health panel (success/failure of each server-side
@@ -108,10 +118,52 @@ model DeliveryLog {
   destination String // ga4 | meta | gtm | ga4_subscription | ga4_refund
   eventName   String
   ok          Boolean
-  detail      String?  // HTTP status or error summary
+  detail      String? // HTTP status or error summary
   createdAt   DateTime @default(now())
 
   @@index([shopDomain, createdAt])
+}
+
+// Durable retry queue for server-side sends. When a delivery fails (transient 5xx / network), the
+// PLATFORM-READY event is queued here (no secrets — those are re-read from TrackingSettings at retry
+// time, so credential rotation is safe) and re-sent by the /cron/tick worker with exponential backoff.
+// A row that never succeeds is dead-lettered (status = "dead") after the last attempt.
+model DeliveryOutbox {
+  id            String   @id @default(uuid())
+  shopDomain    String
+  destination   String // ga4 | meta | gtm | google_ads | ga4_refund ...
+  eventName     String
+  payload       String // JSON: the built platform event + { clientId, consent, ... } needed to re-send
+  attempts      Int      @default(0)
+  status        String   @default("pending") // pending | delivered | dead
+  lastDetail    String?
+  nextAttemptAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([shopDomain])
+}
+
+// Daily FX snapshot for multi-currency normalization. One row per (base, date); `rates` is a JSON map
+// of quote-currency → rate. Refreshed once/day by the cron from a free FX endpoint.
+model FxRate {
+  base      String
+  date      String // YYYY-MM-DD (UTC)
+  rates     String // JSON: { "EUR": 0.92, "GBP": 0.79, ... }
+  fetchedAt DateTime @default(now())
+
+  @@id([base, date])
+}
+
+// Per-shop alert dismissal, so a merchant can silence an in-app health banner. Re-armed after a
+// window (checked in computeHealth) so a recurring problem surfaces again rather than staying hidden.
+model AlertDismissal {
+  shopDomain  String
+  kind        String // capture_low | delivery_low | outbox_backlog | no_captures
+  dismissedAt DateTime @default(now())
+
+  @@id([shopDomain, kind])
 }
 
 // First-touch attribution per customer, captured on the FIRST order we see and replayed onto every
@@ -119,8 +171,8 @@ model DeliveryLog {
 // source/medium/campaign instead of looking like brand-new direct traffic (seo-subscription-tracking-v1 M2).
 model CustomerAttribution {
   shopDomain   String
-  customerKey  String   // customer gid/id, or hashed email when no customer is attached
-  clientId     String?  // GA4 client_id captured at first checkout (ga_client_id / cookie)
+  customerKey  String // customer gid/id, or hashed email when no customer is attached
+  clientId     String? // GA4 client_id captured at first checkout (ga_client_id / cookie)
   source       String?
   medium       String?
   campaign     String?
@@ -136,7 +188,7 @@ model CustomerAttribution {
 // events we delivered to >=1 destination; eventsSent/Failed are total server-side send outcomes.
 model TrackingDaily {
   shopDomain         String
-  date               String   // YYYY-MM-DD (UTC)
+  date               String // YYYY-MM-DD (UTC)
   ordersPaid         Int      @default(0)
   purchasesDelivered Int      @default(0)
   eventsSent         Int      @default(0)
@@ -229,7 +281,7 @@ model AuditSnapshot {
   id         String   @id @default(uuid())
   shopDomain String
   score      Int
-  issues     String   // JSON snapshot of issue counts
+  issues     String // JSON snapshot of issue counts
   createdAt  DateTime @default(now())
 
   @@index([shopDomain, createdAt])

@@ -79,6 +79,9 @@ export const loader = async ({ request }) => {
     botFiltering: t?.botFiltering ?? true,
     valueMode: t?.valueMode ?? "revenue",
     marginPct: t?.marginPct ?? 0,
+    reportingCurrency: t?.reportingCurrency ?? "",
+    fxMode: t?.fxMode ?? "off",
+    lifecycleTracking: t?.lifecycleTracking ?? false,
   };
 };
 
@@ -117,6 +120,9 @@ export const action = async ({ request }) => {
   // under-reporting trap. Only honour "margin" when a real percent is set; else stay on revenue.
   const marginPct = Math.max(0, Math.min(100, Math.round(Number(form.get("marginPct")) || 0)));
   const valueMode = form.get("valueMode") === "margin" && marginPct > 0 ? "margin" : "revenue";
+  // Multi-currency: only honour "on" when a reporting currency (3-letter ISO) is actually set.
+  const reportingCurrency = (form.get("reportingCurrency") || "").trim().toUpperCase().slice(0, 3) || null;
+  const fxMode = form.get("fxMode") === "on" && reportingCurrency ? "on" : "off";
   const data = {
     gtmId: form.get("gtmId") || null,
     ga4Id: form.get("ga4Id") || null,
@@ -130,6 +136,9 @@ export const action = async ({ request }) => {
     serverSide: form.get("serverSide") === "on",
     valueMode,
     marginPct,
+    reportingCurrency,
+    fxMode,
+    lifecycleTracking: form.get("lifecycleTracking") === "on",
     subscriptionTracking: form.get("subscriptionTracking") === "on",
     subscriptionConfig: JSON.stringify({
       eventName: form.get("sub_eventName") || "subscription_purchase",
@@ -227,6 +236,9 @@ export default function Tracking() {
   const [botFiltering, setBotFiltering] = useState(data.botFiltering);
   const [valueMode, setValueMode] = useState(data.valueMode);
   const [marginPct, setMarginPct] = useState(String(data.marginPct ?? 0));
+  const [fxOn, setFxOn] = useState(data.fxMode === "on");
+  const [reportingCurrency, setReportingCurrency] = useState(data.reportingCurrency ?? "");
+  const [lifecycleTracking, setLifecycleTracking] = useState(data.lifecycleTracking);
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
   const [subCfg, setSubCfg] = useState({
     eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
@@ -257,7 +269,7 @@ export default function Tracking() {
   const submit = useSubmit();
   const formRef = useRef(null);
   const snapshotOf = () =>
-    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, valueMode, marginPct, subTracking, subCfg, ids });
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, valueMode, marginPct, fxOn, reportingCurrency, lifecycleTracking, subTracking, subCfg, ids });
   const snapshot = snapshotOf();
   const baseline = useRef(snapshot);
   const dirty = snapshot !== baseline.current;
@@ -285,6 +297,11 @@ export default function Tracking() {
     setServerSide(data.serverSide);
     setRefundTracking(data.refundTracking);
     setBotFiltering(data.botFiltering);
+    setValueMode(data.valueMode);
+    setMarginPct(String(data.marginPct ?? 0));
+    setFxOn(data.fxMode === "on");
+    setReportingCurrency(data.reportingCurrency ?? "");
+    setLifecycleTracking(data.lifecycleTracking);
     setSubTracking(data.subscriptionTracking);
     setSubCfg({
       eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
@@ -578,6 +595,47 @@ export default function Tracking() {
                   </FormLayout.Group>
                 </FormLayout>
               ) : null}
+
+              <input type="hidden" name="lifecycleTracking" value={lifecycleTracking && serverSide ? "on" : ""} />
+              <Checkbox
+                label="Post-purchase & lifecycle events — order edits and fulfillments"
+                helpText={
+                  serverSide
+                    ? "Sends a GA4 refund/purchase adjustment when an order's total changes (orders/edited), and an order_fulfilled event on fulfillment — so post-purchase changes stay reflected in your analytics."
+                    : "Enable Server-side above first."
+                }
+                checked={lifecycleTracking && serverSide}
+                disabled={!serverSide}
+                onChange={setLifecycleTracking}
+              />
+
+              <input type="hidden" name="fxMode" value={fxOn && serverSide ? "on" : ""} />
+              <Checkbox
+                label="Normalise conversion value to a single reporting currency"
+                helpText={
+                  serverSide
+                    ? "Converts every conversion's value into the currency below before delivery, so ad platforms optimise on comparable numbers across markets. The original amount is kept as an 'original_value' / 'original_currency' param. Rates refresh daily."
+                    : "Enable Server-side above first."
+                }
+                checked={fxOn && serverSide}
+                disabled={!serverSide}
+                onChange={setFxOn}
+              />
+              {fxOn && serverSide ? (
+                <TextField
+                  label="Reporting currency"
+                  name="reportingCurrency"
+                  autoComplete="off"
+                  maxLength={3}
+                  value={reportingCurrency}
+                  onChange={(v) => setReportingCurrency(v.toUpperCase().slice(0, 3))}
+                  placeholder="USD"
+                  error={reportingCurrency.length === 3 ? undefined : "Enter a 3-letter ISO currency code (e.g. USD)."}
+                  helpText="ISO 4217 code, e.g. USD, EUR, GBP."
+                />
+              ) : (
+                <input type="hidden" name="reportingCurrency" value={reportingCurrency} />
+              )}
             </BlockStack>
           </Card>
 

@@ -62,6 +62,14 @@ api_version = "2026-04"
   uri = "/webhooks/orders/cancelled"
   topics = [ "orders/cancelled" ]
 
+  [[webhooks.subscriptions]]          # order_edited lifecycle event (post-purchase value change → GA4)
+  uri = "/webhooks/orders/edited"
+  topics = [ "orders/edited" ]
+
+  [[webhooks.subscriptions]]          # order_fulfilled lifecycle event (fulfillment → GA4)
+  uri = "/webhooks/fulfillments/create"
+  topics = [ "fulfillments/create" ]
+
 # App Proxy — the Web Pixel + SEO-engagement embed beacon to /apps/pixelify-seo/track, which Shopify
 # signs and forwards here. `url` is the deployed host (same origin as application_url); subpath/prefix
 # MUST match proxyPath in app/routes/app.tracking.jsx + the seo-engagement embed.

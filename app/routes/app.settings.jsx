@@ -10,6 +10,7 @@ import { buildSubscriptionEvent } from "../lib/subscription";
 import { recordDeliveries } from "../lib/delivery.server";
 import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
+import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, signState } from "../lib/google-ads.server";
 import { SectionHeading } from "../components/SectionHeading";
 
 const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM" };
@@ -18,6 +19,7 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop } });
   const keys = readServerSideKeys(tracking);
+  const gaCfg = googleAdsConfigOf(tracking);
   return {
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),
@@ -25,6 +27,11 @@ export const loader = async ({ request }) => {
     hasGa4Id: Boolean(tracking?.ga4Id),
     serverSideOn: Boolean(tracking?.serverSide),
     canTest: Boolean(tracking?.serverSide && tracking?.ga4Id && keys.ga4ApiSecret),
+    // Google Ads (gated): only surface the card when the operator has configured the env credentials.
+    googleAdsEnv: googleAdsEnvReady(),
+    googleAdsEnabled: Boolean(tracking?.googleAdsEnabled),
+    googleAdsConnected: await googleAdsConnected(session.shop),
+    googleAdsConfig: { customerId: gaCfg.customerId || "", loginCustomerId: gaCfg.loginCustomerId || "", conversionActionId: gaCfg.conversionActionId || "" },
   };
 };
 
@@ -90,6 +97,33 @@ export const action = async ({ request }) => {
     };
   }
 
+  // Google Ads (gated): connect (return the OAuth URL for the client to open), disconnect, or save config.
+  if (intent === "googleConnect") {
+    if (!googleAdsEnvReady()) return { gadsError: "Google Ads isn't enabled on this app (missing operator credentials)." };
+    const authUrl = googleAuthUrl(googleRedirectUri(), signState(shopDomain));
+    return { googleAuthUrl: authUrl };
+  }
+  if (intent === "googleDisconnect") {
+    await googleAdsDisconnect(shopDomain);
+    await logActivity(shopDomain, "Disconnected Google Ads");
+    return { ok: "Google account disconnected." };
+  }
+  if (intent === "googleConfig") {
+    const cfg = {
+      customerId: (form.get("gadsCustomerId") || "").replace(/\D/g, "") || null,
+      loginCustomerId: (form.get("gadsLoginCustomerId") || "").replace(/\D/g, "") || null,
+      conversionActionId: (form.get("gadsConversionActionId") || "").replace(/\D/g, "") || null,
+    };
+    const enabled = form.get("gadsEnabled") === "on" && !!cfg.customerId && !!cfg.conversionActionId;
+    await prisma.trackingSettings.upsert({
+      where: { shopDomain },
+      create: { shopDomain, googleAdsEnabled: enabled, googleAdsConfig: JSON.stringify(cfg) },
+      update: { googleAdsEnabled: enabled, googleAdsConfig: JSON.stringify(cfg) },
+    });
+    await logActivity(shopDomain, `Saved Google Ads config (enabled=${enabled})`);
+    return { ok: "Google Ads settings saved." };
+  }
+
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
   const keys = readServerSideKeys(tracking);
   if (form.get("ga4ApiSecret")) keys.ga4ApiSecret = form.get("ga4ApiSecret");
@@ -108,7 +142,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasGa4Id, serverSideOn, canTest } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -118,9 +152,18 @@ export default function Settings() {
   const [ga4Secret, setGa4Secret] = useState("");
   const [capiToken, setCapiToken] = useState("");
   const [gtmUrl, setGtmUrl] = useState(savedGtmUrl);
+  const [gads, setGads] = useState(googleAdsConfig || { customerId: "", loginCustomerId: "", conversionActionId: "" });
+  const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
+  const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
 
   const busy = nav.state !== "idle";
   const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl;
+
+  // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
+  // can't run inside the embedded iframe).
+  useEffect(() => {
+    if (actionData?.googleAuthUrl) window.open(actionData.googleAuthUrl, "_blank", "noopener");
+  }, [actionData]);
 
   useEffect(() => {
     if (dirty) shopify.saveBar.show("settings-save");
@@ -157,6 +200,8 @@ export default function Settings() {
         {actionData?.ok && <Banner tone="success">{actionData.ok}</Banner>}
         {actionData?.testOk && <Banner tone="success">{actionData.testOk}</Banner>}
         {actionData?.testError && <Banner tone="warning">{actionData.testError}</Banner>}
+        {actionData?.gadsError && <Banner tone="warning">{actionData.gadsError}</Banner>}
+        {actionData?.googleAuthUrl && <Banner tone="info">Opening Google sign-in in a new tab. After you connect, return here and set your customer ID + conversion action below.</Banner>}
 
         <Card>
           <BlockStack gap="300">
@@ -206,6 +251,51 @@ export default function Settings() {
             </Form>
           </BlockStack>
         </Card>
+
+        {googleAdsEnv && (
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeading
+                title="Google Ads Enhanced Conversions"
+                description="Upload purchases straight to Google Ads (matched on the on-page gclid and/or hashed customer data), in addition to the GA4 path. Connect your Google account, then set the customer ID and conversion action."
+              />
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone={gadsConnected ? "success" : "attention"}>{gadsConnected ? "Google connected" : "Not connected"}</Badge>
+                <Badge tone={gadsEnabled && gadsConnected ? "success" : undefined}>{gadsEnabled ? "Uploads on" : "Uploads off"}</Badge>
+              </InlineStack>
+              <InlineStack gap="200">
+                <Form method="post">
+                  <input type="hidden" name="intent" value="googleConnect" />
+                  <Button submit loading={busy}>{gadsConnected ? "Reconnect Google" : "Connect Google"}</Button>
+                </Form>
+                {gadsConnected && (
+                  <Form method="post">
+                    <input type="hidden" name="intent" value="googleDisconnect" />
+                    <Button submit tone="critical" variant="plain" loading={busy}>Disconnect</Button>
+                  </Form>
+                )}
+              </InlineStack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="googleConfig" />
+                <input type="hidden" name="gadsEnabled" value={gadsEnabled ? "on" : ""} />
+                <BlockStack gap="200">
+                  <TextField label="Customer ID" name="gadsCustomerId" autoComplete="off" value={gads.customerId} onChange={setGadsField("customerId")} placeholder="1234567890" helpText="Your Google Ads account ID (digits only, no dashes)." />
+                  <TextField label="Login customer ID (optional)" name="gadsLoginCustomerId" autoComplete="off" value={gads.loginCustomerId} onChange={setGadsField("loginCustomerId")} placeholder="Manager (MCC) account ID, if any" helpText="Only if you access this account through a manager (MCC) account." />
+                  <TextField label="Conversion action ID" name="gadsConversionActionId" autoComplete="off" value={gads.conversionActionId} onChange={setGadsField("conversionActionId")} placeholder="987654321" helpText="Google Ads → Goals → the conversion action's ID (the digits in its resource name)." />
+                  <InlineStack gap="200" blockAlign="center">
+                    <Button submit variant="primary" loading={busy}>Save Google Ads settings</Button>
+                    <Text as="span" tone="subdued" variant="bodySm">
+                      {gadsConnected ? "Uploads turn on once a customer ID + conversion action are saved." : "Connect your Google account first."}
+                    </Text>
+                  </InlineStack>
+                  <label>
+                    <input type="checkbox" checked={gadsEnabled} onChange={(e) => setGadsEnabled(e.target.checked)} disabled={!gadsConnected} /> Enable uploads
+                  </label>
+                </BlockStack>
+              </Form>
+            </BlockStack>
+          </Card>
+        )}
 
         <Card>
           <BlockStack gap="300">

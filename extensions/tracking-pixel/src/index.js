@@ -36,6 +36,21 @@ const utmFromHref = (href) => {
   }
 };
 
+// Google Ads click identifiers from the URL (gclid / gbraid / wbraid) — feed Enhanced Conversions.
+const clickIdsFromHref = (href) => {
+  try {
+    const u = new URL(href);
+    const out = {};
+    for (const k of ["gclid", "gbraid", "wbraid"]) {
+      const v = u.searchParams.get(k);
+      if (v) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
 // GA4 client_id from a `_ga` cookie value (GA1.1.<id>.<ts> → "<id>.<ts>"), so server-side events
 // stitch to the same GA4 user/session the on-page gtag created.
 const gaClientId = (gaCookie) => {
@@ -101,7 +116,12 @@ register(({ analytics, browser, settings, init }) => {
   const route = async (name, event) => {
     const wanted = platformsFor(name);
     const consent = consentState();
-    const granted = !cfg.consentMode || Boolean(consent && consent.analytics && consent.marketing);
+    // Split consent (Consent Mode v2): ANALYTICS consent gates GA4/GTM (a normal, cookie'd analytics
+    // hit); MARKETING consent separately gates Meta, the ad-personalisation signals and any PII.
+    // Requiring both before sending anything would withhold GA4 traffic from the very common
+    // "accept analytics, decline marketing" visitor — they'd never show as users in GA4.
+    const analyticsOk = !cfg.consentMode || Boolean(consent && consent.analytics);
+    const marketingOk = !cfg.consentMode || Boolean(consent && consent.marketing);
 
     const payload = {
       name,
@@ -112,13 +132,16 @@ register(({ analytics, browser, settings, init }) => {
       utm: utmFromHref(event?.context?.document?.location?.href),
       userAgent: event?.context?.navigator?.userAgent || null,
     };
+    // Record consent state so the server flags GA4/GTM hits (ad_user_data / ad_personalization) and
+    // skips Meta without marketing consent.
+    if (cfg.consentMode) payload.consent = consent || { analytics: false, marketing: false };
 
     // Debug mode: log every event in the storefront console regardless of platform IDs / consent,
     // so firing can be verified without configuring any destination tag.
     if (cfg.debug) {
       try {
         // eslint-disable-next-line no-console
-        console.log("[pixelify-tracking]", name, { consentGranted: granted, platforms: wanted, payload });
+        console.log("[pixelify-tracking]", name, { analyticsOk, marketingOk, platforms: wanted, payload });
       } catch {
         /* sandbox: never throw */
       }
@@ -126,26 +149,22 @@ register(({ analytics, browser, settings, init }) => {
 
     if (!wanted.length) return;
 
-    if (!granted) {
-      // No consent. Strict gate → suppress. Consent Mode v2 → send a flagged, PII-free hit so GA4
-      // can model the gap (Meta is skipped server-side without marketing consent).
+    if (!analyticsOk) {
+      // Analytics declined. Strict gate → suppress. Consent Mode v2 → send a flagged, PII-free hit
+      // (no identifiers) so GA4 can model the gap. Meta is skipped server-side regardless.
       if (!(cfg.consentMode && cfg.consentSignals)) return;
-      payload.consent = consent || { analytics: false, marketing: false };
       dispatch(event, payload, wanted);
       return;
     }
 
-    // Consent granted (or consentMode off): attach every identifier we can for match quality.
-    if (cfg.consentMode) payload.consent = consent || { analytics: true, marketing: true };
+    // Analytics granted → attach the analytics identifiers so the visitor is ONE GA4 user/session.
     try {
       const ga4Suffix = (cfg.ids.ga4 || "").replace(/^G-/, "");
-      const [ga, gaSession, shopifyY, shopifyS, fbp, fbc] = await Promise.all([
+      const [ga, gaSession, shopifyY, shopifyS] = await Promise.all([
         browser.cookie.get("_ga"),
         ga4Suffix ? browser.cookie.get(`_ga_${ga4Suffix}`) : Promise.resolve(null),
         browser.cookie.get("_shopify_y"),
         browser.cookie.get("_shopify_s"),
-        browser.cookie.get("_fbp"),
-        browser.cookie.get("_fbc"),
       ]);
       // client_id: GA's own (stitches to gtag if present), else Shopify's persistent visitor id so a
       // visitor is ONE user. Without a fallback the server derives a per-EVENT id and every event counts
@@ -154,12 +173,20 @@ register(({ analytics, browser, settings, init }) => {
       // session_id: GA's if present, else a stable number from Shopify's per-session cookie.
       const sid = gaSessionId(gaSession) || hashNum(shopifyS);
       if (sid) payload.sessionId = sid;
-      if (fbp) payload.fbp = fbp;
-      if (fbc) payload.fbc = fbc;
+      // Marketing identifiers only with marketing consent — they feed Meta / Google Ads matching.
+      if (marketingOk) {
+        const [fbp, fbc] = await Promise.all([browser.cookie.get("_fbp"), browser.cookie.get("_fbc")]);
+        if (fbp) payload.fbp = fbp;
+        if (fbc) payload.fbc = fbc;
+        // Google Ads click ids from the landing URL (Enhanced Conversions match key).
+        const clickIds = clickIdsFromHref(event?.context?.document?.location?.href);
+        if (Object.keys(clickIds).length) payload.clickIds = clickIds;
+      }
     } catch {
       /* cookies unavailable — server falls back to a stable synthetic client_id */
     }
-    if (customer) {
+    // Logged-in customer PII feeds Meta match quality → marketing consent only.
+    if (marketingOk && customer) {
       if (customer.id) payload.externalId = String(customer.id);
       if (customer.email) payload.email = customer.email;
       if (customer.phone) payload.phone = customer.phone;

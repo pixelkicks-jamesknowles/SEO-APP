@@ -8,6 +8,8 @@ import { fetchOrderSubscriptions } from "../lib/subscription.server";
 import { parseUtms, customerKey } from "../lib/attribution";
 import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
+import { enqueue } from "../lib/outbox.server";
+import { normalizeForShop } from "../lib/fx.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
@@ -101,11 +103,17 @@ export const action = async ({ request }) => {
     // Value-based optimisation applies to the purchase conversion only (subscription_purchase keeps its
     // raw discounted amount for the SEO team's revenue report).
     withValueMode(purchaseEvent.params, settings.valueMode, settings.marginPct);
+    // Multi-currency: normalize both events' amounts into the shop's reporting currency (no-op if off).
+    await Promise.all([normalizeForShop(settings, subEvent.params), normalizeForShop(settings, purchaseEvent.params)]);
 
     const [subRes, buyRes] = await Promise.all([
       sendGa4Event(settings, subEvent, { consent }),
       sendGa4Event(settings, purchaseEvent, { consent }),
     ]);
+    // Durable retry: queue either GA4 send that failed so /cron/tick re-sends it (recurring renewals
+    // have no pixel fallback, so a lost webhook purchase is a permanent miss otherwise).
+    if (!buyRes?.sent && buyRes?.job) await enqueue(shop, buyRes.job, buyRes.detail);
+    if (!subRes?.sent && subRes?.job) await enqueue(shop, subRes.job, subRes.detail);
     // Only the `purchase` counts toward Accuracy capture (isPurchase); subscription_purchase is a
     // supplementary custom event and must not double-count. NOTE: an *initial* subscription order also
     // fires the pixel's checkout_completed (Meta/GTM), which recordDeliveries counts too — so match
