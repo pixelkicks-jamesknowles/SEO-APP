@@ -10,7 +10,7 @@ import { buildSubscriptionEvent } from "../lib/subscription";
 import { recordDeliveries } from "../lib/delivery.server";
 import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
-import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, signState } from "../lib/google-ads.server";
+import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, createOAuthState } from "../lib/google-ads.server";
 import { SectionHeading } from "../components/SectionHeading";
 
 const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM" };
@@ -100,7 +100,7 @@ export const action = async ({ request }) => {
   // Google Ads (gated): connect (return the OAuth URL for the client to open), disconnect, or save config.
   if (intent === "googleConnect") {
     if (!googleAdsEnvReady()) return { gadsError: "Google Ads isn't enabled on this app (missing operator credentials)." };
-    const authUrl = googleAuthUrl(googleRedirectUri(), signState(shopDomain));
+    const authUrl = googleAuthUrl(googleRedirectUri(), await createOAuthState(shopDomain));
     return { googleAuthUrl: authUrl };
   }
   if (intent === "googleDisconnect") {

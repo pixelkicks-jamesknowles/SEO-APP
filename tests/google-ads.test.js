@@ -1,4 +1,8 @@
-import { buildClickConversion, googleAdsIdentifiers, formatGoogleDateTime, verifyState, signState } from "../app/lib/google-ads.server.js";
+/* eslint-disable import/first -- jest.mock() must be declared above the imports it intercepts */
+import { jest } from "@jest/globals";
+jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./helpers/prisma-mock").makePrismaMock() }));
+import prisma from "../app/db.server.js";
+import { buildClickConversion, googleAdsIdentifiers, formatGoogleDateTime, verifyState, signState, createOAuthState, consumeOAuthState } from "../app/lib/google-ads.server.js";
 import { sha256Hex } from "../app/lib/server-side.server.js";
 
 const config = { customerId: "1234567890", conversionActionId: "987654321" };
@@ -55,13 +59,71 @@ describe("signState / verifyState", () => {
   beforeAll(() => { process.env.SHOPIFY_API_SECRET = "test-secret"; });
   afterAll(() => { process.env.SHOPIFY_API_SECRET = OLD; });
 
-  test("round-trips a shop domain", () => {
+  test("round-trips shop + nonce", () => {
     const shop = "demo.myshopify.com";
-    expect(verifyState(signState(shop))).toBe(shop);
+    expect(verifyState(signState(shop, "nonce-abc"))).toEqual({ shop, nonce: "nonce-abc" });
   });
-  test("rejects a tampered state", () => {
-    expect(verifyState("Zm9v.deadbeef")).toBeNull();
+  test("rejects a tampered / malformed state", () => {
+    expect(verifyState("Zm9v.bm9uY2U.deadbeef")).toBeNull(); // valid shape, bad sig
+    expect(verifyState("Zm9v.deadbeef")).toBeNull(); // too few parts
     expect(verifyState("garbage")).toBeNull();
     expect(verifyState("")).toBeNull();
+  });
+  test("a nonce swap invalidates the signature", () => {
+    const state = signState("demo.myshopify.com", "nonce-1");
+    const [b, , sig] = state.split(".");
+    const forged = `${b}.${Buffer.from("nonce-2").toString("base64url")}.${sig}`;
+    expect(verifyState(forged)).toBeNull();
+  });
+});
+
+describe("createOAuthState / consumeOAuthState", () => {
+  const OLD = process.env.SHOPIFY_API_SECRET;
+  beforeAll(() => { process.env.SHOPIFY_API_SECRET = "test-secret"; });
+  afterAll(() => { process.env.SHOPIFY_API_SECRET = OLD; });
+  beforeEach(() => { jest.clearAllMocks(); });
+
+  test("mints a state that persists a nonce with a future expiry", async () => {
+    const state = await createOAuthState("demo.myshopify.com");
+    expect(prisma.shop.upsert).toHaveBeenCalledTimes(1);
+    const { create } = prisma.shop.upsert.mock.calls[0][0];
+    expect(create.googleOauthNonce).toBeTruthy();
+    expect(create.googleOauthNonceExpiresAt.getTime()).toBeGreaterThan(Date.now());
+    // the persisted nonce round-trips through the signed state
+    expect(verifyState(state)).toEqual({ shop: "demo.myshopify.com", nonce: create.googleOauthNonce });
+  });
+
+  test("consumes a valid, matching, unexpired state → shop, and clears the nonce", async () => {
+    const shop = "demo.myshopify.com";
+    const state = await createOAuthState(shop);
+    const nonce = verifyState(state).nonce;
+    prisma.shop.findUnique.mockResolvedValue({ shopDomain: shop, googleOauthNonce: nonce, googleOauthNonceExpiresAt: new Date(Date.now() + 60_000) });
+    expect(await consumeOAuthState(state)).toBe(shop);
+    // single-use: nonce cleared
+    expect(prisma.shop.update).toHaveBeenCalledWith({ where: { shopDomain: shop }, data: { googleOauthNonce: null, googleOauthNonceExpiresAt: null } });
+  });
+
+  test("rejects a replay (nonce already cleared)", async () => {
+    prisma.shop.findUnique.mockResolvedValue({ shopDomain: "demo.myshopify.com", googleOauthNonce: null, googleOauthNonceExpiresAt: null });
+    expect(await consumeOAuthState(signState("demo.myshopify.com", "whatever"))).toBeNull();
+  });
+
+  test("rejects an expired nonce", async () => {
+    const shop = "demo.myshopify.com";
+    const state = signState(shop, "nonce-x");
+    prisma.shop.findUnique.mockResolvedValue({ shopDomain: shop, googleOauthNonce: "nonce-x", googleOauthNonceExpiresAt: new Date(Date.now() - 1000) });
+    expect(await consumeOAuthState(state)).toBeNull();
+  });
+
+  test("rejects a nonce mismatch (valid HMAC, wrong stored nonce)", async () => {
+    const shop = "demo.myshopify.com";
+    const state = signState(shop, "nonce-a");
+    prisma.shop.findUnique.mockResolvedValue({ shopDomain: shop, googleOauthNonce: "nonce-b", googleOauthNonceExpiresAt: new Date(Date.now() + 60_000) });
+    expect(await consumeOAuthState(state)).toBeNull();
+  });
+
+  test("rejects a state with a bad signature without hitting the DB", async () => {
+    expect(await consumeOAuthState("garbage")).toBeNull();
+    expect(prisma.shop.findUnique).not.toHaveBeenCalled();
   });
 });

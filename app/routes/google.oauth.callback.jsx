@@ -1,7 +1,7 @@
 // Google OAuth callback (outside the embedded iframe — opened in a new tab from Settings). Verifies
 // the signed state → shop, exchanges the code for tokens, stores them (encrypted), and renders a tiny
 // "you can close this tab" page. NOT under /auth (Shopify's auth.$ catch-all owns that path).
-import { exchangeAndStore, verifyState, googleRedirectUri } from "../lib/google-ads.server";
+import { exchangeAndStore, consumeOAuthState, googleRedirectUri } from "../lib/google-ads.server";
 
 // Escape anything interpolated into the HTML below. `?error=` and the token-exchange error message are
 // attacker-influenced, so raw interpolation would be reflected XSS on this (standalone) page.
@@ -20,7 +20,7 @@ export const loader = async ({ request }) => {
   if (err) return page("Google connection cancelled", `Google returned: ${esc(err)}. You can close this tab and try again.`);
 
   const code = url.searchParams.get("code");
-  const shop = verifyState(url.searchParams.get("state"));
+  const shop = await consumeOAuthState(url.searchParams.get("state"));
   if (!code || !shop) return page("Couldn't connect", "The connection link was invalid or expired. Reopen it from the app's Settings page.");
 
   try {

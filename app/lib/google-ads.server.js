@@ -119,25 +119,71 @@ export function googleRedirectUri() {
   return `${base}/google/oauth/callback`;
 }
 
-/** Sign the shop into an OAuth `state` (HMAC on the app secret) so the callback can't be spoofed. */
-export function signState(shop) {
-  const sig = crypto.createHmac("sha256", process.env.SHOPIFY_API_SECRET || "").update(shop).digest("base64url").slice(0, 32);
-  return `${Buffer.from(shop).toString("base64url")}.${sig}`;
+// A signed OAuth `state` carries the shop AND a single-use nonce, HMAC'd on the app secret. The HMAC
+// stops an attacker forging a state for an arbitrary shop; the nonce (persisted server-side, cleared
+// on use — see createOAuthState/consumeOAuthState) makes the state unpredictable and non-replayable,
+// closing the login-CSRF hole a deterministic shop-only state would leave open.
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes to complete the Google consent screen
+
+function stateSig(shop, nonce) {
+  return crypto.createHmac("sha256", process.env.SHOPIFY_API_SECRET || "").update(`${shop}.${nonce}`).digest("base64url").slice(0, 32);
 }
 
-/** Verify a signed state → the shop domain, or null if tampered. */
+/** Sign (shop, nonce) into an OAuth `state`. Pure — persistence is done by createOAuthState. */
+export function signState(shop, nonce) {
+  return `${Buffer.from(shop).toString("base64url")}.${Buffer.from(String(nonce)).toString("base64url")}.${stateSig(shop, nonce)}`;
+}
+
+/** Verify a signed state's HMAC → { shop, nonce }, or null if tampered. Does NOT check the nonce
+ *  against storage (that's consumeOAuthState) — this is the pure, DB-free half. */
 export function verifyState(state) {
-  const [b, sig] = String(state || "").split(".");
-  if (!b || !sig) return null;
-  let shop;
+  const [b, n, sig] = String(state || "").split(".");
+  if (!b || !n || !sig) return null;
+  let shop, nonce;
   try {
     shop = Buffer.from(b, "base64url").toString("utf8");
+    nonce = Buffer.from(n, "base64url").toString("utf8");
   } catch {
     return null;
   }
-  const expected = crypto.createHmac("sha256", process.env.SHOPIFY_API_SECRET || "").update(shop).digest("base64url").slice(0, 32);
+  const expected = stateSig(shop, nonce);
   try {
-    return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)) ? shop : null;
+    return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)) ? { shop, nonce } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Begin a connect: mint a single-use nonce, persist it on the shop with a short TTL, and return the
+ *  signed `state` for the consent URL. Overwrites any prior pending nonce (only the latest is valid). */
+export async function createOAuthState(shopDomain) {
+  const nonce = crypto.randomBytes(16).toString("base64url");
+  const googleOauthNonceExpiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS);
+  await prisma.shop.upsert({
+    where: { shopDomain },
+    create: { shopDomain, googleOauthNonce: nonce, googleOauthNonceExpiresAt },
+    update: { googleOauthNonce: nonce, googleOauthNonceExpiresAt },
+  });
+  return signState(shopDomain, nonce);
+}
+
+/** Verify + consume a callback `state`: checks the HMAC, then that the nonce matches the one stored
+ *  for the shop and hasn't expired, then clears it (single-use). Returns the shop domain or null.
+ *  The nonce is always cleared once a valid-HMAC state is seen, so a state can't be replayed. */
+export async function consumeOAuthState(state) {
+  const parsed = verifyState(state);
+  if (!parsed) return null;
+  const { shop, nonce } = parsed;
+  const row = await prisma.shop.findUnique({ where: { shopDomain: shop } }).catch(() => null);
+  if (!row?.googleOauthNonce || !row.googleOauthNonceExpiresAt) return null;
+  // Single-use: clear the stored nonce now, before validating, so the same state can't be replayed
+  // (only a caller holding the app secret can reach here, so clearing on mismatch isn't a DoS vector).
+  await prisma.shop.update({ where: { shopDomain: shop }, data: { googleOauthNonce: null, googleOauthNonceExpiresAt: null } }).catch(() => {});
+  if (row.googleOauthNonceExpiresAt.getTime() < Date.now()) return null;
+  const a = Buffer.from(row.googleOauthNonce);
+  const b = Buffer.from(nonce);
+  try {
+    return a.length === b.length && crypto.timingSafeEqual(a, b) ? shop : null;
   } catch {
     return null;
   }

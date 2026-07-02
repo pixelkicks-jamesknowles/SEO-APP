@@ -34,12 +34,16 @@ model Session {
 // Per-shop install + billing snapshot. No business data — SEO config lives below;
 // products/collections/metafields stay in Shopify.
 model Shop {
-  shopDomain      String   @id
-  plan            String? // free | starter | growth | pro
-  subscriptionGid String?
-  billingStatus   String?
-  installedAt     DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  shopDomain                String    @id
+  plan                      String? // free | starter | growth | pro
+  subscriptionGid           String?
+  billingStatus             String?
+  installedAt               DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  // Single-use, short-TTL nonce for the Google Ads OAuth `state` (CSRF + replay protection). Minted
+  // when the connect flow starts, consumed (and cleared) by the callback. See google-ads.server.js.
+  googleOauthNonce          String?
+  googleOauthNonceExpiresAt DateTime?
 }
 
 // SEO core settings (spec seo-app-v1 §4). Templates + toggles are deterministic;
