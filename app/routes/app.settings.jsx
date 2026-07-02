@@ -8,15 +8,16 @@ import { logActivity } from "../lib/activity.server";
 import { fanOutServerSide, validateGa4Event, ga4EventFor } from "../lib/server-side.server";
 import { buildSubscriptionEvent } from "../lib/subscription";
 import { recordDeliveries } from "../lib/delivery.server";
+import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
+import { SectionHeading } from "../components/SectionHeading";
 
 const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM" };
-import { SectionHeading } from "../components/SectionHeading";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop } });
-  const keys = JSON.parse(tracking?.serverSideKeys || "{}");
+  const keys = readServerSideKeys(tracking);
   return {
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),
@@ -90,13 +91,13 @@ export const action = async ({ request }) => {
   }
 
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
-  const keys = JSON.parse(tracking?.serverSideKeys || "{}");
+  const keys = readServerSideKeys(tracking);
   if (form.get("ga4ApiSecret")) keys.ga4ApiSecret = form.get("ga4ApiSecret");
   if (form.get("metaCapiToken")) keys.metaCapiToken = form.get("metaCapiToken");
   const gtmServerUrl = (form.get("gtmServerUrl") || "").trim();
   if (gtmServerUrl) keys.gtmServerUrl = gtmServerUrl;
   else delete keys.gtmServerUrl;
-  const serverSideKeys = JSON.stringify(keys);
+  const serverSideKeys = writeServerSideKeys(keys);
   await prisma.trackingSettings.upsert({
     where: { shopDomain },
     create: { shopDomain, serverSideKeys },

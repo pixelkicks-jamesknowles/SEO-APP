@@ -20,6 +20,7 @@ import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { eventLabel } from "../lib/event-labels";
 import { pixelToken } from "../lib/pixel-token.server";
+import { readServerSideKeys } from "../lib/secrets.server";
 
 // Build the matrix[platform][event] = boolean map from saved settings.
 function buildMatrix(data) {
@@ -60,7 +61,7 @@ export const loader = async ({ request }) => {
   const t = await prisma.trackingSettings.findUnique({
     where: { shopDomain: session.shop },
   });
-  const keys = JSON.parse(t?.serverSideKeys || "{}");
+  const keys = readServerSideKeys(t);
   return {
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),

@@ -5,6 +5,7 @@
 // storefront. Pure builders (extractCommerce / ga4EventFor / metaEventFor / parseGaClientId /
 // sha256Hex / stableClientId) are exported and unit-tested without network IO.
 import crypto from "node:crypto";
+import { readServerSideKeys } from "./secrets.server";
 
 const META_API_VERSION = "v21.0";
 
@@ -332,12 +333,7 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
   const name = event?.name;
   if (!name) return [];
 
-  let keys = {};
-  try {
-    keys = JSON.parse(settings.serverSideKeys || "{}");
-  } catch {
-    keys = {};
-  }
+  const keys = readServerSideKeys(settings);
   let matrix = {};
   try {
     matrix = JSON.parse(settings.eventMatrix || "{}");
@@ -398,12 +394,7 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
 // Validate a GA4 event against the Measurement Protocol debug endpoint, which (unlike the real
 // endpoint, that always returns 204) reports payload problems. Returns { ok, messages }.
 export async function validateGa4Event(settings, { name, params = {}, clientId } = {}) {
-  let keys = {};
-  try {
-    keys = JSON.parse(settings?.serverSideKeys || "{}");
-  } catch {
-    return { ok: false, messages: ["Server-side credentials are not valid JSON."] };
-  }
+  const keys = readServerSideKeys(settings);
   if (!settings?.ga4Id) return { ok: false, messages: ["No GA4 measurement ID set."] };
   if (!keys.ga4ApiSecret) return { ok: false, messages: ["No GA4 Measurement Protocol secret saved."] };
   const url = `https://www.google-analytics.com/debug/mp/collect?measurement_id=${encodeURIComponent(settings.ga4Id)}&api_secret=${encodeURIComponent(keys.ga4ApiSecret)}`;
@@ -422,12 +413,7 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
 export async function sendGa4Event(settings, { name, params = {}, clientId } = {}, { consent } = {}) {
   if (!settings?.serverSide || !settings.ga4Id || !name) return { sent: false };
-  let keys = {};
-  try {
-    keys = JSON.parse(settings.serverSideKeys || "{}");
-  } catch {
-    return { sent: false };
-  }
+  const keys = readServerSideKeys(settings);
   if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
   // consent (optional): { analytics, marketing } → GA4 Consent Mode v2 flags, mirroring the pixel so
   // consent-declined server-side conversions are modeled rather than dropped. engagement_time_msec is

@@ -22,9 +22,15 @@ export const action = async ({ request }) => {
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
     if (!settings?.serverSide || !settings?.refundTracking) return new Response();
 
+    // Idempotency: mark processed UP FRONT (not after the send), so concurrent redeliveries can't both
+    // pass the seen-check and each fire a duplicate GA4 refund. The unique webhookId makes create() the
+    // atomic claim — losing the race means another delivery already owns this send, so bail.
     const dedupeKey = webhookId || `refund:${payload?.id}`;
-    const seen = await prisma.processedWebhook.findUnique({ where: { webhookId: dedupeKey } }).catch(() => null);
-    if (seen) return new Response();
+    const claimed = await prisma.processedWebhook
+      .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "refunds/create" } })
+      .then(() => true)
+      .catch(() => false);
+    if (!claimed) return new Response();
 
     const clientId = syntheticClientId(payload?.order_id);
     const event = buildRefundEvent(payload, { clientId });
@@ -46,9 +52,6 @@ export const action = async ({ request }) => {
       deliveries.push({ destination: "ga4_refund", eventName: subRefund.name, ok: sr.sent, detail: sr.detail });
     }
     await recordDeliveries(shop, deliveries);
-    await prisma.processedWebhook
-      .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "refunds/create" } })
-      .catch(() => {});
   } catch (e) {
     console.warn("[refunds/create] refund tracking:", e?.message || e);
   }

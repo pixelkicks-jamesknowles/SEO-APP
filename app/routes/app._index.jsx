@@ -2,6 +2,7 @@ import { useLoaderData } from "@remix-run/react";
 import { Page, Layout, Card, Text, BlockStack, InlineStack, Badge, Button, List, Banner } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { readServerSideKeys } from "../lib/secrets.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -12,7 +13,7 @@ export const loader = async ({ request }) => {
     prisma.recentEvent.count({ where: { shopDomain } }),
     prisma.deliveryLog.count({ where: { shopDomain, ok: false, createdAt: { gte: since } } }),
   ]);
-  const keys = JSON.parse(tracking?.serverSideKeys || "{}");
+  const keys = readServerSideKeys(tracking);
   const idKeys = ["gtmId", "ga4Id", "metaPixelId"];
   const platforms = tracking ? idKeys.filter((k) => tracking[k]).length : 0;
   const serverSide = tracking?.serverSide ?? false;
