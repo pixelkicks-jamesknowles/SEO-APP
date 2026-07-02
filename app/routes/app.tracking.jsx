@@ -437,13 +437,45 @@ export default function Tracking() {
             </BlockStack>
           </Card>
 
+          {/* Delivery — the master switch + delivery hygiene + the testing toggle. */}
           <Card>
             <BlockStack gap="300">
               <SectionHeading
-                title="Consent & delivery"
-                help="Gate every tag behind the Customer Privacy (consent) API, and optionally send events server-side via GA4 Measurement Protocol / Meta CAPI for accuracy and ad-blocker resilience."
+                title="Delivery"
+                help="How events reach your platforms. Server-side delivery (GA4 Measurement Protocol / Meta CAPI) is required for anything to send, and survives ad blockers, Safari ITP and the checkout sandbox."
               />
               {/* Polaris Checkbox doesn't post a form value, so a hidden input carries each toggle. */}
+              <input type="hidden" name="serverSide" value={serverSide ? "on" : ""} />
+              <Checkbox
+                label="Server-side delivery (Meta CAPI / GA4 Measurement Protocol)"
+                helpText="Required for anything to send. Events are delivered server-side for accuracy + ad-blocker resilience."
+                checked={serverSide}
+                onChange={setServerSide}
+              />
+              <input type="hidden" name="botFiltering" value={botFiltering ? "on" : ""} />
+              <Checkbox
+                label="Bot filtering - drop known bots and headless agents before delivery"
+                helpText="Stops crawler/headless traffic (often 20-30% of hits) from reaching ad platforms as fake conversions. Recommended on."
+                checked={botFiltering}
+                onChange={setBotFiltering}
+              />
+              <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
+              <Checkbox
+                label="Debug mode - log every event to the storefront browser console"
+                helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
+                checked={debug}
+                onChange={setDebug}
+              />
+            </BlockStack>
+          </Card>
+
+          {/* Consent */}
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeading
+                title="Consent"
+                help="Gate every tag behind the Customer Privacy (consent) API. Consent Mode v2 lets GA4 model conversions from visitors who decline."
+              />
               <input type="hidden" name="consentMode" value={consent ? "on" : ""} />
               <Checkbox
                 label="Consent mode - respect the Customer Privacy API (recommended)"
@@ -458,26 +490,15 @@ export default function Tracking() {
                 disabled={!consent}
                 onChange={setConsentSignals}
               />
-              <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
-              <Checkbox
-                label="Debug mode - log every event to the storefront browser console"
-                helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
-                checked={debug}
-                onChange={setDebug}
-              />
-              <input type="hidden" name="serverSide" value={serverSide ? "on" : ""} />
-              <Checkbox
-                label="Server-side delivery (Meta CAPI / GA4 Measurement Protocol)"
-                helpText="Required for anything to send. Events are delivered server-side for accuracy + ad-blocker resilience."
-                checked={serverSide}
-                onChange={setServerSide}
-              />
-              <input type="hidden" name="botFiltering" value={botFiltering ? "on" : ""} />
-              <Checkbox
-                label="Bot filtering - drop known bots and headless agents before delivery"
-                helpText="Stops crawler/headless traffic (often 20-30% of hits) from reaching ad platforms as fake conversions. Recommended on."
-                checked={botFiltering}
-                onChange={setBotFiltering}
+            </BlockStack>
+          </Card>
+
+          {/* Conversion tracking — value mode + server-side order conversions (need Server-side delivery). */}
+          <Card>
+            <BlockStack gap="300">
+              <SectionHeading
+                title="Conversion tracking"
+                help="What conversion value to optimise for, plus server-side purchase / refund / subscription events from order webhooks. Requires Server-side delivery."
               />
               <input type="hidden" name="valueMode" value={valueMode} />
               <input type="hidden" name="marginPct" value={marginPct || "0"} />
