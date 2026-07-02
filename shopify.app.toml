@@ -16,9 +16,10 @@ automatically_update_urls_on_dev = true
 # Tracking-only (SEO features archived to branch archive/seo-full-featured).
 #   write_pixels         — create/update the Web Pixel (webPixelCreate)
 #   read_customer_events — the Web Pixel subscribes to storefront customer events
-#   read_orders          — the orders/paid subscription_purchase webhook
+#   read_orders          — orders/paid + orders/edited + refunds/cancellations webhooks
+#   read_fulfillments    — the fulfillments/create lifecycle webhook (order_fulfilled)
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders"
+scopes = "write_pixels,read_customer_events,read_orders,read_fulfillments"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
