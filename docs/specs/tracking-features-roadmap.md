@@ -1,8 +1,14 @@
 # Tracking features roadmap — dev spec
 
-Future tracking features for Pixel Kicks Tracking, scoped against the current architecture so any can
-be picked up later. Not built yet. Prioritised for an agency running **B2B + DTC across many
-industries**.
+Remaining tracking features for Pixel Kicks Tracking, scoped against the current architecture so any
+can be picked up later. Prioritised for an agency running **B2B + DTC across many industries**. This
+doc tracks only work that is **not built yet**.
+
+> **Already shipped** (removed from this list): value-based conversions P1 (store-level margin %, via
+> `valueMode`/`marginPct` + `withValueMode`); multi-touch attribution (first- + last-touch + touch
+> count in `VisitorAttribution`, surfaced on the Attribution page); multi-currency normalization
+> (`fx.server.js`); subscription, refund/cancellation and post-purchase lifecycle tracking; durable
+> retry (`DeliveryOutbox`); bot filtering; and Google Ads Enhanced Conversions.
 
 ## Current architecture (reference)
 - **Capture:** Web Pixel (`extensions/tracking-pixel/src/index.js`) subscribes to the 8 standard
@@ -10,18 +16,21 @@ industries**.
   It attaches `clientId` (from `_ga`), `fbp`/`fbc`, `externalId`/`email`/`phone` (from
   `init.data.customer`), and a `consent` state. The **SEO-engagement embed** (`extensions/seo-engagement/`)
   runs in the storefront DOM and beacons synthetic events (`scroll`, `engaged_view`) to the same proxy.
-- **Proxy** (`app/routes/proxy.$type.jsx`): HMAC-verified app proxy → bot filter (`isBot`) →
-  `recordVisit` (first-touch) → `getFirstTouch` on checkout → `fanOutServerSide` → `recordDeliveries`.
-- **Fan-out** (`app/lib/server-side.server.js`): `fanOutServerSide(settings, event, {force})` is
+- **Ingest** (`app/lib/ingest.server.js`, hit by `proxy.$type.jsx` + `pixel.track.jsx`): bot filter
+  (`isBot`) → event-id dedup → `recordVisit` (first- + last-touch) → `getFirstTouch` on checkout →
+  `fanOutServerSide` → `recordDeliveries` → `enqueueFailures` (outbox).
+- **Fan-out** (`app/lib/server-side.server.js`): `fanOutServerSide(settings, event, {hooks})` is
   matrix-gated; builders `ga4EventFor` / `metaEventFor` / `metaUserData` / `extractCommerce` /
-  `ga4Consent`; senders `sendGa4` / `sendMeta` / `sendGtmServer` (return `{ok, detail}`). `GA4_MAP` /
-  `META_MAP` map event names.
+  `ga4Consent`; senders `sendGa4` / `sendMeta` / `sendGtmServer` (return `{ok, detail}`). Value-mode
+  (margin) via `withValueMode`; multi-currency via `fx.server.js` hooks.
 - **Webhooks:** `orders/paid` → `buildSubscriptionEvent` (`app/lib/subscription.js`); `refunds/create`
-  + `orders/cancelled` → `buildRefundEvent`/`buildCancellationEvent` (`app/lib/refund.js`); all via
-  `sendGa4Event` + `recordDeliveries`.
+  + `orders/cancelled` → refund/cancellation builders (`app/lib/refund.js`); `orders/edited` +
+  `fulfillments/create` lifecycle events; all via `sendGa4Event` + `recordDeliveries`.
+- **Durable delivery:** failed sends queue in `DeliveryOutbox`, retried with backoff by `/cron/tick`
+  (`app/lib/outbox.server.js`).
 - **Data:** `TrackingSettings` (ids, `eventMatrix` JSON, `serverSideKeys` JSON, toggles),
-  `VisitorAttribution` (first-touch by client_id), `CustomerAttribution` (first-touch by customer, for
-  subs/refunds), `TrackingDaily` (counters), `DeliveryLog`.
+  `VisitorAttribution` (first- + last-touch + touch count by client_id), `CustomerAttribution`
+  (first-touch by customer, for subs/refunds), `TrackingDaily` (counters), `DeliveryLog`, `FxRate`.
 - **Cross-cutting:** Consent Mode v2 (`consentMode`/`consentSignals`), bot filtering, dedup
   (transaction_id / event_id), Protected Customer Data granted (order PII), delivery health, Accuracy.
 
@@ -30,10 +39,9 @@ industries**.
 |---|---|---|---|
 | 1 | Custom & lead/form events | ★★★ fits every industry + B2B lead-gen | M |
 | 2 | B2B/DTC + company segmentation | ★★★ segment every store by model/account | M |
-| 3 | Value-based conversions (margin/LTV) | ★★ optimise for profit | S→L (phased) |
-| 4 | Multi-touch journey attribution | ★★ B2B long cycles | S–M |
-| 5 | Offline / sales-assisted conversions | ★★ B2B closes off-Shopify | L |
-| 6 | Customer-match audience sync | ★ account retargeting | L (Meta-first) |
+| 3 | Value-based conversions — accurate COGS + LTV (P2/P3) | ★★ optimise for profit | L |
+| 4 | Offline / sales-assisted conversions | ★★ B2B closes off-Shopify | L |
+| 5 | Customer-match audience sync | ★ account retargeting | L (Meta-first) |
 
 ---
 
@@ -92,44 +100,23 @@ convention). Add to:
 
 ---
 
-## 3. Value-based conversions (margin / LTV)
-**Summary.** Send **margin** or **lead/deal value** (not raw revenue) as the conversion `value`, so ad
-platforms optimise for profit. Matters for high-ticket B2B + thin/variable-margin verticals.
+## 3. Value-based conversions — accurate COGS + LTV
+**Shipped already (P1):** store-level margin % → `value = round(revenue × marginPct, 2)`, via the
+`valueMode`/`marginPct` settings and `withValueMode`. The remaining phases raise accuracy:
 
-**Phasing.**
-- **P1 (S):** store-level **margin %** setting → `value = round(revenue * marginPct, 2)` on purchase.
-  Approximate, no new scope.
 - **P2 (M):** per-line **COGS** via Admin API (`read_inventory`, InventoryItem `unit_cost`) →
   accurate margin = revenue − Σ(cost·qty).
 - **P3 (L):** **LTV** — needs historical orders per customer (`read_all_orders`); send predicted/actual
   LTV as value on first purchase.
 
-**Server-side.** New setting `valueMode` (`revenue` | `margin`) + `marginPct`. In `ga4EventFor` /
-`metaEventFor` / `buildSubscriptionEvent`, override `value` (and keep raw revenue as a `revenue` custom
-param for reference). Opt-in only.
+**Server-side.** Extend `withValueMode` with a `cogs`/`ltv` mode; keep raw revenue as a `revenue` custom
+param for reference. Opt-in only.
 
-**UI.** "Optimise for" select (Revenue | Margin) + margin % (P1) on Tracking/Settings.
-
-**Caveat.** Changing `value` changes ROAS reporting in Meta/GA4 — make it explicit and opt-in.
+**Caveat.** Changing `value` changes ROAS reporting in Meta/GA4 — keep it explicit and opt-in.
 
 ---
 
-## 4. Multi-touch journey attribution
-**Summary.** Extend cross-session first-touch to also carry **last-touch + touch count** (and an optional
-touch list) for B2B's long, multi-visit cycles.
-
-**Data model.** Extend `VisitorAttribution`: `lastSource/lastMedium/lastCampaign`, `touchCount Int`,
-optional `journey` JSON (capped to ~10 `{ts, source, medium, campaign}`). No PII.
-
-**Server-side.** `recordVisit` appends a touch + updates last-touch + increments `touchCount` (first-touch
-still never overwritten). `getFirstTouch` → `getJourney` returns `{ first, last, touchCount }`. `ga4EventFor`
-adds `last_source/last_medium/last_campaign/touch_count` params (register as GA4 custom dimensions).
-
-**Effort.** S–M. UI optional (automatic).
-
----
-
-## 5. Offline / sales-assisted conversions
+## 4. Offline / sales-assisted conversions
 **Summary.** Fire the conversion when a quote/lead is **won later** (B2B closes by phone/email), correlated
 back to the original click.
 
@@ -139,21 +126,21 @@ back to the original click.
 `event_time = win time`.
 
 **Data model.** New `Conversion`/`Lead` entity. **Destinations:** GA4 (stored client_id) + Meta CAPI
-(stored fbp/fbc/em, within Meta's ~7-day `event_time` window). Google Ads offline import needs the Google
-Ads API (developer token + OAuth) — out of scope per earlier decision.
+(stored fbp/fbc/em, within Meta's ~7-day `event_time` window) + Google Ads offline import (the Google Ads
+API path is already wired for Enhanced Conversions, so offline `ClickConversion` uploads can reuse it).
 
 **Effort.** L (entity + correlation + UI). **Caveat.** Document Meta's attribution window; long B2B cycles
 may exceed it.
 
 ---
 
-## 6. Customer-match audience sync
+## 5. Customer-match audience sync
 **Summary.** Push hashed customer/company lists to **Meta Custom Audiences** (and later Google Customer
 Match) for account retargeting / lookalikes.
 
-**Mechanism.** A scheduled job hashes new customers' email/phone and syncs to a configured Meta audience
-(Marketing API; needs `ads_management` + audience id + ad-account id). Google Customer Match needs the
-Google Ads API (heavy) — Meta-first.
+**Mechanism.** A scheduled job (reuse `/cron/tick`) hashes new customers' email/phone and syncs to a
+configured Meta audience (Marketing API; needs `ads_management` + audience id + ad-account id). Google
+Customer Match needs the Google Ads API (heavy) — Meta-first.
 
 **Data model.** Audience config in `serverSideKeys`; a cursor of last-synced customer. **Consent/PCD:**
 marketing consent required; hashed PII only; honour redaction webhooks.
@@ -164,10 +151,14 @@ marketing consent required; hashed PII only; honour redaction webhooks.
 
 ## Cross-cutting notes
 - **Consent Mode v2** must extend to every new event (gate Meta on marketing; GA4 flagged).
-- **Dedup**: any new client-or-server event needs a stable `event_id` (Meta) / `transaction_id` (GA4).
+- **Dedup**: any new client-or-server event needs a stable `event_id` (Meta) / `transaction_id` (GA4);
+  the ingest path already dedups replayed beacons on `event.id`.
 - **Delivery health + Accuracy**: route new sends through `recordDeliveries`; add counters to
   `TrackingDaily` where a match-rate makes sense (e.g., leads delivered vs leads captured).
-- **Scopes/PCD**: #2 (read_customers) and #3-P2/P3 (read_inventory / read_all_orders) add scopes →
+- **Scopes/PCD**: #2 (`read_customers`) and #3-P2/P3 (`read_inventory` / `read_all_orders`) add scopes →
   re-consent + a Protected Customer Data / review pass for the public app.
 - **Multi-store/agency**: consider a per-store config template/preset so these can be rolled out across
   many client stores quickly.
+- **Not-yet-built residual from shipped work**: the optional full **touch-list journey** (capped
+  `{ts, source, medium, campaign}[]` on `VisitorAttribution`) — the current model keeps first/last/count
+  but not the ordered list.

@@ -45,3 +45,7 @@ shopify app dev
 ```
 Turn it on: **Settings** → GA4 Measurement Protocol secret; **Tracking** → enable platforms, Server-side,
 and Subscription conversion tracking.
+
+## Deploy
+Production hosting (Railway), the sign-off step, background worker (`/cron/tick`) and per-client setup
+are in the **[deploy runbook](DEPLOY.md)**.

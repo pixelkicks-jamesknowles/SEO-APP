@@ -36,7 +36,7 @@ Set these in **Service → Variables**:
 | `DATABASE_URL` | Reference the Postgres plugin: `${{Postgres.DATABASE_URL}}` |
 | `SHOPIFY_API_KEY` | The app's client ID — `16f6275cefd68c235d54aa800f34c189` (also in `shopify.app.toml`) |
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
-| `SCOPES` | `write_pixels,read_customer_events,read_orders` (matches `shopify.app.toml`) |
+| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_fulfillments` (matches `shopify.app.toml`) |
 | `SHOPIFY_APP_URL` | Your Railway URL, e.g. `https://pixel-kicks-tracking.up.railway.app` (or a custom domain) |
 
 `NODE_ENV` and `PORT` are set by the Dockerfile/Railway — don't override. Migrations run
@@ -46,7 +46,7 @@ automatically on boot (`prisma migrate deploy` in the container CMD).
 > domain like `tracking.youragency.com`). You need it for `SHOPIFY_APP_URL` and Step 4.
 
 ## Step 3 — First deploy (server only)
-Trigger a deploy. Confirm in the logs: `prisma migrate deploy` applies the 4 migrations, then
+Trigger a deploy. Confirm in the logs: `prisma migrate deploy` applies the migrations, then
 `remix-serve` starts. Visiting `SHOPIFY_APP_URL` should return the Shopify auth screen (not a 500).
 At this point the **server** is live but Shopify doesn't know the URL yet — that's Step 4.
 
@@ -87,6 +87,14 @@ Edit `shopify.app.toml`:
    [[webhooks.subscriptions]]
    uri = "/webhooks/orders/cancelled"
    topics = [ "orders/cancelled" ]
+
+   [[webhooks.subscriptions]]          # post-purchase value change → GA4
+   uri = "/webhooks/orders/edited"
+   topics = [ "orders/edited" ]
+
+   [[webhooks.subscriptions]]          # order_fulfilled lifecycle event → GA4 (needs read_fulfillments)
+   uri = "/webhooks/fulfillments/create"
+   topics = [ "fulfillments/create" ]
 
    [app_proxy]
    url = "https://YOUR-RAILWAY-HOST/proxy"
