@@ -13,6 +13,8 @@ export const action = async ({ request, params }) => {
 
   const body = await request.json().catch(() => null);
   const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
-  await ingestEvent(shopDomain, body, clientIp);
+  // Best-effort, like /pixel/track: a post-delivery DB hiccup must not turn a successful send into a
+  // 500 (Shopify would retry the proxy call → a duplicate fan-out). Always ack with 204.
+  await ingestEvent(shopDomain, body, clientIp).catch(() => {});
   return new Response(null, { status: 204 });
 };

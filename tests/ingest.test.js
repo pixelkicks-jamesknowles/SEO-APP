@@ -131,6 +131,14 @@ test("id-less and timestamp-less event: no claim (won't risk dropping a legit re
   expect(gaCalls()).toHaveLength(1);
 });
 
+test("a delivery-log write failure doesn't abort ingest (send already happened)", async () => {
+  prisma.deliveryLog.createMany.mockRejectedValue(new Error("db down"));
+  await expect(
+    ingestEvent(SHOP, { event: { name: "page_viewed", clientId: "1.1", userAgent: "Mozilla/5.0 Chrome/120" } }, undefined),
+  ).resolves.toBeUndefined();
+  expect(gaCalls()).toHaveLength(1); // the fan-out still completed
+});
+
 test("UTM-tagged visit records first-touch attribution", async () => {
   await ingestEvent(
     SHOP,

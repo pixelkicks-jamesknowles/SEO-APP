@@ -28,15 +28,20 @@ export async function bumpDaily(shopDomain, fields) {
 // Record per-destination delivery outcomes (capped 300/shop) + roll up daily counters.
 export async function recordDeliveries(shopDomain, results) {
   if (!results?.length) return;
-  await prisma.deliveryLog.createMany({
-    data: results.map((r) => ({
-      shopDomain,
-      destination: r.destination,
-      eventName: r.eventName,
-      ok: !!r.ok,
-      detail: (r.detail || "").slice(0, 200) || null,
-    })),
-  });
+  // Best-effort like every other DB write in the ingest path: a health-log write failure must not abort
+  // ingestEvent after the delivery already happened (which would bubble a 500 to the proxy → retry →
+  // duplicate send).
+  await prisma.deliveryLog
+    .createMany({
+      data: results.map((r) => ({
+        shopDomain,
+        destination: r.destination,
+        eventName: r.eventName,
+        ok: !!r.ok,
+        detail: (r.detail || "").slice(0, 200) || null,
+      })),
+    })
+    .catch(() => {});
   // Enforce the ~300/shop cap. Pruning on every event would run findMany+deleteMany per storefront hit
   // (page_viewed fires on every pageview) — heavy write amplification on busy stores. Prune ~5% of the
   // time instead: the log stays bounded a little above the cap, at a fraction of the DB churn.
