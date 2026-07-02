@@ -93,6 +93,10 @@ model TrackingSettings {
   refundTracking Boolean  @default(false)
   // Drop known bot / headless traffic before server-side delivery (default on).
   botFiltering   Boolean  @default(true)
+  // Value-based optimisation: send margin (revenue × marginPct) as the conversion `value` instead of
+  // raw revenue, so ad platforms optimise for profit. Opt-in; raw revenue kept as a `revenue` param.
+  valueMode      String   @default("revenue") // "revenue" | "margin"
+  marginPct      Int      @default(0)          // whole percent, applied when valueMode = "margin"
   updatedAt      DateTime @updatedAt
 }
 

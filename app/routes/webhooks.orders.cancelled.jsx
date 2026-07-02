@@ -5,7 +5,7 @@ import prisma from "../db.server";
 import { buildCancellationEvent, buildSubscriptionCancellationEvent } from "../lib/refund";
 import { syntheticClientId } from "../lib/subscription";
 import { fetchOrderSubscriptions } from "../lib/subscription.server";
-import { sendGa4Event } from "../lib/server-side.server";
+import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { recordDeliveries } from "../lib/delivery.server";
 
 const refundEventName = (settings) => {
@@ -28,6 +28,8 @@ export const action = async ({ request }) => {
 
     const clientId = syntheticClientId(payload?.id);
     const event = buildCancellationEvent(payload, { clientId });
+    // Margin mode: reverse the same (margin) value the purchase sent.
+    withValueMode(event.params, settings.valueMode, settings.marginPct);
     const r = await sendGa4Event(settings, event);
     const deliveries = [{ destination: "ga4_refund", eventName: "refund", ok: r.sent, detail: r.detail }];
     // REST payloads carry no selling-plan data, so pull it from the Admin API and graft it onto the

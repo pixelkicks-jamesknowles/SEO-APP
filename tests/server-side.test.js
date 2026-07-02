@@ -5,6 +5,7 @@ import {
   metaUserData,
   dataLayerFor,
   ga4Consent,
+  withValueMode,
   extractCommerce,
   parseGaClientId,
   stableClientId,
@@ -92,6 +93,17 @@ describe("ga4EventFor", () => {
     expect(ev.params.search_term).toBe("running shoes");
   });
 
+  test("collection view → item_list_id/name + item index", () => {
+    const ev = ga4EventFor("collection_viewed", {
+      data: { collection: { id: 42, title: "Sale", productVariants: [{ sku: "A", price: { amount: "5" } }, { sku: "B", price: { amount: "6" } }] } },
+    });
+    expect(ev.name).toBe("view_item_list");
+    expect(ev.params.item_list_id).toBe("42");
+    expect(ev.params.item_list_name).toBe("Sale");
+    expect(ev.params.items[0].index).toBe(0);
+    expect(ev.params.items[1].index).toBe(1);
+  });
+
   test("forwards session_id (GA4 session attribution) when the pixel captured it", () => {
     const ev = ga4EventFor("checkout_completed", { ...checkoutEvent, sessionId: "1712345678" });
     expect(ev.params.session_id).toBe("1712345678");
@@ -171,6 +183,28 @@ describe("metaUserData (Event Match Quality identifiers)", () => {
     const ud = metaUserData({ name: "product_viewed", data: {}, email: "Early@Example.com", externalId: "c1" });
     expect(ud.em).toEqual([sha256Hex("early@example.com")]);
     expect(ud.external_id).toEqual([sha256Hex("c1")]);
+  });
+});
+
+describe("withValueMode (value-based optimisation)", () => {
+  test("margin mode: value becomes margin, raw kept as revenue", () => {
+    const p = { value: 31.67, currency: "GBP" };
+    withValueMode(p, "margin", 40);
+    expect(p.revenue).toBe(31.67);
+    expect(p.value).toBe(12.67); // round(31.67 * 40) / 100
+    expect(p.currency).toBe("GBP");
+  });
+  test("revenue mode is a no-op", () => {
+    const p = { value: 50 };
+    withValueMode(p, "revenue", 40);
+    expect(p.value).toBe(50);
+    expect(p.revenue).toBeUndefined();
+  });
+  test("no value → untouched", () => {
+    const p = { currency: "USD" };
+    withValueMode(p, "margin", 40);
+    expect(p.value).toBeUndefined();
+    expect(p.revenue).toBeUndefined();
   });
 });
 

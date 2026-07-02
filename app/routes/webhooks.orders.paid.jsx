@@ -6,7 +6,7 @@ import prisma from "../db.server";
 import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "../lib/subscription";
 import { fetchOrderSubscriptions } from "../lib/subscription.server";
 import { parseUtms, customerKey } from "../lib/attribution";
-import { sendGa4Event } from "../lib/server-side.server";
+import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
 
 export const action = async ({ request }) => {
@@ -91,6 +91,9 @@ export const action = async ({ request }) => {
     // and the regular purchase (whole order). Both server-side so they fire without the pixel/consent.
     const subEvent = buildSubscriptionEvent(payload, { eventName: cfg.eventName || "subscription_purchase", ...opts });
     const purchaseEvent = buildOrderPurchaseEvent(payload, opts);
+    // Value-based optimisation applies to the purchase conversion only (subscription_purchase keeps its
+    // raw discounted amount for the SEO team's revenue report).
+    withValueMode(purchaseEvent.params, settings.valueMode, settings.marginPct);
 
     const [subRes, buyRes] = await Promise.all([
       sendGa4Event(settings, subEvent, { consent }),

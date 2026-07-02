@@ -79,7 +79,7 @@ function toItem(v, quantity, fallbackName) {
  * Returns { currency, value, transactionId, items[] } — any field may be absent.
  */
 export function extractCommerce(name, data) {
-  const out = { currency: null, value: null, transactionId: null, items: [] };
+  const out = { currency: null, value: null, transactionId: null, items: [], listId: null, listName: null };
   if (!data) return out;
 
   if (name === "product_viewed") {
@@ -105,6 +105,8 @@ export function extractCommerce(name, data) {
     out.transactionId = co?.order?.id ? String(co.order.id) : co?.token || null;
   } else if (name === "collection_viewed") {
     out.items = (data.collection?.productVariants || []).map((v) => toItem(v, 1)).filter(Boolean);
+    out.listId = data.collection?.id ? String(data.collection.id) : null;
+    out.listName = data.collection?.title || null;
   } else if (name === "search_submitted") {
     out.items = (data.searchResult?.productVariants || []).map((v) => toItem(v, 1)).filter(Boolean);
   }
@@ -125,7 +127,12 @@ export function ga4EventFor(name, ev) {
   // transaction_id is GA4's purchase de-dup key — matching the native order id lets GA4 collapse
   // our server-side purchase with the Google & YouTube app's client-side one.
   if (name === "checkout_completed" && c.transactionId) params.transaction_id = c.transactionId;
-  if (c.items.length) params.items = c.items;
+  if (c.items.length) params.items = c.items.map((it, i) => ({ ...it, index: i }));
+  // Collection view → GA4 view_item_list with the list identity (populates list reports).
+  if (name === "collection_viewed") {
+    if (c.listId) params.item_list_id = c.listId;
+    if (c.listName) params.item_list_name = c.listName;
+  }
   // Internal site search → a complete GA4 `search` event (search_term is what SEO teams report on).
   if (name === "search_submitted") {
     const q = ev?.data?.searchResult?.query;
@@ -242,6 +249,16 @@ export function ga4Consent(consent) {
   return { ad_user_data: g(consent.marketing), ad_personalization: g(consent.marketing) };
 }
 
+/** Value-based optimisation: when valueMode is "margin", set `value` = value × marginPct% (2dp) and
+ *  keep the raw amount as `revenue`, so ad platforms optimise for profit. Mutates in place; works on a
+ *  GA4 params object or a Meta custom_data object. No-op unless margin mode + a numeric value. */
+export function withValueMode(target, valueMode, marginPct) {
+  if (valueMode !== "margin" || typeof target?.value !== "number") return target;
+  target.revenue = target.value;
+  target.value = Math.round(target.value * (Number(marginPct) || 0)) / 100;
+  return target;
+}
+
 async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, consent } = {}) {
   const base = endpoint || "https://www.google-analytics.com";
   const url = `${base.replace(/\/$/, "")}/mp/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`;
@@ -324,22 +341,29 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
         .catch((e) => ({ destination, eventName: name, ok: false, detail: e?.message || "error" })),
     );
 
+  // Build the GA4 event once; apply value-based optimisation (margin) to the purchase conversion.
+  const ga4Event = ga4EventFor(name, event);
+  const isPurchaseConv = name === "checkout_completed";
+  if (isPurchaseConv) withValueMode(ga4Event.params, settings.valueMode, settings.marginPct);
+
   // For a subscription checkout, the GA4 purchase comes from the orders/paid webhook (all items) plus
   // a scoped subscription_purchase — so suppress the pixel's GA4 purchase here to avoid doubling GA4
   // revenue. Meta/GTM below still fire (they aren't sent by the webhook and want the pixel's cookies).
-  const suppressGa4Purchase = name === "checkout_completed" && checkoutHasSubscription(event);
+  const suppressGa4Purchase = isPurchaseConv && checkoutHasSubscription(event);
   if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret && !suppressGa4Purchase) {
-    track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4EventFor(name, event), { consent }));
+    track("ga4", sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, ga4Event, { consent }));
   }
   if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {
-    track("meta", sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEventFor(name, event)));
+    const metaEvent = metaEventFor(name, event);
+    if (isPurchaseConv) withValueMode(metaEvent.custom_data, settings.valueMode, settings.marginPct);
+    track("meta", sendMeta(settings.metaPixelId, keys.metaCapiToken, metaEvent));
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
   if (wants("gtm") && settings.gtmId && keys.gtmServerUrl) {
     const mid = keys.gtmMeasurementId || settings.ga4Id;
     const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
     if (mid && secret) {
-      track("gtm", sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4EventFor(name, event), consent));
+      track("gtm", sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, ga4Event, consent));
     }
   }
   // Google Ads needs no integration here - the GA4 purchase above carries the correct client_id, so

@@ -75,6 +75,8 @@ export const loader = async ({ request }) => {
     pixelDebug: t?.pixelDebug ?? false,
     refundTracking: t?.refundTracking ?? false,
     botFiltering: t?.botFiltering ?? true,
+    valueMode: t?.valueMode ?? "revenue",
+    marginPct: t?.marginPct ?? 0,
   };
 };
 
@@ -120,6 +122,8 @@ export const action = async ({ request }) => {
     refundTracking: form.get("refundTracking") === "on",
     botFiltering: form.get("botFiltering") === "on",
     serverSide: form.get("serverSide") === "on",
+    valueMode: form.get("valueMode") === "margin" ? "margin" : "revenue",
+    marginPct: Math.max(0, Math.min(100, Math.round(Number(form.get("marginPct")) || 0))),
     subscriptionTracking: form.get("subscriptionTracking") === "on",
     subscriptionConfig: JSON.stringify({
       eventName: form.get("sub_eventName") || "subscription_purchase",
@@ -212,6 +216,8 @@ export default function Tracking() {
   const [serverSide, setServerSide] = useState(data.serverSide);
   const [refundTracking, setRefundTracking] = useState(data.refundTracking);
   const [botFiltering, setBotFiltering] = useState(data.botFiltering);
+  const [valueMode, setValueMode] = useState(data.valueMode);
+  const [marginPct, setMarginPct] = useState(String(data.marginPct ?? 0));
   const [subTracking, setSubTracking] = useState(data.subscriptionTracking);
   const [subCfg, setSubCfg] = useState({
     eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
@@ -242,7 +248,7 @@ export default function Tracking() {
   const submit = useSubmit();
   const formRef = useRef(null);
   const snapshotOf = () =>
-    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, subTracking, subCfg, ids });
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, valueMode, marginPct, subTracking, subCfg, ids });
   const snapshot = snapshotOf();
   const baseline = useRef(snapshot);
   const dirty = snapshot !== baseline.current;
@@ -473,6 +479,32 @@ export default function Tracking() {
                 checked={botFiltering}
                 onChange={setBotFiltering}
               />
+              <input type="hidden" name="valueMode" value={valueMode} />
+              <input type="hidden" name="marginPct" value={marginPct || "0"} />
+              <Select
+                label="Optimise conversions for"
+                options={[
+                  { label: "Revenue (order value)", value: "revenue" },
+                  { label: "Margin (profit)", value: "margin" },
+                ]}
+                value={valueMode}
+                onChange={setValueMode}
+                disabled={!serverSide}
+                helpText="Margin sends value × margin% as the conversion value (raw revenue kept as a 'revenue' param), so ad platforms optimise for profit. Applies to purchase + refund; subscription_purchase keeps raw revenue."
+              />
+              {valueMode === "margin" && serverSide ? (
+                <TextField
+                  label="Margin %"
+                  type="number"
+                  autoComplete="off"
+                  min={0}
+                  max={100}
+                  suffix="%"
+                  value={marginPct}
+                  onChange={setMarginPct}
+                  helpText="Whole percent, e.g. 40 = send 40% of revenue as the conversion value."
+                />
+              ) : null}
               <input type="hidden" name="refundTracking" value={refundTracking && serverSide ? "on" : ""} />
               <Checkbox
                 label="Refund & cancellation tracking - send a GA4 refund event from refunds/orders cancelled"
