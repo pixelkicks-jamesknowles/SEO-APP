@@ -10,11 +10,12 @@ import { drainOutbox } from "../lib/outbox.server";
 import { refreshFxRates } from "../lib/fx.server";
 
 // Constant-time compare of the presented secret against CRON_SECRET (same pattern as pixel-token).
+// Header-only: a `?key=` query param would land in access logs / referrers, so the secret must be
+// sent in the `x-cron-secret` request header (configure the Railway cron service accordingly).
 function authorized(request) {
   const expected = process.env.CRON_SECRET || "";
   if (!expected) return false; // not configured → endpoint is closed
-  const url = new URL(request.url);
-  const presented = request.headers.get("x-cron-secret") || url.searchParams.get("key") || "";
+  const presented = request.headers.get("x-cron-secret") || "";
   if (presented.length !== expected.length) return false;
   try {
     return crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(expected));
