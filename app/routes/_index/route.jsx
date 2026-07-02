@@ -84,7 +84,7 @@ export default function App() {
   );
 }
 
-// PushON accents (Night #050C44, Neon #FF530D) on a clean light background.
+// PushON accents (Night #050C44, Neon #005aff) on a clean light background.
 const CSS = `
   .pk {
     min-height: 100vh;
@@ -109,7 +109,7 @@ const CSS = `
     box-sizing: border-box;
   }
   .pk-title { font-size: 30px; font-weight: 800; margin: 0 0 10px; letter-spacing: -0.02em; line-height: 1.1; color: #050C44; }
-  .pk-accent { color: #FF530D; }
+  .pk-accent { color: #005aff; }
   .pk-tag { font-size: 15px; line-height: 1.55; color: #3a4163; margin: 0 0 8px; }
   .pk-sub { font-size: 13px; line-height: 1.5; color: #767ca0; margin: 0 0 30px; }
 
@@ -124,13 +124,13 @@ const CSS = `
     transition: border-color .15s, box-shadow .15s;
   }
   .pk-input::placeholder { color: #9aa0bb; }
-  .pk-input:focus { border-color: #FF530D; box-shadow: 0 0 0 3px rgba(255,83,13,0.18); }
+  .pk-input:focus { border-color: #005aff; box-shadow: 0 0 0 3px rgba(255,83,13,0.18); }
   .pk-btn {
     padding: 12px 22px; font-size: 14px; font-weight: 700;
-    color: #fff; background: #FF530D; border: 0; border-radius: 10px; cursor: pointer;
+    color: #fff; background: #005aff; border: 0; border-radius: 10px; cursor: pointer;
     transition: background .15s, transform .05s;
   }
-  .pk-btn:hover { background: #e7440a; }
+  .pk-btn:hover { background: #005aff; }
   .pk-btn:active { transform: translateY(1px); }
   .pk-hint { display: block; margin-top: 8px; font-size: 12px; color: #767ca0; }
 
@@ -141,7 +141,7 @@ const CSS = `
 
   .pk-footer { margin-top: 28px; padding-top: 20px; border-top: 1px solid #ECEEF4; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #767ca0; }
   .pk-link { color: #050C44; text-decoration: none; font-weight: 600; }
-  .pk-link:hover { color: #FF530D; text-decoration: underline; }
+  .pk-link:hover { color: #005aff; text-decoration: underline; }
   .pk-dot { color: #c3c7da; }
   .pk-credit { color: #767ca0; }
 
