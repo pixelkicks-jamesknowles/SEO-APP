@@ -12,17 +12,24 @@ import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
   try {
+    // Idempotency FIRST — Shopify can deliver a webhook more than once. This gate guards BOTH the
+    // ordersPaid counter (below) and the subscription send; without it, a redelivery double-counts
+    // ordersPaid and silently depresses the Accuracy match-rate denominator.
+    const dedupeKey = webhookId || `order:${payload?.id}`;
+    const seen = await prisma.processedWebhook.findUnique({ where: { webhookId: dedupeKey } }).catch(() => null);
+    if (seen) return new Response();
+    // Mark processed up front so a retry is a clean no-op. Best-effort (like the whole webhook): we
+    // always 200 so Shopify never retries, so there's no send worth un-marking on a later failure.
+    await prisma.processedWebhook
+      .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "orders/paid" } })
+      .catch(() => {}); // a race just means another delivery already claimed it
+
     // Count every paid order (Shopify's source of truth) for the Accuracy match-rate, regardless of
     // whether subscription tracking is on.
     await bumpDaily(shop, { ordersPaid: 1 });
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
     if (!settings?.serverSide || !settings?.subscriptionTracking) return new Response();
-
-    // Idempotency — dedupe on the Shopify webhook id (fallback: order id). Before the Admin API call.
-    const dedupeKey = webhookId || `order:${payload?.id}`;
-    const seen = await prisma.processedWebhook.findUnique({ where: { webhookId: dedupeKey } }).catch(() => null);
-    if (seen) return new Response();
 
     let cfg = {};
     try {
@@ -108,9 +115,6 @@ export const action = async ({ request }) => {
       { destination: "ga4", eventName: purchaseEvent.name, ok: !!buyRes?.sent, detail: buyRes?.detail || "", isPurchase: true },
       { destination: "ga4", eventName: subEvent.name, ok: !!subRes?.sent, detail: subRes?.detail || "" },
     ]);
-    await prisma.processedWebhook
-      .create({ data: { webhookId: dedupeKey, shopDomain: shop, topic: "orders/paid" } })
-      .catch(() => {}); // a race just means we already sent once
   } catch (e) {
     console.warn("[orders/paid] subscription tracking:", e?.message || e);
   }

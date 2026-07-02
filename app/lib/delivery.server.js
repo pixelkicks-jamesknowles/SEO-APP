@@ -2,6 +2,19 @@ import prisma from "../db.server";
 
 const today = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
+// Probabilistically trim a capped per-shop log (RecentEvent / DeliveryLog) back to `keep` newest rows.
+// Running this on every event would add findMany+deleteMany to every storefront hit; sampling keeps
+// the churn low while bounding the table just above the cap. Best-effort. Exported for reuse + tests.
+export async function pruneCap(model, shopDomain, keep, probability = 0.05) {
+  if (Math.random() >= probability) return;
+  const stale = await model
+    .findMany({ where: { shopDomain }, orderBy: { createdAt: "desc" }, skip: keep, select: { id: true } })
+    .catch(() => []);
+  if (stale.length) {
+    await model.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } }).catch(() => {});
+  }
+}
+
 // Increment per-day reconciliation counters for a shop (Accuracy dashboard). Best-effort.
 export async function bumpDaily(shopDomain, fields) {
   const date = today();
@@ -24,15 +37,10 @@ export async function recordDeliveries(shopDomain, results) {
       detail: (r.detail || "").slice(0, 200) || null,
     })),
   });
-  const stale = await prisma.deliveryLog.findMany({
-    where: { shopDomain },
-    orderBy: { createdAt: "desc" },
-    skip: 300,
-    select: { id: true },
-  });
-  if (stale.length) {
-    await prisma.deliveryLog.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } });
-  }
+  // Enforce the ~300/shop cap. Pruning on every event would run findMany+deleteMany per storefront hit
+  // (page_viewed fires on every pageview) — heavy write amplification on busy stores. Prune ~5% of the
+  // time instead: the log stays bounded a little above the cap, at a fraction of the DB churn.
+  await pruneCap(prisma.deliveryLog, shopDomain, 300);
 
   const ok = results.filter((r) => r.ok).length;
   const failed = results.length - ok;

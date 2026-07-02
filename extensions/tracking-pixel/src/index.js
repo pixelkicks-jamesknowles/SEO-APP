@@ -78,6 +78,8 @@ register(({ analytics, browser, settings, init }) => {
     // Both written by the app on save (webPixelCreate/Update).
     trackUrl: s.trackUrl || null,
     shop: s.shopDomain || null,
+    // Shop-scoped token the server checks so forged beacons for other shops are rejected.
+    token: s.trackToken || null,
     debug: s.debug === true,
   };
 
@@ -185,7 +187,7 @@ register(({ analytics, browser, settings, init }) => {
     try {
       // Cross-origin beacon to the app host (the sandbox allows this; same-origin is blocked). Shopify's
       // sandbox browser.sendBeacon resolves a Promise<boolean>; surface success/failure in debug.
-      const r = browser.sendBeacon(url, JSON.stringify({ shop: cfg.shop, platforms, event: payload }));
+      const r = browser.sendBeacon(url, JSON.stringify({ shop: cfg.shop, token: cfg.token, platforms, event: payload }));
       if (r && typeof r.then === "function") {
         r.then((ok) => dbg("beacon result", ok)).catch((e) => dbg("beacon rejected", e && e.message));
       }

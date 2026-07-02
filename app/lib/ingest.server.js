@@ -1,6 +1,6 @@
 import prisma from "../db.server";
 import { fanOutServerSide, isBot } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch } from "./delivery.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap } from "./delivery.server";
 import { redactEvent } from "./redact";
 
 // Shared storefront-event ingestion: bot-filter, buffer for Live events (PII-redacted), first-touch
@@ -26,15 +26,9 @@ export async function ingestEvent(shopDomain, body, clientIp) {
       payload: JSON.stringify({ platforms: body.platforms, event: redactEvent(body.event) }).slice(0, 4000),
     },
   });
-  const stale = await prisma.recentEvent.findMany({
-    where: { shopDomain },
-    orderBy: { createdAt: "desc" },
-    skip: 50,
-    select: { id: true },
-  });
-  if (stale.length) {
-    await prisma.recentEvent.deleteMany({ where: { id: { in: stale.map((s) => s.id) } } });
-  }
+  // Cap the buffer at ~50/shop. Prune probabilistically (not on every event) to avoid a
+  // findMany+deleteMany on every storefront hit — see pruneCap.
+  await pruneCap(prisma.recentEvent, shopDomain, 50);
 
   const event = { ...body.event, clientIp: body.event.clientIp || clientIp };
   // First-touch attribution: capture the source on UTM-tagged visits; on a conversion, attach the

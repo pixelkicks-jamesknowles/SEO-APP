@@ -19,6 +19,7 @@ import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { eventLabel } from "../lib/event-labels";
+import { pixelToken } from "../lib/pixel-token.server";
 
 // Build the matrix[platform][event] = boolean map from saved settings.
 function buildMatrix(data) {
@@ -111,6 +112,10 @@ export const action = async ({ request }) => {
       if (form.get(`evt:${key}:${e}`) === "on") eventMatrix[key].push(e);
     }
   }
+  // Margin mode with a 0% margin would send `value: 0` for every conversion — a silent
+  // under-reporting trap. Only honour "margin" when a real percent is set; else stay on revenue.
+  const marginPct = Math.max(0, Math.min(100, Math.round(Number(form.get("marginPct")) || 0)));
+  const valueMode = form.get("valueMode") === "margin" && marginPct > 0 ? "margin" : "revenue";
   const data = {
     gtmId: form.get("gtmId") || null,
     ga4Id: form.get("ga4Id") || null,
@@ -122,8 +127,8 @@ export const action = async ({ request }) => {
     refundTracking: form.get("refundTracking") === "on",
     botFiltering: form.get("botFiltering") === "on",
     serverSide: form.get("serverSide") === "on",
-    valueMode: form.get("valueMode") === "margin" ? "margin" : "revenue",
-    marginPct: Math.max(0, Math.min(100, Math.round(Number(form.get("marginPct")) || 0))),
+    valueMode,
+    marginPct,
     subscriptionTracking: form.get("subscriptionTracking") === "on",
     subscriptionConfig: JSON.stringify({
       eventName: form.get("sub_eventName") || "subscription_purchase",
@@ -159,6 +164,9 @@ export const action = async ({ request }) => {
       debug: data.pixelDebug,
       trackUrl: `${appHost}/pixel/track`,
       shopDomain,
+      // Shop-scoped token so /pixel/track (an unsigned cross-origin beacon) can reject forged events
+      // for arbitrary shops. See app/lib/pixel-token.server.js for what this does and doesn't buy.
+      trackToken: pixelToken(shopDomain),
     }),
   };
   const input = { settings: JSON.stringify(pixelSettings) };
@@ -523,6 +531,7 @@ export default function Tracking() {
                   suffix="%"
                   value={marginPct}
                   onChange={setMarginPct}
+                  error={Number(marginPct) > 0 ? undefined : "Set a margin above 0% — otherwise revenue is used."}
                   helpText="Whole percent, e.g. 40 = send 40% of revenue as the conversion value."
                 />
               ) : null}
