@@ -18,8 +18,11 @@ automatically_update_urls_on_dev = true
 #   read_customer_events — the Web Pixel subscribes to storefront customer events
 #   read_orders          — orders/paid + orders/edited + refunds/cancellations webhooks
 #   read_fulfillments    — the fulfillments/create lifecycle webhook (order_fulfilled)
+#   read_products        — read the SellingPlan deliveryPolicy (subscription cadence → subscription_interval);
+#                          the order's LineItemSellingPlan is under read_orders, but the SellingPlan object
+#                          itself is products-domain, so resolveIntervalDays needs read_products.
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders,read_fulfillments"
+scopes = "write_pixels,read_customer_events,read_orders,read_fulfillments,read_products"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
