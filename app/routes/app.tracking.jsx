@@ -221,7 +221,9 @@ export default function Tracking() {
   const data = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
-  const saving = nav.state === "submitting";
+  // Scope the loading state to THIS form's POST so an unrelated navigation/revalidation (or a
+  // fetcher elsewhere) doesn't flip the Save buttons into a spinner.
+  const saving = nav.state === "submitting" && nav.formMethod === "POST";
 
   // Local matrix state: matrix[platform][event] = boolean
   const [matrix, setMatrix] = useState(() => buildMatrix(data));
@@ -640,7 +642,8 @@ export default function Tracking() {
           </Card>
 
           <InlineStack align="end">
-            <Button submit variant="primary" loading={saving}>
+            {/* Same behaviour as the page/SaveBar actions: dirty-gated, routed through saveNow. */}
+            <Button variant="primary" onClick={saveNow} loading={saving} disabled={!dirty}>
               Save
             </Button>
           </InlineStack>

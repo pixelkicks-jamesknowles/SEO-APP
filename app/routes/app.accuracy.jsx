@@ -111,6 +111,9 @@ export default function Accuracy() {
                 />
                 <Divider />
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <caption style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>
+                    Daily paid orders, purchase events delivered, match rate and server-side send volume (last 30 days)
+                  </caption>
                   <thead>
                     <tr>
                       {["Date", "Orders", "Purchases", "Match", "Sent", "Failed"].map((h) => (
@@ -125,9 +128,9 @@ export default function Accuracy() {
                       const m = pct(d.purchasesDelivered, d.ordersPaid);
                       return (
                         <tr key={d.date} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
-                          <td style={{ padding: "var(--p-space-150) var(--p-space-300)" }}>
+                          <th scope="row" style={{ textAlign: "left", fontWeight: "normal", padding: "var(--p-space-150) var(--p-space-300)" }}>
                             <Text as="span" variant="bodyMd">{d.date}</Text>
-                          </td>
+                          </th>
                           <td style={{ textAlign: "right", padding: "var(--p-space-150) var(--p-space-300)" }}>{d.ordersPaid}</td>
                           <td style={{ textAlign: "right", padding: "var(--p-space-150) var(--p-space-300)" }}>{d.purchasesDelivered}</td>
                           <td style={{ textAlign: "right", padding: "var(--p-space-150) var(--p-space-300)" }}>

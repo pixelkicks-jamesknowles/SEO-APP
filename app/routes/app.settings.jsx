@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLoaderData, useActionData, Form, useNavigation, useSubmit } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, TextField, Button, Banner, Badge } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, TextField, Button, Banner, Badge, Checkbox } from "@shopify/polaris";
 import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -156,7 +156,10 @@ export default function Settings() {
   const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
   const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
 
-  const busy = nav.state !== "idle";
+  // Which form is submitting, if any — so each button only spins for its OWN submit (the page has six
+  // forms). The keys form carries no `intent`, so a submit without one is the "save-keys" action.
+  const submitting = nav.state !== "idle" ? (nav.formData?.get("intent") ?? "save-keys") : null;
+  const busy = (intent) => submitting === intent;
   const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl;
 
   // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
@@ -190,7 +193,7 @@ export default function Settings() {
     <Page
       title="Settings"
       subtitle="Server-side delivery credentials, and a live test."
-      primaryAction={{ content: "Save", onAction: saveNow, loading: busy, disabled: !dirty }}
+      primaryAction={{ content: "Save", onAction: saveNow, loading: busy("save-keys"), disabled: !dirty }}
     >
       <SaveBar id="settings-save">
         <button variant="primary" onClick={saveNow}>Save</button>
@@ -245,7 +248,7 @@ export default function Settings() {
                   helpText="Required for GTM events. A web container (GTM-XXXX) can't load in the pixel sandbox, so GTM events are delivered to your server-side GTM container's GA4 client. Leave blank to disable GTM."
                 />
                 <InlineStack>
-                  <Button submit variant="primary" loading={busy} disabled={!dirty}>Save keys</Button>
+                  <Button submit variant="primary" loading={busy("save-keys")} disabled={!dirty}>Save keys</Button>
                 </InlineStack>
               </BlockStack>
             </Form>
@@ -266,12 +269,12 @@ export default function Settings() {
               <InlineStack gap="200">
                 <Form method="post">
                   <input type="hidden" name="intent" value="googleConnect" />
-                  <Button submit loading={busy}>{gadsConnected ? "Reconnect Google" : "Connect Google"}</Button>
+                  <Button submit loading={busy("googleConnect")}>{gadsConnected ? "Reconnect Google" : "Connect Google"}</Button>
                 </Form>
                 {gadsConnected && (
                   <Form method="post">
                     <input type="hidden" name="intent" value="googleDisconnect" />
-                    <Button submit tone="critical" variant="plain" loading={busy}>Disconnect</Button>
+                    <Button submit tone="critical" variant="plain" loading={busy("googleDisconnect")}>Disconnect</Button>
                   </Form>
                 )}
               </InlineStack>
@@ -283,14 +286,17 @@ export default function Settings() {
                   <TextField label="Login customer ID (optional)" name="gadsLoginCustomerId" autoComplete="off" value={gads.loginCustomerId} onChange={setGadsField("loginCustomerId")} placeholder="Manager (MCC) account ID, if any" helpText="Only if you access this account through a manager (MCC) account." />
                   <TextField label="Conversion action ID" name="gadsConversionActionId" autoComplete="off" value={gads.conversionActionId} onChange={setGadsField("conversionActionId")} placeholder="987654321" helpText="Google Ads → Goals → the conversion action's ID (the digits in its resource name)." />
                   <InlineStack gap="200" blockAlign="center">
-                    <Button submit variant="primary" loading={busy}>Save Google Ads settings</Button>
+                    <Button submit variant="primary" loading={busy("googleConfig")}>Save Google Ads settings</Button>
                     <Text as="span" tone="subdued" variant="bodySm">
                       {gadsConnected ? "Uploads turn on once a customer ID + conversion action are saved." : "Connect your Google account first."}
                     </Text>
                   </InlineStack>
-                  <label>
-                    <input type="checkbox" checked={gadsEnabled} onChange={(e) => setGadsEnabled(e.target.checked)} disabled={!gadsConnected} /> Enable uploads
-                  </label>
+                  <Checkbox
+                    label="Enable uploads"
+                    checked={gadsEnabled}
+                    onChange={setGadsEnabled}
+                    disabled={!gadsConnected}
+                  />
                 </BlockStack>
               </Form>
             </BlockStack>
@@ -320,15 +326,15 @@ export default function Settings() {
             <InlineStack gap="200" blockAlign="center">
               <Form method="post">
                 <input type="hidden" name="intent" value="test" />
-                <Button submit loading={busy} disabled={!canTest}>Send test event</Button>
+                <Button submit loading={busy("test")} disabled={!canTest}>Send test event</Button>
               </Form>
               <Form method="post">
                 <input type="hidden" name="intent" value="test_purchase" />
-                <Button submit loading={busy} disabled={!canTest}>Send test purchase</Button>
+                <Button submit loading={busy("test_purchase")} disabled={!canTest}>Send test purchase</Button>
               </Form>
               <Form method="post">
                 <input type="hidden" name="intent" value="test_subscription" />
-                <Button submit loading={busy} disabled={!canTest}>Send test subscription</Button>
+                <Button submit loading={busy("test_subscription")} disabled={!canTest}>Send test subscription</Button>
               </Form>
               {!canTest && <Button url="/app/tracking" variant="plain">Open Tracking</Button>}
             </InlineStack>

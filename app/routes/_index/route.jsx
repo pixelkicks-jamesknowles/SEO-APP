@@ -124,13 +124,13 @@ const CSS = `
     transition: border-color .15s, box-shadow .15s;
   }
   .pk-input::placeholder { color: #9aa0bb; }
-  .pk-input:focus { border-color: #005aff; box-shadow: 0 0 0 3px rgba(255,83,13,0.18); }
+  .pk-input:focus { border-color: #005aff; box-shadow: 0 0 0 3px rgba(0,90,255,0.18); }
   .pk-btn {
     padding: 12px 22px; font-size: 14px; font-weight: 700;
     color: #fff; background: #005aff; border: 0; border-radius: 10px; cursor: pointer;
     transition: background .15s, transform .05s;
   }
-  .pk-btn:hover { background: #005aff; }
+  .pk-btn:hover { background: #0048cc; }
   .pk-btn:active { transform: translateY(1px); }
   .pk-hint { display: block; margin-top: 8px; font-size: 12px; color: #767ca0; }
 
