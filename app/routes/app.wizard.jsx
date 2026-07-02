@@ -1,5 +1,5 @@
 import { useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Button, Icon, Badge, Divider, TextField } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Button, Icon, Badge, Divider, TextField, Box } from "@shopify/polaris";
 import { CheckCircleIcon, AlertCircleIcon } from "@shopify/polaris-icons";
 import { useState } from "react";
 import { authenticate } from "../shopify.server";
@@ -49,16 +49,21 @@ export const action = async ({ request }) => {
 
 function Check({ item }) {
   return (
-    <InlineStack gap="200" blockAlign="center" wrap={false}>
-      <Icon source={item.ok ? CheckCircleIcon : AlertCircleIcon} tone={item.ok ? "success" : "critical"} />
-      <BlockStack gap="0">
-        <Text as="span" variant="bodyMd">{item.label}</Text>
-        {!item.ok && (
-          <Text as="span" variant="bodySm" tone="subdued">
-            {item.hint} <a href={item.url}>Fix</a>
-          </Text>
-        )}
-      </BlockStack>
+    <InlineStack gap="200" blockAlign="start" wrap={false} align="start">
+      <Box minWidth="20px">
+        <Icon source={item.ok ? CheckCircleIcon : AlertCircleIcon} tone={item.ok ? "success" : "critical"} />
+      </Box>
+      {/* width:100% makes the text column fill the row so the icon stays pinned left. */}
+      <Box width="100%">
+        <BlockStack gap="050">
+          <Text as="span" variant="bodyMd">{item.label}</Text>
+          {!item.ok && (
+            <Text as="span" variant="bodySm" tone="subdued">
+              {item.hint} <a href={item.url}>Fix</a>
+            </Text>
+          )}
+        </BlockStack>
+      </Box>
     </InlineStack>
   );
 }
