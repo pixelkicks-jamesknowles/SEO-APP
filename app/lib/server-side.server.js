@@ -31,6 +31,15 @@ const META_MAP = {
   payment_info_submitted: "AddPaymentInfo",
   checkout_completed: "Purchase",
 };
+// Common GA4 lead-event names → Meta standard events (better Meta optimisation than a custom name).
+// Custom events not listed here pass through as a Meta custom event of the same name.
+const CUSTOM_META_MAP = {
+  generate_lead: "Lead",
+  sign_up: "CompleteRegistration",
+  contact: "Contact",
+  submit_application: "SubmitApplication",
+  schedule: "Schedule",
+};
 
 const num = (v) => {
   const n = Number(v);
@@ -224,9 +233,14 @@ export function metaEventFor(name, ev) {
     custom_data.num_items = c.items.reduce((s, i) => s + i.quantity, 0);
   }
   if (name === "checkout_completed" && c.transactionId) custom_data.order_id = c.transactionId;
+  // Custom / lead events carry their value/currency in event.params (no commerce extraction).
+  if (ev?.custom && ev?.params) {
+    if (ev.params.value != null) custom_data.value = num(ev.params.value);
+    if (ev.params.currency) custom_data.currency = ev.params.currency;
+  }
 
   return {
-    event_name: META_MAP[name] || name,
+    event_name: META_MAP[name] || (ev?.custom && CUSTOM_META_MAP[name]) || name,
     event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
     // event_id = the Shopify event id, so Meta de-dups this against any client-side pixel hit.
     event_id: ev?.id ? String(ev.id) : undefined,
@@ -337,7 +351,9 @@ export async function fanOutServerSide(settings, event, { force = false } = {}) 
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
   const marketingOk = !consent || consent.marketing;
   // force (test sends) bypasses the per-event matrix, delivering to every configured destination.
-  const wants = (p) => force || platformWants(matrix, p, name);
+  // Custom / lead events (window.pxp.track) bypass the per-event matrix — they go to every configured
+  // destination (still credential- and consent-gated). force = test sends.
+  const wants = (p) => force || event?.custom || platformWants(matrix, p, name);
   const tasks = [];
   // Each task resolves to a delivery-health record { destination, eventName, ok, detail }.
   const track = (destination, promise) =>

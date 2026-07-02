@@ -125,6 +125,32 @@ describe("ga4EventFor", () => {
   });
 });
 
+describe("custom / lead events", () => {
+  test("GA4: custom event name passes through with merged params", () => {
+    const ev = ga4EventFor("generate_lead", {
+      custom: true,
+      params: { value: 50, currency: "GBP", form: "quote" },
+      context: { document: { location: { href: "https://shop/quote" } } },
+    });
+    expect(ev.name).toBe("generate_lead");
+    expect(ev.params.value).toBe(50);
+    expect(ev.params.currency).toBe("GBP");
+    expect(ev.params.form).toBe("quote");
+  });
+
+  test("Meta: known lead name maps to a standard event + carries value/currency", () => {
+    const ev = metaEventFor("generate_lead", { custom: true, params: { value: 50, currency: "GBP" } });
+    expect(ev.event_name).toBe("Lead");
+    expect(ev.custom_data.value).toBe(50);
+    expect(ev.custom_data.currency).toBe("GBP");
+  });
+
+  test("Meta: an unmapped custom name passes through as a custom event", () => {
+    const ev = metaEventFor("configurator_opened", { custom: true, params: {} });
+    expect(ev.event_name).toBe("configurator_opened");
+  });
+});
+
 describe("dataLayerFor", () => {
   test("restructures a purchase into the GTM event + ecommerce shape", () => {
     const dl = dataLayerFor("checkout_completed", checkoutEvent);

@@ -47,16 +47,18 @@
     var y = window.pageYOffset || h.scrollTop || 0;
     return Math.min(100, Math.max(0, Math.round((y / scrollable) * 100)));
   }
-  function send(name, params) {
+  function send(name, params, custom) {
     if (!analyticsAllowed() || !navigator.sendBeacon) return;
     try {
       navigator.sendBeacon(
         endpoint,
         JSON.stringify({
+          platforms: custom ? ["ga4", "gtm", "meta"] : undefined,
           event: {
             name: name,
             id: name + ":" + Date.now() + ":" + Math.random().toString(36).slice(2),
             timestamp: new Date().toISOString(),
+            custom: custom || undefined,
             params: params,
             clientId: gaClientId(),
             consent: consentState(),
@@ -68,6 +70,15 @@
       /* best-effort */
     }
   }
+
+  // Public API for the theme/agency to fire custom + lead events (RFQ, quote, sample request, finance
+  // application, etc.):  window.pxp.track("generate_lead", { value: 50, currency: "GBP", form: "quote" })
+  // Delivered server-side to every configured destination (GA4 as the given name / Meta mapped to a
+  // standard event where known). Respects analytics consent like the engagement signals above.
+  window.pxp = window.pxp || {};
+  window.pxp.track = function (name, params) {
+    if (typeof name === "string" && name) send(name, params && typeof params === "object" ? params : {}, true);
+  };
 
   // --- Scroll depth ---
   if (cfg.scroll) {

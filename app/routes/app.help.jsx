@@ -127,12 +127,15 @@ const SECTIONS = [
           → Events can lag ~24h, so check Realtime, not there.
         </List.Item>
         <List.Item>
-          <b>Custom parameters</b> (subscription_interval, source/medium/campaign, item_subscription, etc.)
-          show in <b>Realtime</b> immediately, but only appear in <b>standard reports and Explore</b> after
-          you register them as <b>Custom dimensions</b> (GA4 Admin → Custom definitions). That takes
-          ~24-48h and is <b>not retroactive</b> - so a blank parameter dropdown on the standard Events
-          report usually just means it is not registered yet, not that the data is missing. Standard fields
-          (value, currency, transaction_id, items) need no setup.
+          <b>Custom parameters</b> show in <b>Realtime</b> immediately, but only appear in <b>standard
+          reports and Explore</b> after you register them as <b>Custom dimensions</b> (GA4 Admin → Custom
+          definitions). That takes ~24-48h and is <b>not retroactive</b> - so a blank parameter dropdown on
+          the standard Events report usually just means it is not registered yet, not that the data is
+          missing. Standard fields (value, currency, transaction_id, items) need no setup. Worth
+          registering: <b>subscription_interval</b>, <b>subscription</b>, <b>first_source</b>,
+          {" "}<b>last_source</b>, <b>last_medium</b>, <b>last_campaign</b>, <b>touch_count</b>,
+          {" "}<b>revenue</b> (raw revenue when margin mode is on), and item-scoped <b>item_subscription</b>
+          {" "}/ <b>item_subscription_interval</b>.
         </List.Item>
       </List>
     ),
@@ -224,6 +227,41 @@ const SECTIONS = [
         complete GA4 <b>search</b> event with search_term. Enable the embed, then tick the engagement
         events on the Tracking page. These go to GA4 and GTM only, not Meta.
       </Text>
+    ),
+  },
+  {
+    id: "custom",
+    title: "Custom & lead events",
+    summary: "Track quote/RFQ, sample, finance and other non-standard conversions from your theme.",
+    body: (
+      <>
+        <Text as="p">
+          Beyond the standard events, your theme can fire arbitrary events - quote / RFQ, trade-account
+          request, sample request, finance application, configurator - with a one-line call, delivered
+          server-side to every configured destination. Requires the <b>Pixelify SEO engagement</b> app
+          embed (it exposes the API) and <b>Server-side delivery</b> on. Call it on form submit / click:
+        </Text>
+        <Box background="bg-surface-secondary" padding="300" borderRadius="200">
+          <Text as="p" fontWeight="medium" breakWord>
+            {`window.pxp.track("generate_lead", { value: 50, currency: "GBP", form: "quote" })`}
+          </Text>
+        </Box>
+        <List>
+          <List.Item>
+            <b>GA4</b>: fires an event with the name you pass - use a GA4 recommended name like{" "}
+            <b>generate_lead</b>. Any params (value, currency, custom fields) come through; register custom
+            params as custom dimensions to report on them.
+          </List.Item>
+          <List.Item>
+            <b>Meta</b>: common lead names map to Meta standard events (generate_lead → Lead, sign_up →
+            CompleteRegistration, contact → Contact); anything else fires as a Meta custom event of the
+            same name.
+          </List.Item>
+          <List.Item>
+            Consent and bot filtering apply. <b>Don&apos;t pass raw PII</b> (email/phone) in params.
+          </List.Item>
+        </List>
+      </>
     ),
   },
   {
