@@ -39,6 +39,9 @@ export async function resolveIntervalDays(shop, sellingPlanIds, { monthDays = 28
     const gids = ids.map((id) => (id.startsWith("gid://") ? id : `gid://shopify/SellingPlan/${id}`));
     const res = await client.graphql(PLAN_QUERY, { variables: { ids: gids } });
     const json = await res.json();
+    // TEMP DEBUG: reveal exactly what the delivery-policy lookup returns for third-party plans
+    // (Kaching/Recharge). Remove once subscription_interval resolves correctly.
+    console.warn("[subscription][debug] resolveIntervalDays gids:", gids, "raw:", JSON.stringify(json?.data ?? json?.errors ?? json));
     for (const node of json?.data?.nodes || []) {
       const dp = node?.deliveryPolicy;
       if (!node?.id || !dp?.interval) continue;
@@ -47,8 +50,9 @@ export async function resolveIntervalDays(shop, sellingPlanIds, { monthDays = 28
       const numeric = numId(node.id);
       if (days > 0 && numeric) out[numeric] = days;
     }
-  } catch {
-    /* best-effort — leave unresolved so the builder falls back to name-parsing */
+  } catch (e) {
+    // best-effort — leave unresolved so the builder falls back to name-parsing
+    console.warn("[subscription][debug] resolveIntervalDays threw:", e?.message || e);
   }
   return out;
 }
@@ -76,6 +80,9 @@ export async function fetchOrderSubscriptions(shop, orderId, { monthDays = 28 } 
       if (planId) planIds.push(planId);
     }
     const intervals = await resolveIntervalDays(shop, planIds, { monthDays, admin });
+    // TEMP DEBUG: shows whether the order line even carries a sellingPlanId (null → delivery-policy
+    // lookup is skipped and we fall back to name-parsing). Remove once interval resolves.
+    console.warn("[subscription][debug] fetchOrderSubscriptions planByLineId:", JSON.stringify(planByLineId), "intervals:", JSON.stringify(intervals));
     return { planByLineId, intervals };
   } catch (e) {
     // Surface this — a failure here means we can't detect subscriptions, so the webhook skips the
