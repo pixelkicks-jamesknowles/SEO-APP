@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Gate the standalone SEO-APP repo on tests + lint + schema validity. The app lives at the repo root
+# here (this file ships via `git subtree push --prefix=app/pixelify-seo seo-app main`), so no working
+# directory is needed. Tests mock Prisma + fetch, so no database or network is required — DATABASE_URL
+# is a throwaway that only satisfies `prisma validate`/`generate`'s env("DATABASE_URL").
+env:
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Prisma client + schema
+        run: |
+          npx prisma generate
+          npx prisma validate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
