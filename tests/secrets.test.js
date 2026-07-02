@@ -1,4 +1,4 @@
-import { encryptSecret, decryptSecret, readServerSideKeys, writeServerSideKeys } from "../app/lib/secrets.server.js";
+import { encryptSecret, decryptSecret, readServerSideKeys, writeServerSideKeys, assertEncryptionKey } from "../app/lib/secrets.server.js";
 
 describe("encryptSecret / decryptSecret", () => {
   test("round-trips a value", () => {
@@ -31,6 +31,54 @@ describe("encryptSecret / decryptSecret", () => {
     expect(encryptSecret("")).toBe("");
     expect(decryptSecret(null)).toBeNull();
     expect(decryptSecret("")).toBe("");
+  });
+});
+
+describe("assertEncryptionKey", () => {
+  const OLD_ENV = process.env;
+  let warn;
+  beforeEach(() => {
+    process.env = { ...OLD_ENV };
+    warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    process.env = OLD_ENV;
+    warn.mockRestore();
+  });
+
+  test("warns in production when the key is unset", () => {
+    delete process.env.APP_ENCRYPTION_KEY;
+    process.env.NODE_ENV = "production";
+    assertEncryptionKey();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("APP_ENCRYPTION_KEY is not set"));
+  });
+
+  test("stays silent outside production when unset", () => {
+    delete process.env.APP_ENCRYPTION_KEY;
+    process.env.NODE_ENV = "development";
+    assertEncryptionKey();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test("warns when the key is present but not 32 bytes", () => {
+    process.env.APP_ENCRYPTION_KEY = "too-short";
+    process.env.NODE_ENV = "production";
+    assertEncryptionKey();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a valid 32-byte key"));
+  });
+
+  test("stays silent for a valid 32-byte base64 key", () => {
+    process.env.APP_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+    process.env.NODE_ENV = "production";
+    assertEncryptionKey();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test("stays silent for a valid 64-char hex key", () => {
+    process.env.APP_ENCRYPTION_KEY = "a".repeat(64);
+    process.env.NODE_ENV = "production";
+    assertEncryptionKey();
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

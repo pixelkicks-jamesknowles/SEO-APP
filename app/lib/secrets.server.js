@@ -23,6 +23,32 @@ function key() {
   return crypto.createHash("sha256").update(`pixelify-secrets:${secret}`).digest();
 }
 
+/** Boot-time check for the credential-encryption key. Called once at startup. Warns (does not throw)
+ *  so an already-running deployment on the SHOPIFY_API_SECRET fallback isn't bricked — but surfaces
+ *  the two silent footguns: (1) no dedicated key → an app-secret rotation orphans all stored
+ *  credentials; (2) a present-but-malformed key silently falls through to the fallback. */
+export function assertEncryptionKey() {
+  const raw = process.env.APP_ENCRYPTION_KEY;
+  if (!raw) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn(
+        "[secrets] APP_ENCRYPTION_KEY is not set — merchant credentials are encrypted with a key " +
+          "derived from SHOPIFY_API_SECRET. Set a dedicated 32-byte APP_ENCRYPTION_KEY (base64 or " +
+          "hex) so credentials survive an app-secret rotation. See DEPLOY.md.",
+      );
+    }
+    return;
+  }
+  const buf = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
+  if (buf.length !== 32) {
+    console.warn(
+      `[secrets] APP_ENCRYPTION_KEY is set but is not a valid 32-byte key (got ${buf.length} bytes; ` +
+        "expected 32 as base64 or 64 hex chars). Falling back to the SHOPIFY_API_SECRET-derived key. " +
+        "Fix the value in DEPLOY.md's env vars.",
+    );
+  }
+}
+
 /** Encrypt a plaintext string → "enc:v1:<iv>:<tag>:<ciphertext>". null/empty pass through. */
 export function encryptSecret(plaintext) {
   if (plaintext == null || plaintext === "") return plaintext ?? null;

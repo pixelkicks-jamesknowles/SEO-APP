@@ -6,6 +6,10 @@ import {
 } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
+import { assertEncryptionKey } from "./lib/secrets.server";
+
+// Surface credential-encryption-key misconfiguration at boot (warns; never throws).
+assertEncryptionKey();
 
 // Free app — no billing. (SEO features + plan tiers archived to branch archive/seo-full-featured.)
 const shopify = shopifyApp({

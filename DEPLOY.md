@@ -4,10 +4,11 @@ This app is **multi-tenant** (everything is keyed by `shopDomain`), so **one Rai
 serves all your client stores**. You host it once, in one agency-owned Railway project, and install
 it onto each client store via custom distribution.
 
-> ⚠️ **Not signed off yet.** The repo is still in localhost mode: the webhook + `[app_proxy]` blocks
-> in `shopify.app.toml` are commented out so `npm run dev:local` (`shopify app dev --use-localhost`)
-> keeps working. **Step 4 below is the only thing that changes that** — do it only when you're ready
-> to deploy. Everything before Step 4 is safe to set up in advance.
+> ℹ️ **`shopify.app.toml` is already pointed at the live host.** `application_url`, `[auth].redirect_urls`,
+> the GDPR/webhook subscriptions, and `[app_proxy]` are all set to the deployed Railway origin — Step 4
+> has already been applied on this branch. It's kept below as reference for what that change entails and
+> for re-pointing to a new host. To run `npm run dev:local` again you must temporarily swap the host back
+> to a tunnel/localhost URL (Shopify rejects internal hosts for webhook + proxy URIs).
 
 Artifacts already in the repo: `Dockerfile`, `.dockerignore`, `railway.json`.
 
@@ -34,10 +35,11 @@ Set these in **Service → Variables**:
 | Variable | Value |
 | --- | --- |
 | `DATABASE_URL` | Reference the Postgres plugin: `${{Postgres.DATABASE_URL}}` |
-| `SHOPIFY_API_KEY` | The app's client ID — `16f6275cefd68c235d54aa800f34c189` (also in `shopify.app.toml`) |
+| `SHOPIFY_API_KEY` | The app's client ID — `31805a879297077ae82cb978d093a0d3` (the `client_id` in `shopify.app.toml`) |
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
 | `SCOPES` | `write_pixels,read_customer_events,read_orders,read_fulfillments` (matches `shopify.app.toml`) |
 | `SHOPIFY_APP_URL` | Your Railway URL, e.g. `https://pixel-kicks-tracking.up.railway.app` (or a custom domain) |
+| `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Set this before storing any server-side keys.** If omitted, credentials are encrypted with a key derived from `SHOPIFY_API_SECRET`, so rotating the app secret would orphan them (they'd decrypt to empty). Once set, don't change it or stored credentials must be re-entered. |
 
 `NODE_ENV` and `PORT` are set by the Dockerfile/Railway — don't override. Migrations run
 automatically on boot (`prisma migrate deploy` in the container CMD).
@@ -51,6 +53,9 @@ Trigger a deploy. Confirm in the logs: `prisma migrate deploy` applies the migra
 At this point the **server** is live but Shopify doesn't know the URL yet — that's Step 4.
 
 ## Step 4 — Point Shopify at the host  ⚠️ (the sign-off step — breaks localhost dev)
+> **Already applied on this branch** (see the note at the top). The steps below document what the live
+> config contains and how to re-point it — e.g. when moving to a new Railway host or a custom domain.
+
 Edit `shopify.app.toml`:
 
 1. Set the real host:
