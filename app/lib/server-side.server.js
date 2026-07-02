@@ -139,12 +139,18 @@ export function ga4EventFor(name, ev) {
     if (q) params.search_term = q;
   }
   for (const [k, utm] of Object.entries(ev?.utm || {})) params[k] = utm;
-  // First-touch attribution (from cross-session visitor history) so a conversion in a later/direct
-  // session keeps its original source. Sent as custom params (register as GA4 custom dimensions).
+  // Multi-touch attribution (from cross-session visitor history): first-touch (original source),
+  // last-touch (latest campaign visit) and touch count, so a conversion in a later/direct session
+  // keeps its journey. Sent as custom params (register as GA4 custom dimensions).
   if (ev?.firstTouch) {
-    if (ev.firstTouch.source) params.first_source = ev.firstTouch.source;
-    if (ev.firstTouch.medium) params.first_medium = ev.firstTouch.medium;
-    if (ev.firstTouch.campaign) params.first_campaign = ev.firstTouch.campaign;
+    const ft = ev.firstTouch;
+    if (ft.source) params.first_source = ft.source;
+    if (ft.medium) params.first_medium = ft.medium;
+    if (ft.campaign) params.first_campaign = ft.campaign;
+    if (ft.lastSource) params.last_source = ft.lastSource;
+    if (ft.lastMedium) params.last_medium = ft.lastMedium;
+    if (ft.lastCampaign) params.last_campaign = ft.lastCampaign;
+    if (ft.touchCount) params.touch_count = ft.touchCount;
   }
   // Synthetic theme events (scroll / engaged_view) carry their GA4 params directly.
   if (ev?.params && typeof ev.params === "object") Object.assign(params, ev.params);

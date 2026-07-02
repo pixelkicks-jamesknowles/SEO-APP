@@ -150,14 +150,18 @@ model TrackingDaily {
 // later/direct session still carries its original source/medium/campaign instead of looking direct.
 // Written only when a visit arrives with UTMs (first-touch is never overwritten).
 model VisitorAttribution {
-  shopDomain String
-  clientId   String
-  source     String?
-  medium     String?
-  campaign   String?
-  visits     Int      @default(1)
-  firstSeen  DateTime @default(now())
-  lastSeen   DateTime @updatedAt
+  shopDomain   String
+  clientId     String
+  // First-touch (never overwritten) + last-touch (latest UTM visit) for multi-touch attribution.
+  source       String?
+  medium       String?
+  campaign     String?
+  lastSource   String?
+  lastMedium   String?
+  lastCampaign String?
+  visits       Int      @default(1) // UTM-tagged visits = touch count
+  firstSeen    DateTime @default(now())
+  lastSeen     DateTime @updatedAt
 
   @@id([shopDomain, clientId])
 }

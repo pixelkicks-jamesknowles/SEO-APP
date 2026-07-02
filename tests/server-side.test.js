@@ -143,6 +143,18 @@ describe("dataLayerFor", () => {
     expect(ev.params.transaction_id).toBe("5500000000001"); // still a full purchase
   });
 
+  test("multi-touch: last-touch + touch count when present", () => {
+    const ev = ga4EventFor("checkout_completed", {
+      ...checkoutEvent,
+      firstTouch: { source: "google", medium: "organic", lastSource: "klaviyo", lastMedium: "email", lastCampaign: "winback", touchCount: 4 },
+    });
+    expect(ev.params.first_source).toBe("google");
+    expect(ev.params.last_source).toBe("klaviyo");
+    expect(ev.params.last_medium).toBe("email");
+    expect(ev.params.last_campaign).toBe("winback");
+    expect(ev.params.touch_count).toBe(4);
+  });
+
   test("scroll has no ecommerce block", () => {
     const dl = dataLayerFor("scroll", { params: { percent_scrolled: 50 } });
     expect(dl.event).toBe("scroll");

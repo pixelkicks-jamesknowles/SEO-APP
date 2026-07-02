@@ -60,8 +60,10 @@ export async function recordVisit(shopDomain, clientId, utm) {
   await prisma.visitorAttribution
     .upsert({
       where: { shopDomain_clientId: { shopDomain, clientId } },
-      create: { shopDomain, clientId, source, medium, campaign },
-      update: { visits: { increment: 1 } },
+      create: { shopDomain, clientId, source, medium, campaign, lastSource: source, lastMedium: medium, lastCampaign: campaign },
+      // First-touch (source/medium/campaign) is never overwritten; last-touch tracks the newest UTM
+      // visit and `visits` counts touches — together they give multi-touch attribution.
+      update: { visits: { increment: 1 }, lastSource: source, lastMedium: medium, lastCampaign: campaign },
     })
     .catch(() => {});
 }
@@ -73,5 +75,13 @@ export async function getFirstTouch(shopDomain, clientId) {
     .findUnique({ where: { shopDomain_clientId: { shopDomain, clientId } } })
     .catch(() => null);
   if (!row || (!row.source && !row.medium && !row.campaign)) return null;
-  return { source: row.source, medium: row.medium, campaign: row.campaign };
+  return {
+    source: row.source,
+    medium: row.medium,
+    campaign: row.campaign,
+    lastSource: row.lastSource,
+    lastMedium: row.lastMedium,
+    lastCampaign: row.lastCampaign,
+    touchCount: row.visits,
+  };
 }
