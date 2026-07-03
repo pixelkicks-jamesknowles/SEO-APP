@@ -326,6 +326,27 @@ model PendingPurchase {
   @@index([status, createdAt])
 }
 
+// A paid order awaiting deferred subscription processing. The orders/paid webhook must ACK Shopify in
+// well under its 5s timeout, but resolving the order's selling plans (Admin API), COGS, FX and firing
+// the two server-side GA4 conversions is slow — so the webhook only records this row (encrypted raw
+// order payload) and returns 200; /cron/tick's processPendingSubscriptions does the heavy work off the
+// hot path. Leased exactly like PendingPurchase so overlapping ticks can't double-send. Idempotent on
+// (shop, order). Rows are purged after they're processed.
+model PendingSubscription {
+  shopDomain  String
+  orderId     String // numeric order id
+  payload     String // encrypted JSON of the raw Shopify order (carries PII → encryptSecret at rest)
+  status      String    @default("pending") // pending | done | skipped | failed
+  detail      String? // what the pass did (sent / why skipped)
+  leaseToken  String?
+  leasedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@id([shopDomain, orderId])
+  @@index([status, createdAt])
+}
+
 // Which destinations already delivered a purchase for an order, keyed on the numeric order id. Upserted
 // from the storefront-pixel checkout_completed delivery (ingest) AND the subscription webhook purchase,
 // so the reconcile pass knows exactly which per-destination purchases are missing and fills only those.

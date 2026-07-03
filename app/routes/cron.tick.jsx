@@ -2,14 +2,16 @@
 // scheduler). Guarded by CRON_SECRET so it can't be triggered by the public. Each tick:
 //   1. drains the delivery outbox (retries failed server-side sends with backoff),
 //   2. reconciles pending purchases (backfills GA4/Meta for any order the pixel never captured),
-//   3. refreshes the daily FX snapshot (multi-currency normalization),
-//   4. purges stale rows (ProcessedWebhook / DeliveryLog / RecentEvent / finished outbox + purchases),
-//   5. pushes tracking-health alerts to each shop's configured webhook (cooldown-deduped).
+//   3. processes pending subscription orders (the deferred orders/paid conversion pipeline),
+//   4. refreshes the daily FX snapshot (multi-currency normalization),
+//   5. purges stale rows (ProcessedWebhook / DeliveryLog / RecentEvent / finished outbox + purchases),
+//   6. pushes tracking-health alerts to each shop's configured webhook (cooldown-deduped).
 // Idempotent + best-effort: safe to call as often as the cron fires; a slow destination never wedges it.
 import crypto from "node:crypto";
 import prisma from "../db.server";
 import { drainOutbox } from "../lib/outbox.server";
 import { reconcilePending } from "../lib/reconcile.server";
+import { processPendingSubscriptions } from "../lib/subscription-cron.server";
 import { refreshFxRates } from "../lib/fx.server";
 import { runAlerts } from "../lib/alerting.server";
 
@@ -41,6 +43,9 @@ async function purge() {
   // Closed reconciliation rows + their capture flags: kept a week for debugging, then dropped.
   out.pendingPurchases = (await prisma.pendingPurchase.deleteMany({ where: { status: { in: ["reconciled", "skipped"] }, updatedAt: { lt: daysAgo(7) } } }).catch(() => ({ count: 0 }))).count;
   out.purchaseCaptures = (await prisma.purchaseCapture.deleteMany({ where: { at: { lt: daysAgo(7) } } }).catch(() => ({ count: 0 }))).count;
+  // Processed subscription orders (done/skipped) carry an encrypted order payload — kept a week for
+  // debugging, then dropped so raw-order PII isn't retained indefinitely.
+  out.pendingSubscriptions = (await prisma.pendingSubscription.deleteMany({ where: { status: { in: ["done", "skipped"] }, updatedAt: { lt: daysAgo(7) } } }).catch(() => ({ count: 0 }))).count;
   return out;
 }
 
@@ -51,16 +56,19 @@ async function tick() {
   // can't outlive the per-batch lease and let an overlapping tick re-claim + re-send its rows. See the
   // LEASE_MINUTES invariant in outbox.server.js / reconcile.server.js. A backlog just drains over more
   // ticks (the cron fires frequently) rather than risking a double-send.
-  const [outbox, reconciled, fx, purged, alerts] = await Promise.all([
+  const [outbox, reconciled, subscriptions, fx, purged, alerts] = await Promise.all([
     drainOutbox({ limit: 40 }),
     reconcilePending({ graceMinutes: 20, limit: 8 }),
+    // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
+    // as soon as the next tick fires. Leased like reconcile so overlapping ticks can't double-send.
+    processPendingSubscriptions({ limit: 6 }),
     refreshFxRates(),
     purge(),
     // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
     // an alerting failure must never wedge the outbox/reconcile work above.
     runAlerts().catch(() => ({ shops: 0, notified: 0 })),
   ]);
-  return { ok: true, at: new Date().toISOString(), outbox, reconciled, fx, purged, alerts };
+  return { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts };
 }
 
 export const loader = async ({ request }) => {
