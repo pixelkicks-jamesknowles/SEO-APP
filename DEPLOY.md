@@ -145,14 +145,29 @@ For each installed store:
    the genuine Web Pixel `checkout_completed` → app proxy → fan-out, and `orders/paid`. Watch it in
    **Live events** + GA4 Realtime. (This is the only thing that exercises the checkout-capture leg.)
 
-## Step 8 — Background worker (required for retries + FX)
-There's no in-process scheduler, so a cron service must poke `/cron/tick`. It drains the delivery
-retry outbox (re-sends failed GA4/Meta/GTM/Google-Ads events with backoff), refreshes the daily FX
-snapshot, and purges stale rows.
+## Step 8 — Background worker (required for retries, reconciliation + FX)
+There's no in-process scheduler, so a cron service must poke `/cron/tick`. Each tick: drains the
+delivery retry outbox (re-sends failed GA4/Meta/GTM/Google-Ads events with backoff), reconciles pending
+purchases (backfills any order the storefront pixel never captured), finishes any subscription order
+whose immediate delivery didn't complete (see note below), refreshes the daily FX snapshot, purges
+stale rows, and pushes tracking-health alerts.
 1. Set `CRON_SECRET` on the app service (random string).
 2. Add a **Railway cron service** (or any external scheduler) that runs every ~5 minutes:
    `curl -fsS -H "x-cron-secret: $CRON_SECRET" https://<your-app>/cron/tick`
-3. Confirm: hitting it returns a JSON summary (`{ ok, outbox, fx, purged }`). Without the header it 403s.
+3. Confirm: hitting it returns a JSON summary
+   (`{ ok, outbox, reconciled, subscriptions, fx, purged, alerts }`). Without the header it 403s.
+
+**Subscription delivery is immediate, not cron-gated.** A paid subscription order is delivered to GA4
+server-side within seconds — right after the `orders/paid` webhook ACKs (the webhook records the order,
+then kicks off delivery in the background so it never blocks Shopify's 5s webhook timeout). The cron
+`subscriptions` pass is only a **backstop** that finishes an order if the app process was restarted
+mid-delivery, so the tick interval does **not** affect normal subscription latency — it only bounds how
+long a crash-interrupted order waits (≤ the 15-min processing lease). Keep the cron running (every 1–5
+min) as that safety net; for a subscription-heavy store, every 1 min tightens the worst case.
+
+> **Host caveat:** immediate delivery runs work *after* the HTTP response, which relies on a long-lived
+> process (Railway is fine). On a serverless host (Vercel/Lambda-style) post-response work is killed and
+> subscription delivery falls back to cron-interval latency — there, run the cron more frequently.
 
 ## Step 9 — Google Ads Enhanced Conversions (optional, gated)
 Stays completely hidden until configured, so skip unless wanted.

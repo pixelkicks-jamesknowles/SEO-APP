@@ -42,8 +42,11 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   tags, other apps) and warns before they double-count (`app/lib/pixel-scan.server.js`).
 - **Abuse guard** — the public ingest endpoints are rate-limited per shop + IP (`app/lib/ratelimit.server.js`).
 - **Subscription conversion tracking** — `orders/paid` → a GA4 `subscription_purchase` event with
-  `subscription` / `subscription_interval` (per-order + per-line) and the actual discounted amount
-  (`app/lib/subscription.js`; spec: [seo-subscription-tracking-v1](../../docs/specs/seo-subscription-tracking-v1.md)).
+  `subscription` / `subscription_interval` (per-order + per-line) and the actual discounted amount,
+  delivered server-side **within seconds** of the order (the webhook records + kicks off delivery so it
+  never blocks Shopify's 5s timeout; the cron pass is a durable backstop). `app/lib/subscription.js`
+  (pure builders) + `app/lib/subscription-cron.server.js` (record + immediate/backstop delivery); spec:
+  [seo-subscription-tracking-v1](../../docs/specs/seo-subscription-tracking-v1.md).
 
 ## Structure
 ```
@@ -52,8 +55,9 @@ app/routes/app.tracking.jsx  platform IDs · event matrix · consent · server-s
 app/routes/app.events.jsx    live event observability (RecentEvent)
 app/routes/app.settings.jsx  server-side keys (GA4 MP secret / Meta CAPI) + config export/import
 app/routes/proxy.$type.jsx   /track ingest → server-side fan-out
-app/routes/webhooks.orders.paid.jsx   subscription_purchase → GA4
-app/lib/{server-side,subscription,activity}.server.js · extensions/tracking-pixel
+app/routes/webhooks.orders.paid.jsx   records the paid order + kicks off immediate subscription delivery
+app/routes/cron.tick.jsx     background worker: outbox retries · reconcile · subscription backstop · FX · purge
+app/lib/{server-side,subscription,subscription-cron,activity}.server.js · extensions/tracking-pixel
 ```
 
 ## Free — billing defined but not enforced
