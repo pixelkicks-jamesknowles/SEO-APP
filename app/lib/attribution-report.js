@@ -47,6 +47,34 @@ export function firstVsLastShift(rows = []) {
   return shifted;
 }
 
+/** Group per-day channel revenue rows (ChannelRevenueDaily) by source/medium into totals + AOV, sorted
+ *  by revenue desc. Turns first-touch counts into first-touch REVENUE. Also returns the grand total. */
+export function byChannelRevenue(rows = []) {
+  const map = new Map();
+  let totalRevenue = 0;
+  let totalOrders = 0;
+  for (const r of rows) {
+    const key = labelOf(r.source, r.medium);
+    const agg = map.get(key) || { source: r.source || "(direct)", medium: r.medium || "(none)", orders: 0, revenue: 0 };
+    agg.orders += Number(r.orders) || 0;
+    agg.revenue += Number(r.revenue) || 0;
+    map.set(key, agg);
+    totalOrders += Number(r.orders) || 0;
+    totalRevenue += Number(r.revenue) || 0;
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  const channels = [...map.values()]
+    .map((a) => ({
+      ...a,
+      revenue: round(a.revenue),
+      aov: a.orders ? round(a.revenue / a.orders) : 0,
+      // Share of total attributed revenue — the headline "which channels drive sales" number.
+      share: totalRevenue > 0 ? Math.round((a.revenue / totalRevenue) * 100) : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+  return { channels, totalRevenue: round(totalRevenue), totalOrders };
+}
+
 /** Group subscription first-order attribution (CustomerAttribution) by source/medium, sorted desc. */
 export function bySubscriptionSource(rows = []) {
   const map = new Map();

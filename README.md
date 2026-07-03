@@ -12,14 +12,30 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 - **Client-side tracking** — GTM / GA4 / Meta / TikTok / Pinterest / Snap / Bing via the Web Pixel
   extension, with a per-platform event matrix, **consent-gated** through the Customer Privacy API.
 - **Server-side tracking** — GA4 Measurement Protocol + Meta CAPI + **TikTok Events API** + **Pinterest
-  Conversions API** + **Snapchat Conversions API** + **Reddit Conversions API** + **Klaviyo Events API**
-  (onsite browse/abandonment events) + server-side GTM fan-out from the `/track` beacon
-  (`app/lib/server-side.server.js`), matrix-gated per destination.
+  Conversions API** + **Snapchat Conversions API** + **Reddit Conversions API** + **LinkedIn Conversions
+  API** + **Microsoft UET (Bing) Conversions API** + **Klaviyo Events API** (onsite browse/abandonment
+  events) + server-side GTM fan-out from the `/track` beacon (`app/lib/server-side.server.js`),
+  matrix-gated per destination.
+- **Durable first-party id** — the app proxy sets an ITP-proof first-party cookie (`pxp_id`) via a
+  server `Set-Cookie` (not capped by Safari's 7-day script-cookie rule); the pixel + embed both carry it
+  as a stable `client_id`, so a returning visitor is ONE user across sessions even after `_ga` expires
+  (`app/lib/durable-id.server.js`). Requires the SEO-engagement theme embed (it mints the cookie).
+- **Identity stitching** — a graph links the durable id ↔ GA4 client id ↔ customer, so a conversion
+  inherits its visitor's original first-touch across sessions/devices instead of looking direct
+  (`app/lib/identity.server.js`).
 - **Purchase reconciliation** — `orders/paid` records every paid order; a delayed cron pass backfills the
   GA4/Meta purchase for any order the storefront pixel never delivered (ad blockers, ITP, sandbox
   failures), deduped so it can only fill a gap — pushing purchase capture toward 100%
   (`app/lib/reconcile.server.js`). The **revenue it recovers** (orders the pixel missed entirely) is
   totalled on the Accuracy page.
+- **Value-based optimisation** — send **margin** (flat %) or **true profit (COGS)** as the conversion
+  `value` instead of raw revenue, so ad platforms bid on profit. COGS reads each variant's Shopify
+  "Cost per item" server-side (`app/lib/cogs.server.js`); raw revenue is kept as a `revenue` param.
+- **Revenue by channel** — order revenue attributed to its first-touch source/medium, on the Attribution
+  page (`byChannelRevenue` in `app/lib/attribution-report.js`).
+- **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
+  drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
+  (`app/lib/alerting.server.js`).
 - **Match-quality diagnostics** — per-day Meta identifier coverage (email/phone/…) surfaced on the
   Accuracy page, so merchants can see and lift what drives Event Match Quality.
 - **Double-counting detection** — scans the storefront for existing trackers (native channels, theme

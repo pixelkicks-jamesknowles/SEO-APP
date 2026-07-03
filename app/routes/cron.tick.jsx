@@ -3,13 +3,15 @@
 //   1. drains the delivery outbox (retries failed server-side sends with backoff),
 //   2. reconciles pending purchases (backfills GA4/Meta for any order the pixel never captured),
 //   3. refreshes the daily FX snapshot (multi-currency normalization),
-//   4. purges stale rows (ProcessedWebhook / DeliveryLog / RecentEvent / finished outbox + purchases).
+//   4. purges stale rows (ProcessedWebhook / DeliveryLog / RecentEvent / finished outbox + purchases),
+//   5. pushes tracking-health alerts to each shop's configured webhook (cooldown-deduped).
 // Idempotent + best-effort: safe to call as often as the cron fires; a slow destination never wedges it.
 import crypto from "node:crypto";
 import prisma from "../db.server";
 import { drainOutbox } from "../lib/outbox.server";
 import { reconcilePending } from "../lib/reconcile.server";
 import { refreshFxRates } from "../lib/fx.server";
+import { runAlerts } from "../lib/alerting.server";
 
 // Constant-time compare of the presented secret against CRON_SECRET (same pattern as pixel-token).
 // Header-only: a `?key=` query param would land in access logs / referrers, so the secret must be
@@ -49,13 +51,16 @@ async function tick() {
   // can't outlive the per-batch lease and let an overlapping tick re-claim + re-send its rows. See the
   // LEASE_MINUTES invariant in outbox.server.js / reconcile.server.js. A backlog just drains over more
   // ticks (the cron fires frequently) rather than risking a double-send.
-  const [outbox, reconciled, fx, purged] = await Promise.all([
+  const [outbox, reconciled, fx, purged, alerts] = await Promise.all([
     drainOutbox({ limit: 40 }),
     reconcilePending({ graceMinutes: 20, limit: 8 }),
     refreshFxRates(),
     purge(),
+    // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
+    // an alerting failure must never wedge the outbox/reconcile work above.
+    runAlerts().catch(() => ({ shops: 0, notified: 0 })),
   ]);
-  return { ok: true, at: new Date().toISOString(), outbox, reconciled, fx, purged };
+  return { ok: true, at: new Date().toISOString(), outbox, reconciled, fx, purged, alerts };
 }
 
 export const loader = async ({ request }) => {

@@ -10,12 +10,13 @@ import { buildSubscriptionEvent } from "../lib/subscription";
 import { recordDeliveries } from "../lib/delivery.server";
 import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
 import { isSafePublicHttpsUrl } from "../lib/net.server";
+import { buildAlertPayload, postAlertWebhook } from "../lib/alerting.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
 import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, createOAuthState } from "../lib/google-ads.server";
 import { scanStorefront } from "../lib/pixel-scan.server";
 import { SectionHeading } from "../components/SectionHeading";
 
-const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM", tiktok: "TikTok", pinterest: "Pinterest", klaviyo: "Klaviyo", snapchat: "Snapchat", reddit: "Reddit" };
+const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM", tiktok: "TikTok", pinterest: "Pinterest", klaviyo: "Klaviyo", snapchat: "Snapchat", reddit: "Reddit", linkedin: "LinkedIn", bing: "Bing" };
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -32,6 +33,8 @@ export const loader = async ({ request }) => {
     hasSnapToken: Boolean(keys.snapAccessToken),
     hasRedditToken: Boolean(keys.redditAccessToken),
     hasLinkedinToken: Boolean(keys.linkedinAccessToken),
+    hasBingToken: Boolean(keys.bingCapiToken),
+    alertWebhookUrl: tracking?.alertWebhookUrl || "",
     pinterestAdAccountId: keys.pinterestAdAccountId || "",
     hasTiktokId: Boolean(tracking?.tiktokPixelId),
     hasPinterestId: Boolean(tracking?.pinterestId),
@@ -143,6 +146,18 @@ export const action = async ({ request }) => {
     return { ok: "Google Ads settings saved." };
   }
 
+  // Send a test alert to the saved webhook, so a merchant can confirm Slack/Discord/etc is wired before
+  // relying on it. Uses the CURRENTLY SAVED url (they save first, then test).
+  if (intent === "test-alert") {
+    const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
+    if (!tracking?.alertWebhookUrl) return { testError: "Save an alert webhook URL first, then send a test." };
+    const payload = buildAlertPayload(shopDomain, [
+      { severity: "warning", title: "Test alert from Pixel Kicks Tracking", body: "If you can see this, your tracking-health alerts are wired up correctly." },
+    ]);
+    const r = await postAlertWebhook(tracking.alertWebhookUrl, payload);
+    return r.ok ? { testOk: "Test alert sent — check your Slack/Discord/webhook channel." } : { testError: `Webhook responded ${r.detail}. Check the URL.` };
+  }
+
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
   const keys = readServerSideKeys(tracking);
   if (form.get("ga4ApiSecret")) keys.ga4ApiSecret = form.get("ga4ApiSecret");
@@ -153,6 +168,7 @@ export const action = async ({ request }) => {
   if (form.get("snapAccessToken")) keys.snapAccessToken = form.get("snapAccessToken");
   if (form.get("redditAccessToken")) keys.redditAccessToken = form.get("redditAccessToken");
   if (form.get("linkedinAccessToken")) keys.linkedinAccessToken = form.get("linkedinAccessToken");
+  if (form.get("bingCapiToken")) keys.bingCapiToken = form.get("bingCapiToken");
   const pinterestAdAccountId = (form.get("pinterestAdAccountId") || "").trim();
   if (pinterestAdAccountId) keys.pinterestAdAccountId = pinterestAdAccountId;
   else delete keys.pinterestAdAccountId;
@@ -164,18 +180,30 @@ export const action = async ({ request }) => {
     if (!safe.ok) return { error: `Server-side GTM URL ${safe.reason}.` };
     keys.gtmServerUrl = gtmServerUrl;
   } else delete keys.gtmServerUrl;
+  // Alert webhook (Slack/Discord/Teams/generic). Same SSRF guard as the sGTM URL — the cron POSTs to it.
+  const rawWebhook = (form.get("alertWebhookUrl") || "").trim();
+  let alertWebhookUrl = tracking?.alertWebhookUrl ?? null;
+  if (form.has("alertWebhookUrl")) {
+    if (rawWebhook) {
+      const safe = isSafePublicHttpsUrl(rawWebhook);
+      if (!safe.ok) return { error: `Alert webhook URL ${safe.reason}.` };
+      alertWebhookUrl = rawWebhook;
+    } else {
+      alertWebhookUrl = null; // cleared
+    }
+  }
   const serverSideKeys = writeServerSideKeys(keys);
   await prisma.trackingSettings.upsert({
     where: { shopDomain },
-    create: { shopDomain, serverSideKeys },
-    update: { serverSideKeys },
+    create: { shopDomain, serverSideKeys, alertWebhookUrl },
+    update: { serverSideKeys, alertWebhookUrl },
   });
   await logActivity(shopDomain, "Saved server-side keys");
   return { ok: "Server-side keys saved." };
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, hasKlaviyoKey, hasSnapToken, hasRedditToken, hasLinkedinToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, hasKlaviyoKey, hasSnapToken, hasRedditToken, hasLinkedinToken, hasBingToken, alertWebhookUrl: savedAlertWebhook, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -192,6 +220,8 @@ export default function Settings() {
   const [snapToken, setSnapToken] = useState("");
   const [redditToken, setRedditToken] = useState("");
   const [linkedinToken, setLinkedinToken] = useState("");
+  const [bingToken, setBingToken] = useState("");
+  const [alertWebhook, setAlertWebhook] = useState(savedAlertWebhook);
   const [gads, setGads] = useState(googleAdsConfig || { customerId: "", loginCustomerId: "", conversionActionId: "" });
   const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
   const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
@@ -200,7 +230,7 @@ export default function Settings() {
   // forms). The keys form carries no `intent`, so a submit without one is the "save-keys" action.
   const submitting = nav.state !== "idle" ? (nav.formData?.get("intent") ?? "save-keys") : null;
   const busy = (intent) => submitting === intent;
-  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct || klaviyoKey !== "" || snapToken !== "" || redditToken !== "" || linkedinToken !== "";
+  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct || klaviyoKey !== "" || snapToken !== "" || redditToken !== "" || linkedinToken !== "" || bingToken !== "";
 
   // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
   // can't run inside the embedded iframe).
@@ -222,6 +252,8 @@ export default function Settings() {
       setKlaviyoKey("");
       setSnapToken("");
       setRedditToken("");
+      setLinkedinToken("");
+      setBingToken("");
       shopify.saveBar.hide("settings-save");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,6 +269,8 @@ export default function Settings() {
     setKlaviyoKey("");
     setSnapToken("");
     setRedditToken("");
+    setLinkedinToken("");
+    setBingToken("");
   };
   const saveNow = () => submit(keysForm.current, { method: "post" });
 
@@ -274,6 +308,7 @@ export default function Settings() {
               <Badge tone={hasSnapToken ? "success" : undefined}>{hasSnapToken ? "Snapchat token saved" : "No Snapchat token"}</Badge>
               <Badge tone={hasRedditToken ? "success" : undefined}>{hasRedditToken ? "Reddit token saved" : "No Reddit token"}</Badge>
               <Badge tone={hasLinkedinToken ? "success" : undefined}>{hasLinkedinToken ? "LinkedIn token saved" : "No LinkedIn token"}</Badge>
+              <Badge tone={hasBingToken ? "success" : undefined}>{hasBingToken ? "Bing token saved" : "No Bing token"}</Badge>
             </InlineStack>
             <Form method="post" ref={keysForm}>
               <BlockStack gap="200">
@@ -369,11 +404,51 @@ export default function Settings() {
                   onChange={setLinkedinToken}
                   helpText={`${hasLinkedinToken ? "A token is saved. Enter a new one to replace it. " : ""}LinkedIn Campaign Manager, Analyze, Conversion tracking, create a conversion rule, then generate a Conversions API access token. Set the LinkedIn conversion ID and enable events on the Tracking page.`}
                 />
+                <TextField
+                  label="Microsoft UET (Bing) Conversions API token"
+                  name="bingCapiToken"
+                  autoComplete="off"
+                  type="password"
+                  value={bingToken}
+                  onChange={setBingToken}
+                  helpText={`${hasBingToken ? "A token is saved. Enter a new one to replace it. " : ""}Microsoft Advertising, UET tag setup, Use Conversions API, copy the token. Set the Bing UET tag ID and enable events on the Tracking page.`}
+                />
                 <InlineStack>
                   <Button submit variant="primary" loading={busy("save-keys")} disabled={!dirty}>Save keys</Button>
                 </InlineStack>
               </BlockStack>
             </Form>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <SectionHeading
+              title="Health alerts"
+              description="Get pinged when tracking breaks — dead-lettered conversions, a capture-rate drop, or a retry backlog piling up — without opening the app. The cron posts to your webhook, deduped to at most once a day per issue and re-armed when it clears."
+            />
+            <Form method="post">
+              <BlockStack gap="300">
+                <TextField
+                  label="Alert webhook URL"
+                  name="alertWebhookUrl"
+                  autoComplete="off"
+                  value={alertWebhook}
+                  onChange={setAlertWebhook}
+                  placeholder="https://hooks.slack.com/services/…"
+                  helpText="Slack, Discord (append /slack to the Discord webhook URL), Microsoft Teams, or any endpoint that accepts a JSON { text }. Clear the field and save to turn alerts off."
+                />
+                <InlineStack gap="200">
+                  <Button submit variant="primary">Save webhook</Button>
+                </InlineStack>
+              </BlockStack>
+            </Form>
+            {savedAlertWebhook && (
+              <Form method="post">
+                <input type="hidden" name="intent" value="test-alert" />
+                <Button submit loading={busy("test-alert")}>Send test alert</Button>
+              </Form>
+            )}
           </BlockStack>
         </Card>
 

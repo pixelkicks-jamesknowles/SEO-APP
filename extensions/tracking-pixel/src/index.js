@@ -56,7 +56,7 @@ const clickIdsFromHref = (href) => {
 const adClickIdsFromHref = (href) => {
   try {
     const u = new URL(href);
-    return { ttclid: u.searchParams.get("ttclid"), epik: u.searchParams.get("epik"), scclid: u.searchParams.get("ScCid") };
+    return { ttclid: u.searchParams.get("ttclid"), epik: u.searchParams.get("epik"), scclid: u.searchParams.get("ScCid"), msclkid: u.searchParams.get("msclkid") };
   } catch {
     return {};
   }
@@ -177,16 +177,21 @@ register(({ analytics, browser, settings, init }) => {
     // Analytics granted → attach the analytics identifiers so the visitor is ONE GA4 user/session.
     try {
       const ga4Suffix = (cfg.ids.ga4 || "").replace(/^G-/, "");
-      const [ga, gaSession, shopifyY, shopifyS] = await Promise.all([
+      const [ga, gaSession, shopifyY, shopifyS, durable] = await Promise.all([
         browser.cookie.get("_ga"),
         ga4Suffix ? browser.cookie.get(`_ga_${ga4Suffix}`) : Promise.resolve(null),
         browser.cookie.get("_shopify_y"),
         browser.cookie.get("_shopify_s"),
+        browser.cookie.get("pxp_id"), // durable first-party id set by the app-proxy (survives ITP)
       ]);
-      // client_id: GA's own (stitches to gtag if present), else Shopify's persistent visitor id so a
-      // visitor is ONE user. Without a fallback the server derives a per-EVENT id and every event counts
-      // as a new user/session in GA4 (there's no _ga cookie on a server-side-only storefront).
-      payload.clientId = gaClientId(ga) || shopifyY || null;
+      // Durable id (analytics-tier, anonymous) — carried through so the server can stitch identity + use
+      // it as a stable id for match (e.g. Bing anonymousId). Set by the SEO-engagement embed; absent
+      // until it has run at least once.
+      if (durable) payload.durableId = durable;
+      // client_id: GA's own (stitches to gtag if present), else the durable first-party id (ITP-proof, so
+      // ONE user across sessions), else Shopify's persistent visitor id. Without a fallback the server
+      // derives a per-EVENT id and every event counts as a new user/session in GA4.
+      payload.clientId = gaClientId(ga) || durable || shopifyY || null;
       // session_id: GA's if present, else a stable number from Shopify's per-session cookie.
       const sid = gaSessionId(gaSession) || hashNum(shopifyS);
       if (sid) payload.sessionId = sid;
@@ -213,6 +218,7 @@ register(({ analytics, browser, settings, init }) => {
         if (adClickIds.ttclid) payload.ttclid = adClickIds.ttclid;
         if (adClickIds.epik && !payload.epik) payload.epik = adClickIds.epik;
         if (adClickIds.scclid) payload.scclid = adClickIds.scclid;
+        if (adClickIds.msclkid) payload.msclkid = adClickIds.msclkid; // Microsoft/Bing last-click id
       }
     } catch {
       /* cookies unavailable — server falls back to a stable synthetic client_id */

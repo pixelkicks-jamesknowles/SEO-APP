@@ -4,7 +4,18 @@
  * `scroll` / `engaged_view` events. Consent-gated; never throws. ~1KB, no dependencies. */
 (function () {
   var cfg = window.__pxpSeo || {};
-  var endpoint = (cfg.base || "/apps/pixelify-seo").replace(/\/$/, "") + "/track";
+  var base = (cfg.base || "/apps/pixelify-seo").replace(/\/$/, "");
+  var endpoint = base + "/track";
+
+  // Durable first-party id: ping the app proxy so it sets (or refreshes) the ITP-proof pxp_id cookie.
+  // Server-set from this same-origin proxy, so it survives Safari's 7-day script-cookie cap where _ga
+  // doesn't. The pixel then reads the same cookie, and the /track proxy reads it server-side — so both
+  // paths carry ONE stable id across sessions. Fire-and-forget; failure just means we fall back to _ga.
+  try {
+    if (window.fetch) fetch(base + "/id", { credentials: "same-origin", keepalive: true }).catch(function () {});
+  } catch (e) {
+    /* best-effort */
+  }
 
   function privacy() {
     try {

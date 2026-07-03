@@ -117,6 +117,18 @@ export function normalizePhoneE164(phone) {
   return digits ? `+${digits}` : "";
 }
 
+/** Microsoft-style email normalization before SHA-256: lower-case, strip an "+alias" suffix and remove
+ *  all dots from the local part (Microsoft UET / Bing hashes the email this way, so hashing the raw form
+ *  would never match theirs). Returns "" for a non-email. Pure. */
+export function normalizeEmail(email) {
+  const raw = String(email || "").trim().toLowerCase();
+  const at = raw.lastIndexOf("@");
+  if (at < 1) return "";
+  const local = raw.slice(0, at).split("+")[0].replace(/\./g, "");
+  const domain = raw.slice(at + 1);
+  return local && domain ? `${local}@${domain}` : "";
+}
+
 /** Deterministic, order-scoped dedup id for a purchase ("order:<numeric id>"), else the Shopify event
  *  id. Shared by every destination whose purchase can also be fired by a merchant's own client-side
  *  pixel (TikTok/Snap/Pinterest) so the two collapse instead of double-counting. Pure. */
@@ -614,6 +626,71 @@ export function linkedinEventFor(name, ev) {
   return event;
 }
 
+// Shopify customer-event → Microsoft UET (Bing) event. `eventName` is what the merchant keys a custom
+// conversion goal on; `pageType` is the ecommerce hint UET uses for dynamic remarketing. An unmapped
+// name passes its own name through as a custom event.
+const BING_MAP = {
+  page_viewed: { eventName: "page_view", pageType: "home" },
+  product_viewed: { eventName: "view_item", pageType: "product" },
+  collection_viewed: { eventName: "view_item_list", pageType: "category" },
+  search_submitted: { eventName: "search", pageType: "searchresults" },
+  product_added_to_cart: { eventName: "add_to_cart", pageType: "cart" },
+  checkout_started: { eventName: "begin_checkout", pageType: "cart" },
+  payment_info_submitted: { eventName: "add_payment_info", pageType: "cart" },
+  checkout_completed: { eventName: "purchase", pageType: "purchase" },
+};
+
+/** Build a Microsoft UET (Bing) Conversions API custom event. Hashes email (Microsoft-normalized) +
+ *  phone (E.164), carries the msclkid click id + anonymousId for match, and commerce under customData.
+ *  Deduped by Bing on eventId (order-scoped for a purchase → collapses vs a client-side UET tag hit). */
+export function bingEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const checkout = ev?.data?.checkout;
+  const map = BING_MAP[name] || { eventName: name };
+  const userData = {};
+  if (ev?.userAgent) userData.clientUserAgent = ev.userAgent;
+  if (ev?.clientIp) userData.clientIpAddress = ev.clientIp;
+  // anonymousId ties a visitor's events together (and matches the client-side ID-sync vid if present).
+  if (ev?.clientId) userData.anonymousId = String(ev.clientId);
+  const em = sha256Hex(normalizeEmail(checkout?.email || ev?.email));
+  if (em) userData.em = em;
+  const ph = sha256Hex(normalizePhoneE164(checkout?.phone || ev?.phone));
+  if (ph) userData.ph = ph;
+  if (ev?.externalId) userData.externalId = String(ev.externalId);
+  if (ev?.msclkid) userData.msclkid = ev.msclkid; // Microsoft last-click id (the strongest match key)
+  const customData = {};
+  if (map.pageType) customData.pageType = map.pageType;
+  if (c.currency) customData.currency = c.currency;
+  if (c.value != null) {
+    customData.value = c.value;
+    customData.ecommTotalValue = c.value;
+  }
+  if (c.items.length) {
+    customData.items = c.items.map((i) => ({ id: String(i.item_id), quantity: i.quantity, price: i.price, name: i.item_name || undefined }));
+    customData.itemIds = c.items.map((i) => String(i.item_id));
+  }
+  if (name === "checkout_completed" && c.transactionId) customData.transactionId = c.transactionId;
+  if (ev?.custom && ev?.params) {
+    if (ev.params.value != null) customData.value = customData.ecommTotalValue = num(ev.params.value);
+    if (ev.params.currency) customData.currency = ev.params.currency;
+  }
+  const event = {
+    eventType: "custom",
+    eventName: map.eventName || name,
+    eventTime: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000), // UNIX seconds
+    userData,
+    customData,
+  };
+  const eventId = dedupIdFor(name, ev);
+  if (eventId) event.eventId = eventId;
+  const url = ev?.context?.document?.location?.href;
+  if (url) event.eventSourceUrl = url;
+  // Consent Mode: reflect marketing consent as Bing's adStorageConsent (G=granted / D=denied). Unknown
+  // consent → omit (Bing defaults to granted).
+  if (ev?.consent) event.adStorageConsent = ev.consent.marketing ? "G" : "D";
+  return event;
+}
+
 // Best-effort POST that never throws; returns { ok, detail } for the delivery health log.
 // `validate(json)` (optional) inspects the parsed response body for destinations that return HTTP 200
 // even when they REJECTED the event (Meta: 200 + { error } / events_received:0; TikTok: 200 + code!=0).
@@ -647,13 +724,23 @@ export function ga4Consent(consent) {
   return { ad_user_data: g(consent.marketing), ad_personalization: g(consent.marketing) };
 }
 
-/** Value-based optimisation: when valueMode is "margin", set `value` = value × marginPct% (2dp) and
- *  keep the raw amount as `revenue`, so ad platforms optimise for profit. Mutates in place; works on a
- *  GA4 params object or a Meta custom_data object. No-op unless margin mode + a numeric value. */
-export function withValueMode(target, valueMode, marginPct) {
-  if (valueMode !== "margin" || typeof target?.value !== "number") return target;
-  target.revenue = target.value;
-  target.value = Math.round(target.value * (Number(marginPct) || 0)) / 100;
+/** Value-based optimisation. Mutates a GA4 params object or a Meta custom_data object in place, keeping
+ *  the raw amount as `revenue` and replacing `value` with the optimisation target, so ad platforms bid
+ *  on profit instead of top-line. Two modes:
+ *    - "margin": value = revenue × marginPct% (a flat whole-percent margin).
+ *    - "cogs":   value = revenue − cost (true profit from Shopify's per-variant "Cost per item"),
+ *                clamped at ≥0 so a below-cost order never sends a negative conversion value.
+ *  No-op for "revenue", a non-numeric value, or cogs mode with no resolved cost (→ falls back to
+ *  revenue, so a cost-lookup failure never zeroes a conversion). */
+export function withValueMode(target, valueMode, marginPct, cost) {
+  if (typeof target?.value !== "number") return target;
+  if (valueMode === "margin") {
+    target.revenue = target.value;
+    target.value = Math.round(target.value * (Number(marginPct) || 0)) / 100;
+  } else if (valueMode === "cogs" && cost != null && Number.isFinite(Number(cost))) {
+    target.revenue = target.value;
+    target.value = Math.max(0, Math.round((target.value - Number(cost)) * 100) / 100);
+  }
   return target;
 }
 
@@ -729,6 +816,16 @@ async function sendLinkedin(conversionId, token, event) {
     "LinkedIn-Version": LINKEDIN_VERSION,
     "X-Restli-Protocol-Version": "2.0.0",
   });
+}
+
+// Microsoft UET (Bing) Conversions API: server-to-server events POSTed under the UET tag id, Bearer-authed
+// with the CAPI token from the Microsoft Advertising UI. Returns HTTP 200 on success, or 400/401 with an
+// { error: { code, message } } body when rejected — surface that so the outbox retries instead of losing it.
+async function sendBing(tagId, token, event) {
+  const url = `https://capi.uet.microsoft.com/v1/${encodeURIComponent(tagId)}/events`;
+  return postJson(url, { data: [event] }, { Authorization: `Bearer ${token}` }, (json) =>
+    json.error ? { ok: false, detail: (json.error.message || json.error.code || "bing error").slice(0, 200) } : undefined,
+  );
 }
 
 // Send a Meta CAPI test event (tagged with a test_event_code so it shows under Test Events, not live
@@ -821,6 +918,9 @@ export async function deliverOne(settings, job) {
     case "linkedin":
       if (!settings?.linkedinConversionId || !keys.linkedinAccessToken) return { ok: false, detail: "LinkedIn not configured" };
       return sendLinkedin(settings.linkedinConversionId, keys.linkedinAccessToken, event);
+    case "bing":
+      if (!settings?.bingUetId || !keys.bingCapiToken) return { ok: false, detail: "Bing not configured" };
+      return sendBing(settings.bingUetId, keys.bingCapiToken, event);
     case "gtm": {
       if (!keys.gtmServerUrl) return { ok: false, detail: "sGTM not configured" };
       const mid = keys.gtmMeasurementId || settings?.ga4Id;
@@ -866,10 +966,12 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // to every configured destination (still credential- and consent-gated).
   const wants = (p) => force || event?.custom || platformWants(matrix, p, name);
 
-  // Build the GA4 event once; apply value-based optimisation (margin) to the purchase conversion.
+  // Build the GA4 event once; apply value-based optimisation (margin/COGS profit) to the purchase
+  // conversion. event.orderCost (resolved from Shopify's per-variant cost on the ingest/reconcile path)
+  // is the COGS input — absent for non-cogs modes, so it's simply ignored there.
   const ga4Event = ga4EventFor(name, event);
   const isPurchaseConv = name === "checkout_completed";
-  if (isPurchaseConv) withValueMode(ga4Event.params, settings.valueMode, settings.marginPct);
+  if (isPurchaseConv) withValueMode(ga4Event.params, settings.valueMode, settings.marginPct, event.orderCost);
   hooks.normalizeParams?.(ga4Event.params);
 
   const jobs = [];
@@ -882,7 +984,7 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   }
   if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {
     const metaEvent = metaEventFor(name, event);
-    if (isPurchaseConv) withValueMode(metaEvent.custom_data, settings.valueMode, settings.marginPct);
+    if (isPurchaseConv) withValueMode(metaEvent.custom_data, settings.valueMode, settings.marginPct, event.orderCost);
     hooks.normalizeParams?.(metaEvent.custom_data);
     jobs.push({ destination: "meta", eventName: name, event: metaEvent });
   }
@@ -894,7 +996,7 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // code (settings.tiktokPixelId) + an access token in serverSideKeys.
   if (marketingOk && wants("tiktok") && settings.tiktokPixelId && keys.tiktokAccessToken) {
     const ttEvent = tiktokEventFor(name, event);
-    if (isPurchaseConv) withValueMode(ttEvent.properties, settings.valueMode, settings.marginPct);
+    if (isPurchaseConv) withValueMode(ttEvent.properties, settings.valueMode, settings.marginPct, event.orderCost);
     hooks.normalizeParams?.(ttEvent.properties);
     jobs.push({ destination: "tiktok", eventName: name, event: ttEvent });
   }
@@ -927,6 +1029,12 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   if (marketingOk && wants("linkedin") && settings.linkedinConversionId && keys.linkedinAccessToken) {
     const liEvent = linkedinEventFor(name, event);
     if (liEvent) jobs.push({ destination: "linkedin", eventName: name, event: liEvent });
+  }
+  // Microsoft UET (Bing) Conversions API: hashed-PII enhanced conversions → marketing-consent-gated.
+  // Needs the UET tag id + a CAPI token. Value-mode/FX isn't applied (raw amount), matching Pinterest/
+  // Snap/Reddit — Bing carries value + ecommTotalValue directly.
+  if (marketingOk && wants("bing") && settings.bingUetId && keys.bingCapiToken) {
+    jobs.push({ destination: "bing", eventName: name, event: bingEventFor(name, event) });
   }
   // Extra jobs from later features (e.g. Google Ads Enhanced Conversions on a purchase).
   for (const extra of hooks.extraJobs?.(event, ga4Event, { clientId, consent, isPurchaseConv }) || []) {

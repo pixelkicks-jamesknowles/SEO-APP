@@ -57,6 +57,7 @@ const PLATFORM_GROUPS = [
     { key: "snapchat", label: "Snapchat" },
     { key: "reddit", label: "Reddit" },
     { key: "linkedin", label: "LinkedIn" },
+    { key: "bing", label: "Bing" },
     { key: "klaviyo", label: "Klaviyo" },
   ] },
 ];
@@ -100,11 +101,13 @@ export const loader = async ({ request }) => {
     snapPixelId: t?.snapPixelId ?? "",
     redditPixelId: t?.redditPixelId ?? "",
     linkedinConversionId: t?.linkedinConversionId ?? "",
+    bingUetId: t?.bingUetId ?? "",
     hasTiktokToken: Boolean(keys.tiktokAccessToken),
     hasPinterestToken: Boolean(keys.pinterestAccessToken && keys.pinterestAdAccountId),
     hasSnapToken: Boolean(keys.snapAccessToken),
     hasRedditToken: Boolean(keys.redditAccessToken),
     hasLinkedinToken: Boolean(keys.linkedinAccessToken),
+    hasBingToken: Boolean(keys.bingCapiToken),
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     consentSignals: t?.consentSignals ?? true,
@@ -155,8 +158,10 @@ export const action = async ({ request }) => {
   }
   // Margin mode with a 0% margin would send `value: 0` for every conversion — a silent
   // under-reporting trap. Only honour "margin" when a real percent is set; else stay on revenue.
+  // "cogs" (true profit from Shopify's per-variant cost) needs no percent — it resolves cost server-side.
   const marginPct = Math.max(0, Math.min(100, Math.round(Number(form.get("marginPct")) || 0)));
-  const valueMode = form.get("valueMode") === "margin" && marginPct > 0 ? "margin" : "revenue";
+  const rawValueMode = form.get("valueMode");
+  const valueMode = rawValueMode === "margin" && marginPct > 0 ? "margin" : rawValueMode === "cogs" ? "cogs" : "revenue";
   // Multi-currency: only honour "on" when a reporting currency (3-letter ISO) is actually set.
   const reportingCurrency = (form.get("reportingCurrency") || "").trim().toUpperCase().slice(0, 3) || null;
   const fxMode = form.get("fxMode") === "on" && reportingCurrency ? "on" : "off";
@@ -169,6 +174,7 @@ export const action = async ({ request }) => {
     snapPixelId: form.get("snapPixelId") || null,
     redditPixelId: form.get("redditPixelId") || null,
     linkedinConversionId: form.get("linkedinConversionId") || null,
+    bingUetId: form.get("bingUetId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     consentSignals: form.get("consentSignals") === "on",
@@ -299,6 +305,7 @@ export default function Tracking() {
     snapPixelId: data.snapPixelId,
     redditPixelId: data.redditPixelId,
     linkedinConversionId: data.linkedinConversionId,
+    bingUetId: data.bingUetId,
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
@@ -361,12 +368,12 @@ export default function Tracking() {
       monthDays: String(data.subscriptionConfig.monthDays ?? 28),
       clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
     });
-    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId, linkedinConversionId: data.linkedinConversionId });
+    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId, linkedinConversionId: data.linkedinConversionId, bingUetId: data.bingUetId });
   };
   const saveNow = () => submit(formRef.current, { method: "post" });
 
   // Inline config validation - catch the "set up but sends nothing" traps.
-  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId || ids.linkedinConversionId);
+  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId || ids.linkedinConversionId || ids.bingUetId);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -461,6 +468,15 @@ export default function Tracking() {
                     onChange={setId("linkedinConversionId")}
                     placeholder="12345678"
                     helpText={data.hasLinkedinToken ? "Delivered server-side (B2B) via the LinkedIn Conversions API." : "Add a LinkedIn Conversions API token on Settings to deliver these."}
+                  />
+                  <TextField
+                    label="Bing (Microsoft) UET tag ID"
+                    name="bingUetId"
+                    autoComplete="off"
+                    value={ids.bingUetId}
+                    onChange={setId("bingUetId")}
+                    placeholder="123456789"
+                    helpText={data.hasBingToken ? "Delivered server-side via the Microsoft UET Conversions API." : "Add a Microsoft UET Conversions API token on Settings to deliver these."}
                   />
                 </FormLayout.Group>
               </FormLayout>
@@ -659,13 +675,19 @@ export default function Tracking() {
                 label="Optimise conversions for"
                 options={[
                   { label: "Revenue (order value)", value: "revenue" },
-                  { label: "Margin (profit)", value: "margin" },
+                  { label: "Margin (flat % profit)", value: "margin" },
+                  { label: "Profit (COGS from Shopify cost)", value: "cogs" },
                 ]}
                 value={valueMode}
                 onChange={setValueMode}
                 disabled={!serverSide}
-                helpText="Margin sends value × margin% as the conversion value (raw revenue kept as a 'revenue' param), so ad platforms optimise for profit. Applies to purchase + refund; subscription_purchase keeps raw revenue."
+                helpText="Margin sends value × margin% as the conversion value. Profit (COGS) sends revenue − cost of goods, read from each variant's Shopify 'Cost per item' — true per-order profit, no percentage to maintain. Both keep raw revenue as a 'revenue' param, so ad platforms optimise for margin. Applies to purchase + refund; subscription_purchase keeps raw revenue."
               />
+              {valueMode === "cogs" && serverSide ? (
+                <Banner tone="info">
+                  Profit is computed from each product variant&rsquo;s <strong>Cost per item</strong> in Shopify (Products → variant → Cost per item). Variants with no cost set are treated as full margin; if no cost resolves for an order, its raw revenue is used.
+                </Banner>
+              ) : null}
               {valueMode === "margin" && serverSide ? (
                 <TextField
                   label="Margin %"

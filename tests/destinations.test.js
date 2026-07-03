@@ -5,6 +5,13 @@ import {
   snapEventFor,
   redditEventFor,
   linkedinEventFor,
+  bingEventFor,
+  normalizeEmail,
+  normalizePhoneE164,
+  checkoutHasSubscription,
+  dataLayerFromGa4,
+  validateGa4Event,
+  validateMetaEvent,
   metaIdentifierKeys,
   metaUserData,
   buildJobs,
@@ -143,6 +150,61 @@ describe("redditEventFor", () => {
   });
 });
 
+describe("pure helpers", () => {
+  test("normalizePhoneE164 → digits with a leading +", () => {
+    expect(normalizePhoneE164("+1 (415) 555-0100")).toBe("+14155550100");
+    expect(normalizePhoneE164("")).toBe("");
+  });
+
+  test("checkoutHasSubscription detects a selling-plan line", () => {
+    expect(checkoutHasSubscription({ data: { checkout: { lineItems: [{ sellingPlanAllocation: { sellingPlan: { id: "1" } } }] } } })).toBe(true);
+    expect(checkoutHasSubscription({ data: { checkout: { lineItems: [{ quantity: 1 }] } } })).toBe(false);
+    expect(checkoutHasSubscription({})).toBe(false);
+  });
+
+  test("dataLayerFromGa4 restructures GA4 params into an event + ecommerce block", () => {
+    const push = dataLayerFromGa4({ name: "purchase", params: { value: 100, currency: "USD", transaction_id: "t1", items: [{ item_id: "a" }], engagement_time_msec: 1 } });
+    expect(push.event).toBe("purchase");
+    expect(push.ecommerce).toMatchObject({ value: 100, currency: "USD", transaction_id: "t1" });
+    expect(push.engagement_time_msec).toBeUndefined(); // stripped
+  });
+});
+
+describe("normalizeEmail", () => {
+  test("lower-cases, strips dots in the local part and an +alias suffix (Microsoft/Bing rule)", () => {
+    expect(normalizeEmail("John.Doe+promo@Gmail.com")).toBe("johndoe@gmail.com");
+    expect(normalizeEmail("  Buyer@Example.com ")).toBe("buyer@example.com");
+    expect(normalizeEmail("not-an-email")).toBe("");
+    expect(normalizeEmail("")).toBe("");
+  });
+});
+
+describe("bingEventFor", () => {
+  test("maps a purchase, hashes Microsoft-normalized email + E.164 phone, carries commerce", () => {
+    const ev = bingEventFor("checkout_completed", { ...checkoutEvent, msclkid: "msc_1", clientId: "c.1", consent: { marketing: true } });
+    expect(ev.eventType).toBe("custom");
+    expect(ev.eventName).toBe("purchase");
+    expect(ev.eventId).toBe("order:5500000000001"); // order-scoped → dedups vs a client-side UET tag hit
+    expect(ev.eventTime).toBe(Math.floor(Date.parse("2026-07-03T10:00:00.000Z") / 1000)); // UNIX seconds
+    expect(ev.userData.em).toBe(sha256Hex("buyer@example.com"));
+    expect(ev.userData.ph).toBe(sha256Hex("+14155550100")); // E.164 with the leading +
+    expect(ev.userData.msclkid).toBe("msc_1");
+    expect(ev.userData.anonymousId).toBe("c.1");
+    expect(ev.customData.pageType).toBe("purchase");
+    expect(ev.customData.value).toBe(120);
+    expect(ev.customData.ecommTotalValue).toBe(120);
+    expect(ev.customData.transactionId).toBe("5500000000001");
+    expect(ev.customData.itemIds).toEqual(["AM-9"]);
+    expect(ev.adStorageConsent).toBe("G");
+  });
+
+  test("declined marketing consent sets adStorageConsent to D", () => {
+    const ev = bingEventFor("product_viewed", { name: "product_viewed", consent: { marketing: false }, data: {} });
+    expect(ev.eventName).toBe("view_item");
+    expect(ev.adStorageConsent).toBe("D");
+  });
+});
+
 describe("metaIdentifierKeys", () => {
   test("reports exactly the identifiers a user_data block carries", () => {
     const keys = metaIdentifierKeys(metaUserData(checkoutEvent));
@@ -273,6 +335,53 @@ describe("buildJobs wiring", () => {
     expect(dests).not.toContain("snapchat");
     expect(dests).not.toContain("reddit");
   });
+
+  const bingBase = { shopDomain: "s.myshopify.com", serverSide: true, bingUetId: "1290000", eventMatrix: JSON.stringify({ bing: ["checkout_completed"] }) };
+
+  test("adds a Bing job only with a UET tag id + CAPI token, and marketing-consent-gated", () => {
+    const withToken = { ...bingBase, serverSideKeys: JSON.stringify({ bingCapiToken: "tok" }) };
+    expect(buildJobs(withToken, checkoutEvent).some((j) => j.destination === "bing")).toBe(true);
+    const noToken = { ...bingBase, serverSideKeys: JSON.stringify({}) };
+    expect(buildJobs(noToken, checkoutEvent).some((j) => j.destination === "bing")).toBe(false);
+    const declined = { ...checkoutEvent, consent: { analytics: true, marketing: false } };
+    expect(buildJobs(withToken, declined).some((j) => j.destination === "bing")).toBe(false);
+  });
+});
+
+describe("credential validators", () => {
+  afterEach(() => (global.fetch = undefined));
+
+  test("validateGa4Event passes when the MP debug endpoint returns no validation messages", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ validationMessages: [] }) });
+    const settings = { ga4Id: "G-1", serverSideKeys: JSON.stringify({ ga4ApiSecret: "s" }) };
+    const r = await validateGa4Event(settings, { name: "purchase", params: { value: 1 } });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toContain("/debug/mp/collect");
+  });
+
+  test("validateGa4Event surfaces the endpoint's validation messages", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ validationMessages: [{ description: "bad currency" }] }) });
+    const r = await validateGa4Event({ ga4Id: "G-1", serverSideKeys: JSON.stringify({ ga4ApiSecret: "s" }) }, { name: "purchase" });
+    expect(r.ok).toBe(false);
+    expect(r.messages).toContain("bad currency");
+  });
+
+  test("validateGa4Event fails fast without a secret", async () => {
+    expect(await validateGa4Event({ ga4Id: "G-1" }, {})).toMatchObject({ ok: false });
+  });
+
+  test("validateMetaEvent posts a test event and passes on events_received>=1", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ events_received: 1 }) });
+    const settings = { metaPixelId: "PIX", serverSideKeys: JSON.stringify({ metaCapiToken: "t" }) };
+    const r = await validateMetaEvent(settings, { testEventCode: "TEST123" });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toContain("graph.facebook.com");
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).test_event_code).toBe("TEST123");
+  });
+
+  test("validateMetaEvent reports a missing token", async () => {
+    expect(await validateMetaEvent({ metaPixelId: "PIX" })).toMatchObject({ ok: false });
+  });
 });
 
 describe("deliverOne routing", () => {
@@ -354,11 +463,29 @@ describe("deliverOne routing", () => {
     expect(r.detail).toContain("param error");
   });
 
+  test("bing posts to the UET Conversions API under the tag id with a Bearer token", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const settings = { bingUetId: "1290000", serverSideKeys: JSON.stringify({ bingCapiToken: "tok" }) };
+    const r = await deliverOne(settings, { destination: "bing", event: { eventType: "custom", eventName: "purchase" } });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toBe("https://capi.uet.microsoft.com/v1/1290000/events");
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer tok");
+  });
+
+  test("bing 400 with an { error } body is treated as a failure (so it retries, not silently lost)", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: { code: "ValidationError", message: "'em' must be a valid SHA256 string." } }) });
+    const settings = { bingUetId: "1290000", serverSideKeys: JSON.stringify({ bingCapiToken: "tok" }) };
+    const r = await deliverOne(settings, { destination: "bing", event: { eventType: "custom" } });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("SHA256");
+  });
+
   test("unconfigured destinations report a clean reason (no throw)", async () => {
     expect(await deliverOne({}, { destination: "tiktok", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "pinterest", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "klaviyo", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "snapchat", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "reddit", event: {} })).toMatchObject({ ok: false });
+    expect(await deliverOne({}, { destination: "bing", event: {} })).toMatchObject({ ok: false });
   });
 });

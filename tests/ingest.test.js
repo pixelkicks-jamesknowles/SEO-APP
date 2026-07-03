@@ -67,6 +67,31 @@ test("happy path: a real event is buffered and fanned out to GA4", async () => {
   expect(prisma.deliveryOutbox.create).not.toHaveBeenCalled(); // nothing failed → nothing queued
 });
 
+test("a purchase bumps revenue-by-channel from its first-touch source (raw order value)", async () => {
+  prisma.visitorAttribution.findUnique.mockResolvedValue({ source: "google", medium: "cpc", visits: 2 });
+  await ingestEvent(
+    SHOP,
+    { event: { name: "checkout_completed", clientId: "1.1", userAgent: "Mozilla/5.0 Chrome/120", data: { checkout: { currencyCode: "USD", totalPrice: { amount: 250, currencyCode: "USD" }, order: { id: "9001" }, lineItems: [] } } } },
+    undefined,
+  );
+  expect(prisma.channelRevenueDaily.upsert).toHaveBeenCalledTimes(1);
+  const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+  expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "google", medium: "cpc" });
+  expect(call.create).toMatchObject({ orders: 1, revenue: 250 });
+});
+
+test("durable id stands in as the GA4 client_id when no _ga/_shopify_y id is present", async () => {
+  const durableId = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  await ingestEvent(SHOP, { event: { name: "page_viewed", durableId, userAgent: "Mozilla/5.0 Chrome/120" } }, "1.2.3.4");
+  const [, opts] = gaCalls()[0];
+  expect(JSON.parse(opts.body).client_id).toBe(durableId); // stable across sessions (ITP-proof cookie)
+});
+
+test("an explicit clientId wins over the durable id", async () => {
+  await ingestEvent(SHOP, { event: { name: "page_viewed", clientId: "9.9", durableId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", userAgent: "Mozilla/5.0 Chrome/120" } }, undefined);
+  expect(JSON.parse(gaCalls()[0][1].body).client_id).toBe("9.9");
+});
+
 test("consent gating: analytics-yes / marketing-no delivers GA4 but skips Meta", async () => {
   await ingestEvent(
     SHOP,

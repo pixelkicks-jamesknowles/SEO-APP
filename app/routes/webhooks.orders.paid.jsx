@@ -10,7 +10,8 @@ import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
 import { enqueue } from "../lib/outbox.server";
 import { normalizeForShop } from "../lib/fx.server";
-import { recordPendingPurchase, recordCapture } from "../lib/reconcile.server";
+import { recordPendingPurchase, recordCapture, orderToTrackingEvent } from "../lib/reconcile.server";
+import { cogsEnabled, resolveOrderCost } from "../lib/cogs.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
@@ -108,8 +109,10 @@ export const action = async ({ request }) => {
     const subEvent = buildSubscriptionEvent(payload, { eventName: cfg.eventName || "subscription_purchase", ...opts });
     const purchaseEvent = buildOrderPurchaseEvent(payload, opts);
     // Value-based optimisation applies to the purchase conversion only (subscription_purchase keeps its
-    // raw discounted amount for the SEO team's revenue report).
-    withValueMode(purchaseEvent.params, settings.valueMode, settings.marginPct);
+    // raw discounted amount for the SEO team's revenue report). In COGS mode, resolve the order's cost of
+    // goods so the purchase value is true profit — same treatment the pixel/reconcile paths get.
+    const orderCost = cogsEnabled(settings) ? await resolveOrderCost(shop, orderToTrackingEvent(payload)) : undefined;
+    withValueMode(purchaseEvent.params, settings.valueMode, settings.marginPct, orderCost);
     // Multi-currency: normalize both events' amounts into the shop's reporting currency (no-op if off).
     await Promise.all([normalizeForShop(settings, subEvent.params), normalizeForShop(settings, purchaseEvent.params)]);
 

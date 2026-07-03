@@ -20,6 +20,7 @@ import { recordDeliveries, bumpDaily, recordCapture, recordCaptureFromResults, R
 import { enqueueFailures } from "./outbox.server";
 import { fxHooks } from "./fx.server";
 import { googleAdsHook } from "./google-ads.server";
+import { cogsEnabled, resolveOrderCost } from "./cogs.server";
 import { encryptSecret, decryptSecret } from "./secrets.server";
 
 // How long a leased pending-purchase batch is held while it's being backfilled, so an overlapping cron
@@ -121,6 +122,9 @@ export async function recordPendingPurchase(shopDomain, order, settings) {
   const orderId = numericId(order?.id);
   if (!orderId) return;
   const event = orderToTrackingEvent(order);
+  // True-profit (COGS): resolve the order's cost so a backfilled purchase reports the same profit `value`
+  // a pixel-delivered one would (the ingest path does this on the live event). Best-effort → null.
+  if (cogsEnabled(settings)) event.orderCost = await resolveOrderCost(shopDomain, event);
   // Apply the SAME currency normalization the live ingest path uses, so a backfilled purchase reports
   // the same `value` a pixel-delivered one would (otherwise a multi-currency shop's recovered orders ship
   // raw store-currency amounts while live orders ship normalized ones — inconsistent). The Google Ads

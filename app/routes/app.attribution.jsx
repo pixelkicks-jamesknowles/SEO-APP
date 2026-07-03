@@ -3,7 +3,8 @@ import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge } fro
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource } from "../lib/attribution-report";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue } from "../lib/attribution-report";
+import { identityStats } from "../lib/identity.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -12,10 +13,14 @@ export const loader = async ({ request }) => {
   // report reflects only the most recent SCAN_CAP rows, so we flag it rather than presenting a partial
   // aggregate as if it were the whole history.
   const SCAN_CAP = 5000;
-  const [visitors, customers] = await Promise.all([
+  const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [visitors, customers, channelRows, identity] = await Promise.all([
     prisma.visitorAttribution.findMany({ where: { shopDomain }, orderBy: { lastSeen: "desc" }, take: SCAN_CAP }),
     prisma.customerAttribution.findMany({ where: { shopDomain }, orderBy: { updatedAt: "desc" }, take: SCAN_CAP }),
+    prisma.channelRevenueDaily.findMany({ where: { shopDomain, date: { gte: since90 } } }).catch(() => []),
+    identityStats(shopDomain),
   ]);
+  const revenue = byChannelRevenue(channelRows);
   return {
     totalVisitors: visitors.length,
     capped: visitors.length >= SCAN_CAP || customers.length >= SCAN_CAP,
@@ -25,8 +30,15 @@ export const loader = async ({ request }) => {
     multiTouch: multiTouchShare(visitors),
     shifted: firstVsLastShift(visitors),
     subSources: bySubscriptionSource(customers).slice(0, 15),
+    channels: revenue.channels.slice(0, 15),
+    channelTotalRevenue: revenue.totalRevenue,
+    channelTotalOrders: revenue.totalOrders,
+    identity,
   };
 };
+
+// Compact money formatting for the revenue table (the merchant's own store currency; no symbol assumed).
+const fmtMoney = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function Stat({ title, value, sub }) {
   return (
@@ -70,14 +82,14 @@ function Table({ caption, head, rows }) {
 }
 
 export default function Attribution() {
-  const { totalVisitors, topSources, touches, multiTouch, shifted, subSources, capped, scanCap } = useLoaderData();
+  const { totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, identity } = useLoaderData();
   const revalidator = useRevalidator();
-  const hasData = totalVisitors > 0;
+  const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
     <Page
       title="Attribution"
-      subtitle="Where your tracked visitors first came from, and how their journey builds across sessions."
+      subtitle="Which channels drive revenue, where your visitors first came from, and how their journey builds across sessions and devices."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
       <BlockStack gap="400">
@@ -95,10 +107,33 @@ export default function Attribution() {
               </Banner>
             )}
             <InlineStack gap="400" wrap>
+              <Stat title="Attributed revenue" value={fmtMoney(channelTotalRevenue)} sub={`${channelTotalOrders.toLocaleString()} orders, last 90 days`} />
               <Stat title="Tracked visitors" value={totalVisitors.toLocaleString()} sub="With a known first-touch source" />
-              <Stat title="Multi-touch" value={multiTouch == null ? "-" : `${multiTouch}%`} sub="Returned more than once" />
+              <Stat title="Identified" value={identity.identified.toLocaleString()} sub={`of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`} />
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
             </InlineStack>
+
+            {channels.length > 0 && (
+              <Card>
+                <BlockStack gap="300">
+                  <SectionHeading title="Revenue by channel" description="Order revenue attributed to the source/medium that first acquired the visitor (first-touch), over the last 90 days. From pixel-captured purchases with a known channel." />
+                  <Divider />
+                  <Table
+                    caption="Channels grouped by first-touch source and medium, with orders, revenue, AOV and revenue share"
+                    head={["Source / Medium", "Orders", "Revenue", "AOV", "Share"]}
+                    rows={channels.map((r) => (
+                      <tr key={`${r.source}/${r.medium}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
+                        <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.orders.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.revenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.aov)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
+                      </tr>
+                    ))}
+                  />
+                </BlockStack>
+              </Card>
+            )}
 
             <Card>
               <BlockStack gap="300">

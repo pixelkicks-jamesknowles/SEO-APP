@@ -107,6 +107,23 @@ export async function recordDeliveries(shopDomain, results, { countPurchases = t
   });
 }
 
+// Revenue-by-channel: attribute one order's revenue to its acquisition channel (first-touch
+// source/medium, else "(direct)"/"(none)") for the Attribution report. Bumped once per pixel-captured
+// checkout_completed (ingest dedups the event), so it never double-counts. Best-effort.
+export async function recordChannelRevenue(shopDomain, { source, medium, revenue } = {}) {
+  const rev = Number(revenue) || 0;
+  const date = today();
+  const src = source || "(direct)";
+  const med = medium || "(none)";
+  await prisma.channelRevenueDaily
+    .upsert({
+      where: { shopDomain_date_source_medium: { shopDomain, date, source: src, medium: med } },
+      create: { shopDomain, date, source: src, medium: med, orders: 1, revenue: rev },
+      update: { orders: { increment: 1 }, revenue: { increment: rev } },
+    })
+    .catch(() => {});
+}
+
 // First-touch attribution: record a visitor's source on a UTM-tagged visit (never overwrite the
 // first source - later visits only bump the counter). Keyed on GA4 client_id. Low write volume
 // (only fires when UTMs are present). Best-effort.

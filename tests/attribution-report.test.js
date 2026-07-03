@@ -1,4 +1,4 @@
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource } from "../app/lib/attribution-report.js";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue } from "../app/lib/attribution-report.js";
 
 const visitors = [
   { source: "google", medium: "cpc", visits: 3, lastSource: "google" },
@@ -45,5 +45,23 @@ describe("bySubscriptionSource", () => {
     ]);
     expect(g[0]).toEqual({ source: "google", medium: "cpc", customers: 2 });
     expect(g[1]).toEqual({ source: "(direct)", medium: "(none)", customers: 1 });
+  });
+});
+
+describe("byChannelRevenue", () => {
+  test("sums orders + revenue per channel with AOV, share, and grand totals, sorted by revenue", () => {
+    const { channels, totalRevenue, totalOrders } = byChannelRevenue([
+      { source: "google", medium: "cpc", orders: 2, revenue: 200 },
+      { source: "google", medium: "cpc", orders: 1, revenue: 100 }, // another day, same channel
+      { source: null, medium: null, orders: 1, revenue: 50 },
+    ]);
+    expect(totalOrders).toBe(4);
+    expect(totalRevenue).toBe(350);
+    expect(channels[0]).toEqual({ source: "google", medium: "cpc", orders: 3, revenue: 300, aov: 100, share: 86 });
+    expect(channels[1]).toEqual({ source: "(direct)", medium: "(none)", orders: 1, revenue: 50, aov: 50, share: 14 });
+  });
+
+  test("empty input → zero totals, no channels", () => {
+    expect(byChannelRevenue([])).toEqual({ channels: [], totalRevenue: 0, totalOrders: 0 });
   });
 });

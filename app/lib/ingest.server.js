@@ -1,10 +1,12 @@
 import prisma from "../db.server";
-import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality } from "./delivery.server";
+import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys, extractCommerce } from "./server-side.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordChannelRevenue } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
 import { googleAdsHook } from "./google-ads.server";
+import { cogsEnabled, resolveOrderCost } from "./cogs.server";
+import { visitorKey, eventCustomerKey, linkIdentity } from "./identity.server";
 import { redactEvent } from "./redact";
 
 // Shared storefront-event ingestion: bot-filter, buffer for Live events (PII-redacted), first-touch
@@ -61,11 +63,32 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   await pruneCap(prisma.recentEvent, shopDomain, 50);
 
   const event = { ...body.event, clientIp: body.event.clientIp || clientIp };
+  // Durable first-party id (ITP-proof cookie minted by the app proxy): use it as the stable client id
+  // when no _ga/_shopify_y id is present, so a returning visitor is ONE user/session across sessions
+  // even after the short-lived cookies expire — and every server-side destination inherits that stability.
+  if (!event.clientId && event.durableId) event.clientId = String(event.durableId);
   // First-touch attribution: capture the source on UTM-tagged visits; on a conversion, attach the
   // visitor's original source so it isn't mis-credited to direct in a later/returning session.
-  await recordVisit(shopDomain, event.clientId, event.utm);
+  // Key first-touch on the STABLE visitor key (durable id when present, else the GA4 client id) so a
+  // returning visitor's original source survives _ga/ITP churn (cross-session). Record the identity
+  // links (durableId ↔ clientId ↔ customer) so a conversion can be tied back across sessions/devices.
+  const vkey = visitorKey(event);
+  await recordVisit(shopDomain, vkey, event.utm);
+  await linkIdentity(shopDomain, { durableId: event.durableId, clientId: event.clientId, customerKey: eventCustomerKey(event) });
   if (event.name === "checkout_completed") {
-    event.firstTouch = await getFirstTouch(shopDomain, event.clientId);
+    event.firstTouch = await getFirstTouch(shopDomain, vkey);
+    // True-profit (COGS) valuation: resolve the order's cost of goods from Shopify's per-variant cost so
+    // buildJobs sends profit as the conversion value. Purchases are low-volume, so the extra Admin fetch
+    // is off the page-view hot path; best-effort (null cost → withValueMode falls back to revenue).
+    if (cogsEnabled(settings)) event.orderCost = await resolveOrderCost(shopDomain, event);
+    // Revenue-by-channel report: attribute this order's RAW revenue (not the margin/COGS-adjusted value)
+    // to its acquisition channel — first-touch source/medium, else this visit's own UTMs, else direct.
+    const ft = event.firstTouch;
+    await recordChannelRevenue(shopDomain, {
+      source: ft?.source || event.utm?.utm_source,
+      medium: ft?.medium || event.utm?.utm_medium,
+      revenue: extractCommerce("checkout_completed", event.data).value,
+    });
   }
 
   // Delivery hooks: currency normalization (fx) + extra destinations (Google Ads Enhanced Conversions).

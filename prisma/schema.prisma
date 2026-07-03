@@ -103,7 +103,22 @@ model TrackingSettings {
   // server-side. Gated behind requirePro at toggle time; the storefront reads the effective flag from
   // the app-proxy /config endpoint so it can't be enabled from the theme editor to bypass billing.
   dataLayerEnabled     Boolean  @default(false)
+  // Proactive health alerting: an incoming-webhook URL (Slack / Discord / Teams / generic) the cron posts
+  // to when a tracking-health alert fires (dead-lettered sends, capture/delivery drops, outbox backlog),
+  // so a merchant hears about a broken pixel without opening the app. Off (null) → in-app banners only.
+  alertWebhookUrl      String?
   updatedAt            DateTime @updatedAt
+}
+
+// Per-(shop, alert kind) notify dedup: the cron records when it last pushed an alert to the webhook, so a
+// still-firing condition is re-notified at most once per cooldown window (not every tick). Distinct from
+// AlertDismissal (which silences the in-app banner) — this governs the OUTBOUND webhook only.
+model AlertNotification {
+  shopDomain String
+  kind       String // outbox_dead | no_captures | capture_low | delivery_low | outbox_backlog
+  notifiedAt DateTime @default(now())
+
+  @@id([shopDomain, kind])
 }
 
 // Per-destination delivery outcomes for the in-app health panel (success/failure of each server-side
@@ -219,6 +234,41 @@ model VisitorAttribution {
   lastSeen     DateTime @updatedAt
 
   @@id([shopDomain, clientId])
+}
+
+// Identity graph — links a durable first-party id (pxp_id, ITP-proof) to the GA4 client id it was last
+// seen with AND to a customer once the visitor identifies (checkout/login). This is what turns per-session
+// tracking into per-PERSON tracking: a returning visitor whose _ga churned still maps to one durableId,
+// and a customer signing in on a second device links that device's durableId to the same customerKey —
+// so a conversion inherits the whole cross-session/cross-device journey instead of looking like new
+// direct traffic. clientId/customerKey are only ever set (never nulled) as more is learned.
+model VisitorIdentity {
+  shopDomain  String
+  durableId   String
+  clientId    String? // most recent GA4 client id seen for this durable id
+  customerKey String? // customer id / hashed email, set once the visitor identifies (attribution.customerKey shape)
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @updatedAt
+
+  @@id([shopDomain, durableId])
+  @@index([shopDomain, customerKey])
+}
+
+// Per-day revenue attributed to an acquisition channel (first-touch source/medium), bumped on each
+// pixel-captured checkout_completed with the raw order value. Powers the "Revenue by channel" table on
+// the Attribution page — turning first-touch counts into first-touch REVENUE (which channels actually
+// drive sales, not just visits). Source/medium default to "(direct)"/"(none)" so every order lands in a row.
+model ChannelRevenueDaily {
+  shopDomain String
+  date       String // YYYY-MM-DD (UTC)
+  source     String
+  medium     String
+  orders     Int      @default(0)
+  revenue    Float    @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@id([shopDomain, date, source, medium])
+  @@index([shopDomain, date])
 }
 
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
