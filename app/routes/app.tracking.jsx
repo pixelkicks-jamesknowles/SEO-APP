@@ -539,12 +539,13 @@ export default function Tracking() {
               </tbody>
             </table>
             </div>
-            <Text as="p" variant="bodySm" tone="subdued">
-              Klaviyo receives onsite browse &amp; abandonment events (Viewed Product, Added to Cart, Started
-              Checkout) server-side, and only for shoppers it can identify (logged-in or post-email). Placed
-              Order stays with Klaviyo&rsquo;s own Shopify integration, so it isn&rsquo;t double-counted. Add a
-              Klaviyo private API key on Settings to deliver these.
-            </Text>
+            <div style={{ padding: "var(--p-space-300) var(--p-space-400) var(--p-space-400)" }}>
+              <Text as="p" variant="bodySm" tone="subdued">
+                <b>Klaviyo</b> only receives the onsite events above, and only for shoppers it can identify
+                (logged-in or post-email). Placed Order stays with Klaviyo&rsquo;s native Shopify integration,
+                so it isn&rsquo;t double-counted. Add a private API key on Settings to deliver these.
+              </Text>
+            </div>
           </Card>
 
           <Card>
