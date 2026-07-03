@@ -42,16 +42,37 @@ const EVENTS = [
   "payment_info_submitted",
   "checkout_completed",
 ];
-const PLATFORMS = [
-  { key: "gtm", label: "GTM" },
-  { key: "ga4", label: "GA4" },
-  { key: "meta", label: "Meta" },
-  { key: "tiktok", label: "TikTok" },
-  { key: "pinterest", label: "Pinterest" },
-  { key: "snapchat", label: "Snapchat" },
-  { key: "reddit", label: "Reddit" },
-  { key: "klaviyo", label: "Klaviyo" },
+// Destinations, grouped for the matrix header: browser-tag platforms (fired client-side by the Web
+// Pixel) vs conversions-API platforms (fired server-side from the /track beacon). PLATFORMS is the flat
+// list every other bit of logic (buildMatrix, save loop, ids) still iterates.
+const PLATFORM_GROUPS = [
+  { label: "Client tags", platforms: [
+    { key: "gtm", label: "GTM" },
+    { key: "ga4", label: "GA4" },
+    { key: "meta", label: "Meta" },
+  ] },
+  { label: "Server-side APIs", platforms: [
+    { key: "tiktok", label: "TikTok" },
+    { key: "pinterest", label: "Pinterest" },
+    { key: "snapchat", label: "Snapchat" },
+    { key: "reddit", label: "Reddit" },
+    { key: "klaviyo", label: "Klaviyo" },
+  ] },
 ];
+const PLATFORMS = PLATFORM_GROUPS.flatMap((g) => g.platforms);
+// The first platform key of each group after the first — draws the vertical divider between groups.
+const GROUP_START_KEYS = new Set(PLATFORM_GROUPS.slice(1).map((g) => g.platforms[0].key));
+const GROUP_DIVIDER = "1px solid var(--p-color-border)";
+// Freeze the event-name column so it stays visible while the (now wider) destination grid scrolls.
+const stickyCol = (z) => ({ position: "sticky", left: 0, zIndex: z, background: "var(--p-color-bg-surface)" });
+
+// Klaviyo only ingests onsite browse/abandonment events; every other event is a no-op for it (its
+// builder returns nothing), so those cells are shown disabled rather than tickable-but-ignored. Every
+// other destination sends all events (unmapped ones pass through as a custom event).
+const KLAVIYO_EVENTS = new Set(["product_viewed", "product_added_to_cart", "checkout_started"]);
+function destSupports(platform, event) {
+  return platform === "klaviyo" ? KLAVIYO_EVENTS.has(event) : true;
+}
 
 // Light format hints so obviously-wrong IDs are caught before they reach the pixel.
 function idError(kind, v) {
@@ -276,15 +297,19 @@ export default function Tracking() {
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
-  const toggle = (p, e) =>
+  const toggle = (p, e) => {
+    if (!destSupports(p, e)) return; // unsupported cell — never toggles on
     setMatrix((m) => ({ ...m, [p]: { ...m[p], [e]: !m[p][e] } }));
+  };
 
-  // Per-column select-all: if every event is already on, clear the column; otherwise select all.
-  const columnAllOn = (p) => EVENTS.every((e) => matrix[p]?.[e]);
+  // Per-column select-all, over the events the destination actually supports: if every supported event
+  // is already on, clear the column; otherwise select all supported ones (unsupported stay off).
+  const supportedEvents = (p) => EVENTS.filter((e) => destSupports(p, e));
+  const columnAllOn = (p) => supportedEvents(p).every((e) => matrix[p]?.[e]);
   const toggleColumn = (p) =>
     setMatrix((m) => {
-      const turnOn = !EVENTS.every((e) => m[p]?.[e]);
-      return { ...m, [p]: Object.fromEntries(EVENTS.map((e) => [e, turnOn])) };
+      const turnOn = !supportedEvents(p).every((e) => m[p]?.[e]);
+      return { ...m, [p]: Object.fromEntries(EVENTS.map((e) => [e, destSupports(p, e) ? turnOn : false])) };
     });
 
   // --- Contextual save bar (App Bridge): show on unsaved changes, hide after save/discard. ---
@@ -441,22 +466,32 @@ export default function Tracking() {
                 Per-destination event opt-in matrix
               </caption>
               <thead>
+                {/* Group row: browser tags vs server-side conversions APIs. */}
                 <tr>
-                  <th scope="col" style={{ textAlign: "left", padding: "var(--p-space-200) var(--p-space-400)" }}>
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      Event
-                    </Text>
+                  <td style={stickyCol(2)} />
+                  {PLATFORM_GROUPS.map((g, gi) => (
+                    <th
+                      key={g.label}
+                      scope="colgroup"
+                      colSpan={g.platforms.length}
+                      style={{ textAlign: "center", padding: "var(--p-space-200) var(--p-space-200) var(--p-space-050)", borderLeft: gi > 0 ? GROUP_DIVIDER : undefined }}
+                    >
+                      <Text as="span" variant="bodyXs" tone="subdued" fontWeight="medium">{g.label}</Text>
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  <th scope="col" style={{ ...stickyCol(2), textAlign: "left", padding: "var(--p-space-100) var(--p-space-400)" }}>
+                    <Text as="span" variant="bodySm" tone="subdued">Event</Text>
                   </th>
                   {PLATFORMS.map((p) => (
                     <th
                       key={p.key}
                       scope="col"
-                      style={{ textAlign: "center", padding: "var(--p-space-200) var(--p-space-300)" }}
+                      style={{ textAlign: "center", padding: "var(--p-space-100) var(--p-space-200)", borderLeft: GROUP_START_KEYS.has(p.key) ? GROUP_DIVIDER : undefined }}
                     >
                       <BlockStack gap="050" inlineAlign="center">
-                        <Text as="span" variant="bodySm" tone="subdued">
-                          {p.label}
-                        </Text>
+                        <Text as="span" variant="bodySm" tone="subdued">{p.label}</Text>
                         <Button variant="plain" size="micro" onClick={() => toggleColumn(p.key)}>
                           {columnAllOn(p.key) ? "Clear" : "All"}
                         </Button>
@@ -468,26 +503,37 @@ export default function Tracking() {
               <tbody>
                 {EVENTS.map((e) => (
                   <tr key={e} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
-                    <th scope="row" style={{ textAlign: "left", fontWeight: "normal", padding: "var(--p-space-200) var(--p-space-400)" }}>
-                      <Text as="span" variant="bodyMd">
-                        {eventLabel(e)}
-                      </Text>
+                    <th scope="row" style={{ ...stickyCol(1), textAlign: "left", fontWeight: "normal", padding: "var(--p-space-150) var(--p-space-400)", whiteSpace: "nowrap" }}>
+                      <Text as="span" variant="bodyMd">{eventLabel(e)}</Text>
                     </th>
-                    {PLATFORMS.map((p) => (
-                      <td key={p.key} style={{ padding: "var(--p-space-100) var(--p-space-300)" }}>
-                        {matrix[p.key][e] && (
-                          <input type="hidden" name={`evt:${p.key}:${e}`} value="on" />
-                        )}
-                        <div style={{ display: "flex", justifyContent: "center" }}>
-                          <Checkbox
-                            label={`${p.label}: ${eventLabel(e)}`}
-                            labelHidden
-                            checked={matrix[p.key][e]}
-                            onChange={() => toggle(p.key, e)}
-                          />
-                        </div>
-                      </td>
-                    ))}
+                    {PLATFORMS.map((p) => {
+                      const supported = destSupports(p.key, e);
+                      return (
+                        <td key={p.key} style={{ padding: "var(--p-space-100) var(--p-space-200)", borderLeft: GROUP_START_KEYS.has(p.key) ? GROUP_DIVIDER : undefined }}>
+                          <div style={{ display: "flex", justifyContent: "center" }}>
+                            {supported ? (
+                              <>
+                                {matrix[p.key][e] && <input type="hidden" name={`evt:${p.key}:${e}`} value="on" />}
+                                <Checkbox
+                                  label={`${p.label}: ${eventLabel(e)}`}
+                                  labelHidden
+                                  checked={matrix[p.key][e]}
+                                  onChange={() => toggle(p.key, e)}
+                                />
+                              </>
+                            ) : (
+                              <span
+                                title={`${p.label} doesn’t receive ${eventLabel(e)}`}
+                                aria-label={`${p.label} does not support ${eventLabel(e)}`}
+                                style={{ cursor: "help", color: "var(--p-color-text-disabled)" }}
+                              >
+                                &ndash;
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
