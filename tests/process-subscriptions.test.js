@@ -17,7 +17,7 @@ jest.mock("../app/lib/subscription.server.js", () => ({
 }));
 
 import prisma from "../app/db.server.js";
-import { processPendingSubscriptions } from "../app/lib/subscription-cron.server.js";
+import { processPendingSubscriptions, processSubscriptionNow, recordPendingSubscription } from "../app/lib/subscription-cron.server.js";
 
 const SHOP = "s.myshopify.com";
 const gaCalls = () => (global.fetch?.mock?.calls || []).filter((c) => String(c[0]).includes("google-analytics.com"));
@@ -135,5 +135,53 @@ describe("processPendingSubscriptions — deferred conversion pipeline", () => {
 
     expect(summary).toEqual({ processed: 0, sent: 0, skipped: 0, failed: 0 });
     expect(gaCalls()).toHaveLength(0);
+  });
+});
+
+describe("recordPendingSubscription", () => {
+  test("upserts the order encrypted, and a redelivery must not reopen the row", async () => {
+    await recordPendingSubscription(SHOP, subOrder());
+
+    const arg = prisma.pendingSubscription.upsert.mock.calls[0][0];
+    expect(arg.where).toEqual({ shopDomain_orderId: { shopDomain: SHOP, orderId: "5500000000009" } });
+    expect(arg.create.payload).toMatch(/^enc:v1:/); // encrypted at rest, not plaintext JSON
+    expect(arg.update).toEqual({}); // redelivery no-op
+  });
+});
+
+describe("processSubscriptionNow — immediate (webhook-kicked) delivery", () => {
+  test("claims the row's lease (CAS), delivers both GA4 events, stamps capture, and closes the row", async () => {
+    prisma.pendingSubscription.updateMany.mockResolvedValue({ count: 1 }); // we win the lease
+
+    const outcome = await processSubscriptionNow(SHOP, subOrder(), { settings: SETTINGS });
+
+    expect(outcome).toBe("sent");
+    expect(gaCalls()).toHaveLength(2);
+    // Leased before processing so the cron backstop can't also send it.
+    const lease = prisma.pendingSubscription.updateMany.mock.calls[0][0];
+    expect(lease.where).toMatchObject({ shopDomain: SHOP, orderId: "5500000000009", status: "pending" });
+    expect(lease.data.leaseToken).toEqual(expect.any(String));
+    expect(prisma.purchaseCapture.upsert).toHaveBeenCalled();
+    expect(prisma.pendingSubscription.update.mock.calls.at(-1)[0].data).toMatchObject({ status: "done", leaseToken: null });
+  });
+
+  test("no-ops without sending when the row is already owned (cron beat it to the lease)", async () => {
+    prisma.pendingSubscription.updateMany.mockResolvedValue({ count: 0 }); // someone else holds the lease
+
+    const outcome = await processSubscriptionNow(SHOP, subOrder(), { settings: SETTINGS });
+
+    expect(outcome).toBe("busy");
+    expect(gaCalls()).toHaveLength(0); // never processed → never double-sends against the cron backstop
+    expect(prisma.pendingSubscription.update).not.toHaveBeenCalled(); // didn't own the row, so didn't settle it
+  });
+
+  test("a non-subscription order it owns is delivered nowhere and closed as skipped", async () => {
+    prisma.pendingSubscription.updateMany.mockResolvedValue({ count: 1 });
+
+    const outcome = await processSubscriptionNow(SHOP, subOrder({ line_items: [{ id: 1, sku: "OneOff", title: "Mug", price: "20.00", quantity: 1 }] }), { settings: SETTINGS });
+
+    expect(outcome).toBe("skipped");
+    expect(gaCalls()).toHaveLength(0);
+    expect(prisma.pendingSubscription.update.mock.calls.at(-1)[0].data.status).toBe("skipped");
   });
 });

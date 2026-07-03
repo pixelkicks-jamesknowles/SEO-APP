@@ -139,10 +139,68 @@ async function processOne(shopDomain, order, settings) {
   return buyRes?.sent || subRes?.sent ? "sent" : "failed";
 }
 
+// Map a processOne outcome to the row's terminal status. "skipped" (not a subscription / consent-dropped)
+// stays skipped; "sent" and "failed" both close as "done" — a failed send has been queued to the outbox,
+// which now owns the retry, so re-running the whole pipeline would duplicate attribution/records.
+const statusFor = (outcome) => (outcome === "skipped" ? "skipped" : "done");
+
+async function settleRow(key, outcome, detail) {
+  await prisma.pendingSubscription
+    .update({ where: key, data: { status: statusFor(outcome), detail: detail || outcome, leaseToken: null, leasedUntil: null } })
+    .catch(() => {});
+}
+
 /**
- * Lease and process a batch of recorded subscription orders (called by /cron/tick). Same compare-and-swap
- * lease as reconcilePending: two overlapping ticks can't claim the same row and double-send. Returns a
- * summary for the cron log.
+ * Claim ONE pending row with a compare-and-swap lease: updateMany with the still-unleased guard, then read
+ * the affected count. Postgres row-locks serialize concurrent claims, so exactly one caller gets count === 1
+ * — that caller owns the row and may process it; everyone else (an overlapping cron tick, a duplicate kick)
+ * gets 0 and backs off. Returns the lease token when claimed, else null. This is what lets the immediate
+ * (webhook) path and the cron backstop run against the same row without ever double-sending.
+ */
+async function claimRow(shopDomain, orderId) {
+  const now = new Date();
+  const leaseToken = crypto.randomUUID();
+  const leasedUntil = new Date(Date.now() + LEASE_MINUTES * 60_000);
+  const res = await prisma.pendingSubscription
+    .updateMany({
+      where: { shopDomain, orderId, status: "pending", OR: [{ leasedUntil: null }, { leasedUntil: { lt: now } }] },
+      data: { leaseToken, leasedUntil },
+    })
+    .catch(() => ({ count: 0 }));
+  return res?.count === 1 ? leaseToken : null;
+}
+
+/**
+ * Deliver a recorded subscription order IMMEDIATELY (called fire-and-forget by orders/paid, after the row
+ * is recorded, so the conversion reaches GA4 in seconds instead of on the next cron tick). It claims the
+ * row's lease first, so the /cron/tick backstop can't also process it; if this path dies mid-flight the row
+ * stays pending (its lease expires) and the next tick finishes it. NOT awaited by the webhook — it runs
+ * after the 200. Best-effort. Returns the outcome (or "busy" when another path already owns the row).
+ */
+export async function processSubscriptionNow(shopDomain, order, { settings } = {}) {
+  const orderId = numericId(order?.id);
+  if (!orderId) return "skipped";
+  const token = await claimRow(shopDomain, orderId);
+  if (!token) return "busy"; // the cron pass (or a duplicate kick) already owns it — don't double-send
+  const key = { shopDomain_orderId: { shopDomain, orderId } };
+  let outcome = "skipped";
+  let detail = "";
+  try {
+    const s = settings || (await prisma.trackingSettings.findUnique({ where: { shopDomain } }).catch(() => null));
+    outcome = await processOne(shopDomain, order, s);
+  } catch (e) {
+    outcome = "failed";
+    detail = (e?.message || "error").slice(0, 200);
+  }
+  await settleRow(key, outcome, detail);
+  return outcome;
+}
+
+/**
+ * Lease and process a batch of recorded subscription orders (called by /cron/tick as the BACKSTOP for the
+ * immediate path above — it only picks up rows whose webhook kick never finished). Same compare-and-swap
+ * lease as reconcilePending: two overlapping ticks (or a tick and an in-flight immediate kick) can't claim
+ * the same row and double-send. Returns a summary for the cron log.
  */
 export async function processPendingSubscriptions({ limit = 6 } = {}) {
   const now = new Date();
@@ -200,13 +258,7 @@ export async function processPendingSubscriptions({ limit = 6 } = {}) {
     if (outcome === "sent") sent++;
     else if (outcome === "failed") failed++;
     else skipped++;
-    // A "failed" row (couldn't build/deliver, or its sends were queued to the outbox) is marked done here
-    // too: the outbox now owns retrying the queued sends, so re-running the whole pipeline would duplicate
-    // attribution/records. A hard exception with nothing queued is rare and best-effort by design.
-    const status = outcome === "skipped" ? "skipped" : "done";
-    await prisma.pendingSubscription
-      .update({ where: key, data: { status, detail: detail || outcome, leaseToken: null, leasedUntil: null } })
-      .catch(() => {});
+    await settleRow(key, outcome, detail);
   }
   return { processed: claimed.length, sent, skipped, failed };
 }

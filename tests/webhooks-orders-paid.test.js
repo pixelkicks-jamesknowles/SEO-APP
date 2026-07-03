@@ -1,22 +1,28 @@
 /* eslint-disable import/first -- jest.mock() must be declared above the imports it intercepts */
-// orders/paid is now a FAST record-only handler: it counts the order, records it for purchase
-// reconciliation, and (for subscription-enabled shops) records it for deferred processing — then ACKs.
-// It does NO inline Admin/GA4 work (that moved to processPendingSubscriptions; see process-subscriptions
-// .test.js for the conversion-pipeline assertions). These tests pin the fast path + idempotency.
+// orders/paid is now a FAST handler: it counts the order, records it for purchase reconciliation, and —
+// for subscription shops — records it then kicks off immediate delivery in the background (not awaited),
+// then ACKs. It does NO slow work inline. The subscription-cron module is mocked here (the immediate kick
+// is fire-and-forget, so running the real pipeline would be racy); its conversion assertions live in
+// process-subscriptions.test.js. These tests pin the fast path, what gets recorded/kicked, and idempotency.
 jest.mock("../app/shopify.server.js", () => ({
   __esModule: true,
   authenticate: { webhook: jest.fn() },
   unauthenticated: { admin: jest.fn() },
 }));
 jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./helpers/prisma-mock").makePrismaMock() }));
+jest.mock("../app/lib/subscription-cron.server.js", () => ({
+  __esModule: true,
+  recordPendingSubscription: jest.fn(async () => {}),
+  processSubscriptionNow: jest.fn(async () => {}),
+}));
 
 import prisma from "../app/db.server.js";
 import { authenticate } from "../app/shopify.server.js";
+import { recordPendingSubscription, processSubscriptionNow } from "../app/lib/subscription-cron.server.js";
 import { action as ordersPaid } from "../app/routes/webhooks.orders.paid.jsx";
 
 const SHOP = "s.myshopify.com";
 const req = { request: {} };
-const gaCalls = () => (global.fetch?.mock?.calls || []).filter((c) => String(c[0]).includes("google-analytics.com"));
 
 // Server-side + subscription + reconciliation on, GA4 wired, FX/COGS off. eventMatrix opts GA4/Meta into
 // the purchase so recordPendingPurchase has something to store.
@@ -34,7 +40,6 @@ const SETTINGS = {
   subscriptionConfig: "{}",
 };
 
-// A subscription order (a line carries a selling_plan_allocation).
 const subOrder = (over = {}) => ({
   id: 5500000000009,
   currency: "USD",
@@ -59,31 +64,28 @@ beforeEach(() => {
   prisma.trackingSettings.findUnique.mockResolvedValue(SETTINGS);
 });
 
-describe("orders/paid — fast record-only handler", () => {
-  test("records the order for reconciliation AND deferred subscription processing, without any inline GA4 send", async () => {
-    await deliver(subOrder());
+describe("orders/paid — fast record + immediate-kick handler", () => {
+  test("records the order for reconciliation + deferred delivery, and kicks off immediate delivery", async () => {
+    const payload = subOrder();
+    await deliver(payload);
 
-    // No slow work inline — the conversion sends happen later in processPendingSubscriptions.
-    expect(gaCalls()).toHaveLength(0);
     // Every paid order is recorded for purchase reconciliation.
     expect(prisma.pendingPurchase.upsert).toHaveBeenCalledTimes(1);
-    // A subscription-enabled shop also records the order for the deferred subscription pass, encrypted.
-    expect(prisma.pendingSubscription.upsert).toHaveBeenCalledTimes(1);
-    const arg = prisma.pendingSubscription.upsert.mock.calls[0][0];
-    expect(arg.where).toEqual({ shopDomain_orderId: { shopDomain: SHOP, orderId: "5500000000009" } });
-    expect(arg.create.payload).toMatch(/^enc:v1:/); // encrypted at rest, not plaintext JSON
-    expect(arg.update).toEqual({}); // a redelivery must not reopen a row the pass already closed
+    // A subscription-enabled shop records the order, then fires immediate delivery (not awaited).
+    expect(recordPendingSubscription).toHaveBeenCalledWith(SHOP, payload);
+    expect(processSubscriptionNow).toHaveBeenCalledWith(SHOP, payload, { settings: SETTINGS });
     // ordersPaid counted for the Accuracy match-rate denominator.
     expect(prisma.trackingDaily.upsert).toHaveBeenCalled();
   });
 
-  test("subscription tracking OFF: still counts + reconciles the order, but records no subscription row", async () => {
+  test("subscription tracking OFF: still counts + reconciles, but neither records nor kicks a subscription", async () => {
     prisma.trackingSettings.findUnique.mockResolvedValue({ ...SETTINGS, subscriptionTracking: false });
 
     await deliver(subOrder());
 
     expect(prisma.pendingPurchase.upsert).toHaveBeenCalledTimes(1);
-    expect(prisma.pendingSubscription.upsert).not.toHaveBeenCalled();
+    expect(recordPendingSubscription).not.toHaveBeenCalled();
+    expect(processSubscriptionNow).not.toHaveBeenCalled();
     expect(prisma.trackingDaily.upsert).toHaveBeenCalledTimes(1); // ordersPaid only
   });
 
@@ -92,28 +94,29 @@ describe("orders/paid — fast record-only handler", () => {
 
     await deliver(subOrder());
 
-    expect(prisma.pendingSubscription.upsert).not.toHaveBeenCalled();
+    expect(recordPendingSubscription).not.toHaveBeenCalled();
+    expect(processSubscriptionNow).not.toHaveBeenCalled();
     expect(prisma.pendingPurchase.upsert).not.toHaveBeenCalled(); // recordPendingPurchase no-ops without serverSide
     expect(prisma.trackingDaily.upsert).toHaveBeenCalledTimes(1); // ordersPaid still counted
   });
 
-  test("a non-subscription order is still recorded (the deferred pass, not the webhook, decides it's a one-off)", async () => {
-    // The REST payload can't cheaply prove an order ISN'T a subscription (selling plans need an Admin
-    // lookup), so a subscription-enabled shop records every paid order; the cron pass skips the one-offs.
-    await deliver(subOrder({ line_items: [{ id: 1, sku: "OneOff", title: "Mug", price: "20.00", quantity: 1 }] }));
+  test("a non-subscription order is still recorded + kicked (the delivery path, not the webhook, decides it's a one-off)", async () => {
+    const payload = subOrder({ line_items: [{ id: 1, sku: "OneOff", title: "Mug", price: "20.00", quantity: 1 }] });
+    await deliver(payload);
 
-    expect(gaCalls()).toHaveLength(0);
-    expect(prisma.pendingSubscription.upsert).toHaveBeenCalledTimes(1);
+    expect(recordPendingSubscription).toHaveBeenCalledWith(SHOP, payload);
+    expect(processSubscriptionNow).toHaveBeenCalledTimes(1);
     expect(prisma.pendingPurchase.upsert).toHaveBeenCalledTimes(1);
   });
 
-  test("redelivery of the same webhook id is a no-op (no double count, no double record)", async () => {
+  test("redelivery of the same webhook id is a no-op (no double count, no double record or kick)", async () => {
     prisma.processedWebhook.findUnique.mockResolvedValue({ webhookId: "wh-paid-1" });
 
     await deliver(subOrder());
 
     expect(prisma.trackingDaily.upsert).not.toHaveBeenCalled();
     expect(prisma.pendingPurchase.upsert).not.toHaveBeenCalled();
-    expect(prisma.pendingSubscription.upsert).not.toHaveBeenCalled();
+    expect(recordPendingSubscription).not.toHaveBeenCalled();
+    expect(processSubscriptionNow).not.toHaveBeenCalled();
   });
 });
