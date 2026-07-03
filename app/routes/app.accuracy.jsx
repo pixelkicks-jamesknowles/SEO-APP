@@ -18,14 +18,17 @@ const ID_LABELS = [
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const health = await computeHealth(session.shop);
+  const shopDomain = session.shop;
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [rows, tracking] = await Promise.all([
-    prisma.trackingDaily.findMany({
-      where: { shopDomain: session.shop, date: { gte: since } },
-      orderBy: { date: "desc" },
-    }),
-    prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop }, select: { reportingCurrency: true } }),
+  // These four are independent (health, the per-day rows, the currency setting, and match-quality read
+  // different tables), so run them in ONE round-trip group. Previously computeHealth and getMatchQuality
+  // were each awaited separately, stacking three sequential DB round-trip groups before the page could
+  // paint — the biggest lever on this page's LCP.
+  const [health, rows, tracking, matchQuality] = await Promise.all([
+    computeHealth(shopDomain),
+    prisma.trackingDaily.findMany({ where: { shopDomain, date: { gte: since } }, orderBy: { date: "desc" } }),
+    prisma.trackingSettings.findUnique({ where: { shopDomain }, select: { reportingCurrency: true } }),
+    getMatchQuality(shopDomain, 30),
   ]);
   const sum = (k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
   return {
@@ -48,7 +51,7 @@ export const loader = async ({ request }) => {
     alerts: health.alerts,
     outboxPending: health.outboxPending,
     outboxDead: health.outboxDead,
-    matchQuality: await getMatchQuality(session.shop, 30),
+    matchQuality,
   };
 };
 
