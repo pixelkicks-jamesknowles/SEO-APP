@@ -56,6 +56,7 @@ const PLATFORM_GROUPS = [
     { key: "pinterest", label: "Pinterest" },
     { key: "snapchat", label: "Snapchat" },
     { key: "reddit", label: "Reddit" },
+    { key: "linkedin", label: "LinkedIn" },
     { key: "klaviyo", label: "Klaviyo" },
   ] },
 ];
@@ -98,10 +99,12 @@ export const loader = async ({ request }) => {
     pinterestId: t?.pinterestId ?? "",
     snapPixelId: t?.snapPixelId ?? "",
     redditPixelId: t?.redditPixelId ?? "",
+    linkedinConversionId: t?.linkedinConversionId ?? "",
     hasTiktokToken: Boolean(keys.tiktokAccessToken),
     hasPinterestToken: Boolean(keys.pinterestAccessToken && keys.pinterestAdAccountId),
     hasSnapToken: Boolean(keys.snapAccessToken),
     hasRedditToken: Boolean(keys.redditAccessToken),
+    hasLinkedinToken: Boolean(keys.linkedinAccessToken),
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     consentSignals: t?.consentSignals ?? true,
@@ -165,6 +168,7 @@ export const action = async ({ request }) => {
     pinterestId: form.get("pinterestId") || null,
     snapPixelId: form.get("snapPixelId") || null,
     redditPixelId: form.get("redditPixelId") || null,
+    linkedinConversionId: form.get("linkedinConversionId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     consentSignals: form.get("consentSignals") === "on",
@@ -294,6 +298,7 @@ export default function Tracking() {
     pinterestId: data.pinterestId,
     snapPixelId: data.snapPixelId,
     redditPixelId: data.redditPixelId,
+    linkedinConversionId: data.linkedinConversionId,
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
@@ -356,12 +361,12 @@ export default function Tracking() {
       monthDays: String(data.subscriptionConfig.monthDays ?? 28),
       clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
     });
-    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId });
+    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId, linkedinConversionId: data.linkedinConversionId });
   };
   const saveNow = () => submit(formRef.current, { method: "post" });
 
   // Inline config validation - catch the "set up but sends nothing" traps.
-  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId);
+  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId || ids.linkedinConversionId);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -447,6 +452,15 @@ export default function Tracking() {
                     onChange={setId("redditPixelId")}
                     placeholder="a2_abcdef123456"
                     helpText={data.hasRedditToken ? "Delivered server-side via the Reddit Conversions API." : "Add a Reddit Conversions API token on Settings to deliver these."}
+                  />
+                  <TextField
+                    label="LinkedIn conversion ID"
+                    name="linkedinConversionId"
+                    autoComplete="off"
+                    value={ids.linkedinConversionId}
+                    onChange={setId("linkedinConversionId")}
+                    placeholder="12345678"
+                    helpText={data.hasLinkedinToken ? "Delivered server-side (B2B) via the LinkedIn Conversions API." : "Add a LinkedIn Conversions API token on Settings to deliver these."}
                   />
                 </FormLayout.Group>
               </FormLayout>

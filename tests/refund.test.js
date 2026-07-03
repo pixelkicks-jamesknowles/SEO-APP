@@ -37,6 +37,14 @@ describe("buildRefundEvent", () => {
     });
     expect(ev.params.value).toBe(10); // only the settled refund counts
   });
+
+  test("uses the shop's fallback currency (not a blind USD) when a sparse payload omits currency", () => {
+    // A refund payload with no transaction currency, on a GBP-reporting store.
+    const ev = buildRefundEvent({ order_id: 8, transactions: [] }, { fallbackCurrency: "GBP" });
+    expect(ev.params.currency).toBe("GBP");
+    // With neither a payload currency nor a fallback, USD remains the last-resort default.
+    expect(buildRefundEvent({ order_id: 8, transactions: [] }, {}).params.currency).toBe("USD");
+  });
 });
 
 describe("buildCancellationEvent", () => {

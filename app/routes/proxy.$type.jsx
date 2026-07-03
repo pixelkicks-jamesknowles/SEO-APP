@@ -1,7 +1,7 @@
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { ingestEvent } from "../lib/ingest.server";
-import { checkIngestRate } from "../lib/ratelimit.server";
+import { checkIngestRate, clientIpFromRequest } from "../lib/ratelimit.server";
 import { effectiveDataLayerConfig } from "../lib/datalayer";
 
 // App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/<type> here. Used by the SEO-
@@ -30,7 +30,7 @@ export const action = async ({ request, params }) => {
   if (!shopDomain) return new Response("Unauthorized", { status: 401 });
   if (params.type !== "track") return new Response("Not found", { status: 404 });
 
-  const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
+  const clientIp = clientIpFromRequest(request);
   // Abuse guard (same limiter as /pixel/track). This path is app-proxy-signed, so it's lower risk, but
   // a compromised/looping embed shouldn't be able to flood a shop's server-side sends either.
   const rl = checkIngestRate(shopDomain, clientIp);

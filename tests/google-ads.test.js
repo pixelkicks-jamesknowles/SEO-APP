@@ -21,7 +21,8 @@ describe("buildClickConversion", () => {
   test("adds hashed Enhanced-Conversion identifiers", () => {
     const c = buildClickConversion(config, { value: 10, email: "Test@Example.com ", phone: "+1 (555) 123-4567", gclid: "G" });
     expect(c.userIdentifiers).toContainEqual({ hashedEmail: sha256Hex("test@example.com") });
-    expect(c.userIdentifiers).toContainEqual({ hashedPhoneNumber: sha256Hex("15551234567") });
+    // Google Ads requires E.164 with the leading "+" before hashing.
+    expect(c.userIdentifiers).toContainEqual({ hashedPhoneNumber: sha256Hex("+15551234567") });
   });
 
   test("prefers gclid, else gbraid, else wbraid", () => {

@@ -4,15 +4,34 @@
 // dead-lettered. This is what turns "best-effort" into "eventually delivered" for the accuracy promise.
 import crypto from "node:crypto";
 import prisma from "../db.server";
-import { deliverOne } from "./server-side.server";
+import { deliverOne, numericId } from "./server-side.server";
+import { recordCapture, recordDeliveries, CAPTURE_FLAG_BY_DESTINATION } from "./delivery.server";
+import { encryptSecret, decryptSecret } from "./secrets.server";
+
+/** The numeric order id a queued purchase job carries, so a successful retry can stamp PurchaseCapture
+ *  and stop the reconcile pass from re-sending (double-counting) the same purchase. Reads the order id
+ *  from wherever each destination's built event stores it. Pure. */
+function purchaseOrderId(destination, event) {
+  if (destination === "ga4") return numericId(event?.params?.transaction_id);
+  if (destination === "meta") return numericId(event?.custom_data?.order_id) || numericId(event?.event_id);
+  if (destination === "google_ads") return numericId(event?.orderId);
+  if (destination === "reddit") return numericId(event?.event_metadata?.conversion_id);
+  return null;
+}
 
 // Backoff between attempts, in minutes: 1m, 5m, 30m, 2h, 12h. A job that fails all of these (6 total
 // sends: the original + 5 retries) is dead-lettered. Exported for the unit test + the cron summary.
 export const BACKOFF_MINUTES = [1, 5, 30, 120, 720];
 export const MAX_ATTEMPTS = BACKOFF_MINUTES.length + 1;
 // How long a drained row is leased (nextAttemptAt pushed out) while it's being processed, so an
-// overlapping cron tick can't grab and re-send it. Longer than any single send's timeout.
-const LEASE_MINUTES = 5;
+// overlapping cron tick can't grab and re-send it.
+//
+// INVARIANT: the lease MUST outlast the whole batch, not just one send. Rows are processed sequentially,
+// so worst-case batch time = (cron limit) × (per-send timeout). With net.DEFAULT_TIMEOUT_MS = 10s and the
+// cron's drainOutbox limit (40) → ≤ ~6.7 min < this 10-min lease. If you raise the cron limit or the
+// timeout, keep (limit × timeout) < LEASE_MINUTES, or a stuck batch's un-reached rows go due again mid-
+// tick and an overlapping tick re-sends them (double-counting non-purchase GA4 events, which don't dedup).
+const LEASE_MINUTES = 10;
 
 /** Minutes until the next attempt for a row that has already been tried `attempts` times, or null if
  *  it has exhausted its retries (→ caller marks it dead). Pure. */
@@ -32,7 +51,11 @@ export async function enqueue(shopDomain, job, detail = "") {
         shopDomain,
         destination: job.destination,
         eventName: job.eventName || job.event?.name || "event",
-        payload: JSON.stringify({ event: job.event, clientId: job.clientId ?? null, consent: job.consent ?? null }),
+        // Encrypt at rest (AES-256-GCM). A queued job can carry personal data — the ad CAPIs hash PII,
+        // but Klaviyo events carry RAW email/phone (Klaviyo matches profiles on the raw value), so a
+        // plaintext payload would sit unencrypted in the DB. decryptSecret reads legacy plaintext rows
+        // back unchanged, so this is backward-compatible with anything already queued.
+        payload: encryptSecret(JSON.stringify({ event: job.event, clientId: job.clientId ?? null, consent: job.consent ?? null })),
         attempts: 1, // the live send already counts as attempt #1
         status: "pending",
         lastDetail: (detail || "").slice(0, 200) || null,
@@ -91,11 +114,20 @@ export async function drainOutbox({ limit = 200 } = {}) {
   let dead = 0;
   for (const row of claimed) {
     const settings = await getSettings(row.shopDomain);
-    let parsed = {};
+    let parsed = null;
     try {
-      parsed = JSON.parse(row.payload);
+      parsed = JSON.parse(decryptSecret(row.payload));
     } catch {
-      parsed = {};
+      parsed = null;
+    }
+    // A row we can't decrypt/parse (wrong-key rotation, truncation, tampering) has no recoverable event.
+    // Dead-letter it instead of posting `{events:[undefined]}` — which GA4 would 204 (looking delivered)
+    // while the real conversion is silently lost. A dead row is visible in diagnostics; a false-delivered
+    // one is not.
+    if (!parsed || parsed.event == null) {
+      dead++;
+      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { status: "dead", lastDetail: "corrupt payload (undecryptable/missing event)", leaseToken: null } }).catch(() => {});
+      continue;
     }
     const job = { destination: row.destination, eventName: row.eventName, event: parsed.event, clientId: parsed.clientId, consent: parsed.consent };
 
@@ -104,17 +136,29 @@ export async function drainOutbox({ limit = 200 } = {}) {
 
     if (result.ok) {
       delivered++;
-      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { status: "delivered", attempts: { increment: 1 }, lastDetail: result.detail || null } }).catch(() => {});
+      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { status: "delivered", attempts: { increment: 1 }, lastDetail: result.detail || null, leaseToken: null } }).catch(() => {});
+      // A recovered purchase send MUST stamp PurchaseCapture, or the reconcile pass (which only checks
+      // capture flags, not the outbox) will re-send this same order to that destination and double-count.
+      const flag = CAPTURE_FLAG_BY_DESTINATION[row.destination];
+      if (row.eventName === "checkout_completed" && flag) {
+        const oid = purchaseOrderId(row.destination, job.event);
+        if (oid) await recordCapture(row.shopDomain, oid, { [flag]: true });
+      }
+      // Health parity: log the recovered send + bump eventsSent (countPurchases:false — the order was
+      // already counted, or not, at first ingest; re-counting here would inflate the capture rate).
+      await recordDeliveries(row.shopDomain, [{ destination: row.destination, eventName: row.eventName, ok: true, detail: result.detail || "" }], { countPurchases: false });
       continue;
     }
     const attempts = row.attempts + 1;
     const delay = nextDelayMinutes(attempts);
+    // Clear the lease on every terminal transition so a finished row never carries a dangling token
+    // (lets leaseToken double as a liveness signal, and keeps re-selects unambiguous).
     if (delay == null) {
       dead++;
-      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { status: "dead", attempts, lastDetail: (result.detail || "").slice(0, 200) || null } }).catch(() => {});
+      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { status: "dead", attempts, lastDetail: (result.detail || "").slice(0, 200) || null, leaseToken: null } }).catch(() => {});
     } else {
       requeued++;
-      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { attempts, nextAttemptAt: minutesFromNow(delay), lastDetail: (result.detail || "").slice(0, 200) || null } }).catch(() => {});
+      await prisma.deliveryOutbox.update({ where: { id: row.id }, data: { attempts, nextAttemptAt: minutesFromNow(delay), lastDetail: (result.detail || "").slice(0, 200) || null, leaseToken: null } }).catch(() => {});
     }
   }
   return { processed: claimed.length, delivered, requeued, dead };

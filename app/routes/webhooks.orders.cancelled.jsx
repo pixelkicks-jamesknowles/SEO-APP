@@ -35,7 +35,8 @@ export const action = async ({ request }) => {
     if (!claimed) return new Response();
 
     const clientId = syntheticClientId(payload?.id);
-    const event = buildCancellationEvent(payload, { clientId });
+    const fallbackCurrency = settings.reportingCurrency || undefined;
+    const event = buildCancellationEvent(payload, { clientId, fallbackCurrency });
     // Margin mode: reverse the same (margin) value the purchase sent.
     withValueMode(event.params, settings.valueMode, settings.marginPct);
     await normalizeForShop(settings, event.params); // multi-currency (no-op if off)
@@ -50,7 +51,7 @@ export const action = async ({ request }) => {
       if (plan) line.selling_plan_allocation = { selling_plan: { id: plan.id, name: plan.name } };
     }
     // Reverse the subscription_purchase for the cancelled order's subscription lines.
-    const subRefund = buildSubscriptionCancellationEvent(payload, { eventName: refundEventName(settings), clientId });
+    const subRefund = buildSubscriptionCancellationEvent(payload, { eventName: refundEventName(settings), clientId, fallbackCurrency });
     if (subRefund) {
       await normalizeForShop(settings, subRefund.params);
       const sr = await sendGa4Event(settings, subRefund);

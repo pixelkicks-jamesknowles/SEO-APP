@@ -193,13 +193,34 @@ describe("metaEventFor", () => {
   test("sets event_id (dedup), hashed user data and custom_data", () => {
     const ev = metaEventFor("checkout_completed", { ...checkoutEvent, fbp: "fb.1.2.3", clientIp: "1.2.3.4", userAgent: "UA" });
     expect(ev.event_name).toBe("Purchase");
-    expect(ev.event_id).toBe("evt_123");
+    // A purchase's Meta event_id is the order-scoped dedup key ("order:<numeric id>"), NOT the Shopify
+    // event id — so the pixel path and the reconcile backfill produce the same id and Meta collapses them.
+    expect(ev.event_id).toBe("order:5500000000001");
     expect(ev.user_data.em).toEqual([sha256Hex("buyer@example.com")]);
     expect(ev.user_data.fbp).toBe("fb.1.2.3");
     expect(ev.user_data.client_ip_address).toBe("1.2.3.4");
     expect(ev.custom_data.value).toBe(120);
     expect(ev.custom_data.contents).toHaveLength(1);
     expect(ev.custom_data.order_id).toBe("5500000000001");
+  });
+
+  test("derives the SAME purchase event_id from a gid-style order id (pixel) and a numeric one (reconcile)", () => {
+    // The Web Pixel sends order.id as a gid://shopify/Order/<n>; the reconcile backfill sends the bare
+    // numeric id. Both must collapse to the identical Meta event_id or a backfilled order double-counts.
+    const pixel = metaEventFor("checkout_completed", { ...checkoutEvent, data: { checkout: { ...checkoutEvent.data.checkout, order: { id: "gid://shopify/Order/5500000000001" } } } });
+    const backfill = metaEventFor("checkout_completed", { ...checkoutEvent, id: "order:5500000000001", data: { checkout: { ...checkoutEvent.data.checkout, order: { id: "5500000000001" } } } });
+    expect(pixel.event_id).toBe("order:5500000000001");
+    expect(backfill.event_id).toBe(pixel.event_id);
+  });
+
+  test("a non-purchase event keeps the Shopify event id (dedups against a client-side pixel hit)", () => {
+    const ev = metaEventFor("product_viewed", { id: "evt_pv_1", data: { productVariant: { id: "v1", price: { amount: 10, currencyCode: "GBP" } } } });
+    expect(ev.event_id).toBe("evt_pv_1");
+  });
+
+  test("a purchase with no order id yet falls back to the Shopify event id", () => {
+    const ev = metaEventFor("checkout_completed", { ...checkoutEvent, id: "evt_123", data: { checkout: { ...checkoutEvent.data.checkout, order: undefined, token: "tok_abc" } } });
+    expect(ev.event_id).toBe("evt_123");
   });
 });
 
@@ -210,9 +231,10 @@ describe("metaUserData (Event Match Quality identifiers)", () => {
     expect(ud.ln).toEqual([sha256Hex("Jones")]);
     expect(ud.ct).toEqual([sha256Hex("Leeds")]);
     expect(ud.st).toEqual([sha256Hex("ENG")]);
-    expect(ud.zp).toEqual([sha256Hex("LS1 1AA")]);
+    // zip is hashed COMPACT (Meta strips internal spaces/punctuation): "LS1 1AA" → "ls11aa".
+    expect(ud.zp).toEqual([sha256Hex("ls11aa")]);
     expect(ud.country).toEqual([sha256Hex("GB")]);
-    expect(ud.ph).toEqual([sha256Hex("447700900123")]);
+    expect(ud.ph).toEqual([sha256Hex("447700900123")]); // Meta wants digits only (no +)
     expect(ud.external_id).toEqual([sha256Hex("cust_9")]);
     expect(ud.fbc).toBe("fb.c.1");
   });

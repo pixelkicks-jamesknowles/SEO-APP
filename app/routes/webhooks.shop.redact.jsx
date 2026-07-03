@@ -10,12 +10,8 @@ export const action = async ({ request }) => {
   console.log(`Received ${topic} for ${shop} — purging shop data`);
   // Every model keyed on `shopDomain` (Session is keyed on `shop`).
   const byShopDomain = [
-    prisma.seoSettings,
     prisma.trackingSettings,
-    prisma.redirect404Log,
-    prisma.resourceHandle,
     prisma.activityLog,
-    prisma.auditSnapshot,
     prisma.recentEvent,
     prisma.deliveryLog,
     prisma.deliveryOutbox,

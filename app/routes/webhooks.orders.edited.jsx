@@ -29,7 +29,7 @@ export const action = async ({ request }) => {
 
     const order = await fetchOrderForEdit(shop, orderId);
     if (!order) return new Response(); // couldn't re-fetch → skip rather than send a wrong value
-    const event = buildOrderEditedEvent(order, { clientId: syntheticClientId(orderId) });
+    const event = buildOrderEditedEvent(order, { clientId: syntheticClientId(orderId), fallbackCurrency: settings.reportingCurrency || undefined });
     if (!event) return new Response();
     await normalizeForShop(settings, event.params); // multi-currency (no-op if off)
     const r = await sendGa4Event(settings, event);

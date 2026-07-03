@@ -36,7 +36,8 @@ test("delivered: a job that now succeeds is marked delivered and hits the GA4 en
   expect(global.fetch).toHaveBeenCalledTimes(1);
   expect(global.fetch.mock.calls[0][0]).toContain("google-analytics.com/mp/collect");
   expect(prisma.deliveryOutbox.update).toHaveBeenCalledWith(
-    expect.objectContaining({ where: { id: "row1" }, data: expect.objectContaining({ status: "delivered" }) }),
+    // The terminal transition clears the lease token so a finished row never carries a dangling one.
+    expect.objectContaining({ where: { id: "row1" }, data: expect.objectContaining({ status: "delivered", leaseToken: null }) }),
   );
   expect(summary).toMatchObject({ processed: 1, delivered: 1, requeued: 0, dead: 0 });
 });
@@ -83,9 +84,49 @@ test("a shop whose settings vanished doesn't crash — the row is retried later"
   expect(summary).toMatchObject({ processed: 1, delivered: 0, requeued: 1 });
 });
 
+test("a recovered purchase stamps PurchaseCapture so reconcile won't re-send it", async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+  // A queued Meta Purchase for order 5500000000001 (event_id order-scoped, as the builder now emits).
+  const metaRow = {
+    id: "rowM",
+    shopDomain: SETTINGS.shopDomain,
+    destination: "meta",
+    eventName: "checkout_completed",
+    payload: JSON.stringify({ event: { event_name: "Purchase", event_id: "order:5500000000001", custom_data: { order_id: "5500000000001", value: 120 } } }),
+    attempts: 1,
+    status: "pending",
+    nextAttemptAt: new Date(Date.now() - 1000),
+  };
+  prisma.trackingSettings.findUnique.mockResolvedValue({ ...SETTINGS, metaPixelId: "PIX", serverSideKeys: JSON.stringify({ metaCapiToken: "tok" }) });
+  prisma.deliveryOutbox.findMany.mockResolvedValue([metaRow]);
+
+  await drainOutbox();
+
+  expect(prisma.purchaseCapture.upsert).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { shopDomain_orderId: { shopDomain: SETTINGS.shopDomain, orderId: "5500000000001" } },
+      update: expect.objectContaining({ meta: true }),
+    }),
+  );
+});
+
 test("nothing due → a clean no-op summary", async () => {
   prisma.deliveryOutbox.findMany.mockResolvedValue([]);
   expect(await drainOutbox()).toMatchObject({ processed: 0, delivered: 0, requeued: 0, dead: 0 });
+});
+
+test("a corrupt/undecryptable payload is dead-lettered, not sent as garbage-then-delivered", async () => {
+  global.fetch = jest.fn();
+  // decryptSecret passes a non-"enc:" value through unchanged; this isn't valid JSON → parse fails.
+  prisma.deliveryOutbox.findMany.mockResolvedValue([{ ...row(1), payload: "not valid json {" }]);
+
+  const summary = await drainOutbox();
+
+  expect(global.fetch).not.toHaveBeenCalled(); // never posts {events:[undefined]}
+  expect(prisma.deliveryOutbox.update).toHaveBeenCalledWith(
+    expect.objectContaining({ where: { id: "row1" }, data: expect.objectContaining({ status: "dead" }) }),
+  );
+  expect(summary).toMatchObject({ processed: 1, delivered: 0, dead: 1 });
 });
 
 test("leases the batch with a compare-and-swap token before processing", async () => {

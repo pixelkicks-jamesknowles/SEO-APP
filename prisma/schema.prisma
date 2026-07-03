@@ -46,29 +46,6 @@ model Shop {
   googleOauthNonceExpiresAt DateTime?
 }
 
-// SEO core settings (spec seo-app-v1 §4). Templates + toggles are deterministic;
-// no per-resource copy is stored here (that's written to native seo.title/description).
-model SeoSettings {
-  shopDomain      String   @id
-  // Deterministic meta templates, e.g. {"product":"{{product.title}} — {{product.type}} | {{shop.name}}"}
-  metaTemplates   String   @default("{}") // JSON: { product, collection, page, article, blog }
-  altTemplate     String? // e.g. "{{product.title}} – {{variant}}"
-  // Which JSON-LD nodes the app emits. The dedup pass suppresses any the theme already emits.
-  schemaToggles   String   @default("{}") // JSON: { product, breadcrumb, organization, faq, video, article }
-  // Nodes the app must NOT emit because the host theme/another app owns them
-  // (e.g. AggregateRating when the Reviews app emits it). The single-emitter rule.
-  suppressedNodes String   @default("[]") // JSON array of node types
-  organization    String   @default("{}") // JSON: name, logo, sameAs[] for Organization schema
-  robotsRules     String? // managed robots.txt additions
-  llmsTxtEnabled  Boolean  @default(false)
-  autoApply       Boolean  @default(false) // apply meta templates to new products on create
-  indexnowKey     String? // IndexNow key, served as a key-file via the app proxy
-  cruxApiKey      String? // Google CrUX API key for Core Web Vitals field data
-  monitoring      Boolean  @default(false) // scheduled re-audit + regression alerts
-  alertWebhook    String? // Slack-compatible incoming webhook for regression alerts
-  updatedAt       DateTime @updatedAt
-}
-
 // Tracking module settings (spec seo-app-v1 §9). Platform IDs + per-platform event
 // matrix + consent. Web Pixel reads an effective copy via app proxy / metafield.
 model TrackingSettings {
@@ -81,6 +58,9 @@ model TrackingSettings {
   snapPixelId          String?
   redditPixelId        String? // Reddit pixel / advertiser id for the Conversions API path
   bingUetId            String?
+  // LinkedIn Conversions API: the conversion-rule id (numeric, or a full urn:lla:llaPartnerConversion:<id>).
+  // The access token lives (encrypted) in serverSideKeys.linkedinAccessToken. B2B server-side conversions.
+  linkedinConversionId String?
   // Per-platform event opt-in, e.g. {"ga4":["page_viewed","product_viewed","checkout_completed"]}
   eventMatrix          String   @default("{}") // JSON
   consentMode          Boolean  @default(true) // respect Customer Privacy consent at all
@@ -252,33 +232,6 @@ model ProcessedWebhook {
   @@index([shopDomain, at])
 }
 
-// 404 monitoring (spec §4): storefront beacon logs misses; the app suggests/creates 301s.
-model Redirect404Log {
-  id              String   @id @default(uuid())
-  shopDomain      String
-  path            String
-  hits            Int      @default(1)
-  suggestedTarget String?
-  resolved        Boolean  @default(false)
-  firstSeen       DateTime @default(now())
-  lastSeen        DateTime @updatedAt
-
-  @@unique([shopDomain, path])
-  @@index([shopDomain, resolved])
-}
-
-// Last-seen handle per resource, so products/collections/update can detect a handle change
-// and auto-create a 301 from the old storefront path (spec seo-app-v1 §4).
-model ResourceHandle {
-  shopDomain   String
-  resourceId   String // gid://shopify/Product/123
-  resourceType String // product | collection
-  handle       String
-  updatedAt    DateTime @updatedAt
-
-  @@id([shopDomain, resourceId])
-}
-
 // Audit trail of merchant/app actions (saves, applies, redirects) for governance + support.
 model ActivityLog {
   id         String   @id @default(uuid())
@@ -290,7 +243,8 @@ model ActivityLog {
   @@index([shopDomain, createdAt])
 }
 
-// Google OAuth tokens per shop (Search Console). Written by the OAuth callback.
+// Google OAuth tokens per shop (Google Ads Enhanced Conversions). Written by the OAuth callback
+// (google.oauth.callback.jsx) and read by google-ads.server.js for the direct conversion upload.
 model GoogleToken {
   shopDomain   String    @id
   accessToken  String
@@ -299,30 +253,24 @@ model GoogleToken {
   updatedAt    DateTime  @updatedAt
 }
 
-// History of audit scores, written by the scheduled cron — powers regression alerts + a trend line.
-model AuditSnapshot {
-  id         String   @id @default(uuid())
-  shopDomain String
-  score      Int
-  issues     String // JSON snapshot of issue counts
-  createdAt  DateTime @default(now())
-
-  @@index([shopDomain, createdAt])
-}
-
 // Server-side purchase reconciliation queue. orders/paid inserts one row per paid order (the trimmed
 // order payload needed to rebuild the GA4/Meta purchase). A delayed cron pass (grace window) checks
 // PurchaseCapture: any destination the storefront pixel never delivered is backfilled server-side, then
 // the row is marked reconciled. GA4 dedups on transaction_id (= order id) and Meta on a deterministic
 // event_id (= "order:<id>"), so a backfill can only fill a gap — never double-count.
 model PendingPurchase {
-  shopDomain String
-  orderId    String // numeric order id (Shopify's source of truth)
-  payload    String // JSON: trimmed order fields (line items, totals, hashed-able identifiers)
-  status     String   @default("pending") // pending | reconciled | skipped
-  detail     String? // what the reconcile pass did (destinations sent / why skipped)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  shopDomain  String
+  orderId     String // numeric order id (Shopify's source of truth)
+  payload     String // JSON: trimmed order fields (line items, totals, hashed-able identifiers)
+  status      String    @default("pending") // pending | reconciled | skipped
+  detail      String? // what the reconcile pass did (destinations sent / why skipped)
+  // Per-pass claim token, mirroring DeliveryOutbox: the reconcile worker leases a batch (stamps this +
+  // pushes leasedUntil out), then processes only rows carrying its token, so two overlapping cron ticks
+  // can't both backfill (and double-count the recovered revenue of) the same order.
+  leaseToken  String?
+  leasedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@id([shopDomain, orderId])
   @@index([status, createdAt])
@@ -336,6 +284,10 @@ model PurchaseCapture {
   orderId    String
   ga4        Boolean  @default(false)
   meta       Boolean  @default(false)
+  // Google Ads + Reddit are also reconciled/backfilled (both have reliable server-side dedup: Google Ads
+  // on orderId, Reddit on the order-scoped conversion_id), so they carry their own capture flag too.
+  googleAds  Boolean  @default(false)
+  reddit     Boolean  @default(false)
   at         DateTime @default(now())
 
   @@id([shopDomain, orderId])

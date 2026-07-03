@@ -52,6 +52,26 @@ describe("customers/redact", () => {
     await customersRedact(req);
     expect(prisma.customerAttribution.deleteMany).not.toHaveBeenCalled();
   });
+
+  test("also purges VisitorAttribution via the client_id captured in CustomerAttribution", async () => {
+    // The customer's first-checkout client_id lives in CustomerAttribution — resolve it and delete the
+    // matching visitor row(s), so the redacted customer's client_id + UTMs don't survive the request.
+    prisma.customerAttribution.findMany.mockResolvedValue([{ clientId: "111.222" }]);
+    authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123, email: "a@b.com" } } });
+
+    await customersRedact(req);
+
+    expect(prisma.visitorAttribution.deleteMany).toHaveBeenCalledWith({ where: { shopDomain: SHOP, clientId: { in: ["111.222"] } } });
+    // The mapping row itself is still deleted afterwards.
+    expect(prisma.customerAttribution.deleteMany).toHaveBeenCalledTimes(1);
+  });
+
+  test("no stored client_id → nothing to purge from VisitorAttribution", async () => {
+    prisma.customerAttribution.findMany.mockResolvedValue([{ clientId: null }]);
+    authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123 } } });
+    await customersRedact(req);
+    expect(prisma.visitorAttribution.deleteMany).not.toHaveBeenCalled();
+  });
 });
 
 describe("shop/redact", () => {
@@ -64,12 +84,8 @@ describe("shop/redact", () => {
     // hold personal data (CustomerAttribution = hashed emails, VisitorAttribution) and secrets
     // (GoogleToken) — leaving any of them behind is residual PII/credentials after a deletion request.
     const byShopDomain = [
-      "seoSettings",
       "trackingSettings",
-      "redirect404Log",
-      "resourceHandle",
       "activityLog",
-      "auditSnapshot",
       "recentEvent",
       "deliveryLog",
       "deliveryOutbox",

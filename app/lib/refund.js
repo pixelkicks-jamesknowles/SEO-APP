@@ -14,8 +14,10 @@ function lineItem(li, quantity) {
   };
 }
 
-/** refunds/create payload -> GA4 `refund` event (partial or full). transaction_id matches the order. */
-export function buildRefundEvent(refund, { clientId } = {}) {
+/** refunds/create payload -> GA4 `refund` event (partial or full). transaction_id matches the order.
+ *  `fallbackCurrency` (the shop's reporting currency) is used only when the payload omits currency, so a
+ *  sparse webhook on a non-USD store isn't mis-denominated as USD. */
+export function buildRefundEvent(refund, { clientId, fallbackCurrency } = {}) {
   const txns = refund?.transactions || [];
   // Only sum transactions explicitly marked as refunds AND that actually settled — a `pending`/`failure`
   // refund transaction represents money not (yet) returned, so summing it over-states the reversal and
@@ -24,7 +26,7 @@ export function buildRefundEvent(refund, { clientId } = {}) {
   // mis-including a non-refund (e.g. a void/sale) line.
   const refundTxns = txns.filter((t) => t.kind === "refund" && (t.status == null || t.status === "success"));
   const value = round2((refundTxns.length ? refundTxns : txns).reduce((s, t) => s + (Number(t.amount) || 0), 0));
-  const currency = txns[0]?.currency || "USD";
+  const currency = txns[0]?.currency || fallbackCurrency || "USD";
   const items = (refund?.refund_line_items || []).map((rli) => lineItem(rli.line_item, rli.quantity));
   const params = { transaction_id: String(refund?.order_id ?? ""), currency, value };
   if (items.length) params.items = items;
@@ -32,11 +34,11 @@ export function buildRefundEvent(refund, { clientId } = {}) {
 }
 
 /** orders/cancelled payload (an order) -> a full GA4 `refund` event. */
-export function buildCancellationEvent(order, { clientId } = {}) {
+export function buildCancellationEvent(order, { clientId, fallbackCurrency } = {}) {
   const items = (order?.line_items || []).map((li) => lineItem(li, li?.quantity));
   const params = {
     transaction_id: String(order?.id ?? ""),
-    currency: order?.currency || "USD",
+    currency: order?.currency || fallbackCurrency || "USD",
     value: round2(order?.current_total_price ?? order?.total_price ?? 0),
   };
   if (items.length) params.items = items;
@@ -46,7 +48,7 @@ export function buildCancellationEvent(order, { clientId } = {}) {
 /** refunds/create payload -> GA4 `subscription_refund` reversing ONLY the subscription line items in
  *  the refund (partial refunds reverse only the refunded sub lines). Returns null when nothing
  *  subscription-related was refunded, so the caller can skip the send. Mirrors subscription_purchase. */
-export function buildSubscriptionRefundEvent(refund, { eventName = "subscription_refund", clientId } = {}) {
+export function buildSubscriptionRefundEvent(refund, { eventName = "subscription_refund", clientId, fallbackCurrency } = {}) {
   const rlis = (refund?.refund_line_items || []).filter((rli) => lineIsSubscription(rli?.line_item));
   if (!rlis.length) return null;
   const items = rlis.map((rli) => lineItem(rli.line_item, rli.quantity));
@@ -57,7 +59,7 @@ export function buildSubscriptionRefundEvent(refund, { eventName = "subscription
       return s + sub;
     }, 0),
   );
-  const currency = refund?.transactions?.[0]?.currency || "USD";
+  const currency = refund?.transactions?.[0]?.currency || fallbackCurrency || "USD";
   const params = { transaction_id: String(refund?.order_id ?? ""), currency, value };
   if (items.length) params.items = items;
   return { name: eventName, params, clientId };
@@ -65,7 +67,7 @@ export function buildSubscriptionRefundEvent(refund, { eventName = "subscription
 
 /** orders/cancelled payload -> GA4 `subscription_refund` reversing the subscription lines of the
  *  cancelled order (value = their net subtotal). Returns null when the order had no subscription line. */
-export function buildSubscriptionCancellationEvent(order, { eventName = "subscription_refund", clientId } = {}) {
+export function buildSubscriptionCancellationEvent(order, { eventName = "subscription_refund", clientId, fallbackCurrency } = {}) {
   const subLines = (order?.line_items || []).filter(lineIsSubscription);
   if (!subLines.length) return null;
   const items = subLines.map((li) => lineItem(li, li?.quantity));
@@ -80,7 +82,7 @@ export function buildSubscriptionCancellationEvent(order, { eventName = "subscri
       return s + round2((gross - disc) / qty) * qty;
     }, 0),
   );
-  const params = { transaction_id: String(order?.id ?? ""), currency: order?.currency || "USD", value };
+  const params = { transaction_id: String(order?.id ?? ""), currency: order?.currency || fallbackCurrency || "USD", value };
   if (items.length) params.items = items;
   return { name: eventName, params, clientId };
 }

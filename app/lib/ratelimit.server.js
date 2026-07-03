@@ -61,11 +61,29 @@ export function checkIngestRate(shopDomain, clientIp, { now = Date.now() } = {})
   if (!shopDomain) return { ok: true, retryAfter: 0 };
   sweep(now);
   const ip = clientIp || "noip";
+  // Check the per-IP ceiling FIRST and short-circuit: a single flooding IP that's already over its own
+  // limit must NOT keep consuming the shop-wide budget (that let one abusive IP 429 every legitimate
+  // visitor of the shop). Only a request that passes the per-IP check draws down the shop budget.
   const perIp = hit(`${shopDomain}|${ip}`, PER_IP_LIMIT, now);
+  if (!perIp.ok) return { ok: false, retryAfter: Math.max(1, Math.ceil((perIp.resetAt - now) / 1000)) };
   const perShop = hit(`${shopDomain}|*`, PER_SHOP_LIMIT, now);
-  const ok = perIp.ok && perShop.ok;
-  const resetAt = Math.max(perIp.resetAt, perShop.resetAt);
-  return { ok, retryAfter: ok ? 0 : Math.max(1, Math.ceil((resetAt - now) / 1000)) };
+  return { ok: perShop.ok, retryAfter: perShop.ok ? 0 : Math.max(1, Math.ceil((perShop.resetAt - now) / 1000)) };
+}
+
+/**
+ * Extract the client IP from a request's forwarding headers. The leftmost x-forwarded-for entry is the
+ * originating client but is spoofable by the caller (especially on the unsigned /pixel/track beacon); an
+ * attacker can rotate it to dodge the per-IP ceiling. The per-SHOP ceiling (keyed on shop, not IP) is
+ * the real backstop and can't be spoofed. Operators behind a trusted proxy that APPENDS the real client
+ * IP as the last hop can set RATE_LIMIT_TRUST_LAST_HOP=true to key on that instead. Centralized here so
+ * both ingest routes derive the IP identically. Returns undefined when no forwarding header is present.
+ */
+export function clientIpFromRequest(request) {
+  const xff = request.headers.get("x-forwarded-for") || "";
+  const hops = xff.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!hops.length) return undefined;
+  const useLast = process.env.RATE_LIMIT_TRUST_LAST_HOP === "true";
+  return (useLast ? hops[hops.length - 1] : hops[0]) || undefined;
 }
 
 // Test-only: reset the shared state between cases.

@@ -58,3 +58,17 @@ test("the per-shop ceiling limits a distributed flood across many IPs", () => {
 test("fails open when the shop is missing (never a new way to drop good events)", () => {
   expect(checkIngestRate(null, "1.2.3.4").ok).toBe(true);
 });
+
+test("an IP over its per-IP ceiling does NOT keep draining the shop-wide budget", () => {
+  const now = 5_000_000;
+  // Flood from one IP well past the per-IP cap: every extra request is rejected at the per-IP gate.
+  for (let i = 0; i < RATE_LIMITS.PER_IP_LIMIT + 500; i++) checkIngestRate(SHOP, "flooder", { now });
+  // The shop budget should be spent only up to the per-IP cap (the flooder's accepted requests), NOT by
+  // the 500 rejected ones — so a fresh, legitimate IP still has almost the whole shop budget available.
+  let ok = 0;
+  for (let i = 0; i < RATE_LIMITS.PER_SHOP_LIMIT - RATE_LIMITS.PER_IP_LIMIT - 1; i++) {
+    if (checkIngestRate(SHOP, `legit-${i}`, { now }).ok) ok++;
+  }
+  // If the flood had burned the shop budget, almost all of these would be 429'd; instead they pass.
+  expect(ok).toBeGreaterThan(RATE_LIMITS.PER_SHOP_LIMIT - RATE_LIMITS.PER_IP_LIMIT - 10);
+});

@@ -13,25 +13,44 @@
 //      backfills ONLY the destinations a PendingPurchase has no capture for. GA4 dedups on
 //      transaction_id (= order id); Meta dedups on a deterministic event_id ("order:<id>"), so even a
 //      late pixel event mostly collapses. Result: every paid order reaches GA4/Meta at least once.
+import crypto from "node:crypto";
 import prisma from "../db.server";
-import { buildJobs, deliverOne } from "./server-side.server";
-import { recordDeliveries, bumpDaily } from "./delivery.server";
+import { buildJobs, deliverOne, numericId } from "./server-side.server";
+import { recordDeliveries, bumpDaily, recordCapture, recordCaptureFromResults, RECONCILED_DESTINATIONS } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
+import { fxHooks } from "./fx.server";
+import { googleAdsHook } from "./google-ads.server";
+import { encryptSecret, decryptSecret } from "./secrets.server";
 
-/** The order value carried by a stored pending-purchase job pair (GA4 params.value, else Meta
- *  custom_data.value). Used for the recovered-revenue rollup. Pure. Returns 0 when absent. */
+// How long a leased pending-purchase batch is held while it's being backfilled, so an overlapping cron
+// tick can't grab the same rows.
+//
+// INVARIANT (same as the outbox): the lease MUST outlast the whole batch. Rows are processed
+// sequentially and each can attempt up to 4 destinations, so worst-case row time ≈ 4 × per-send timeout,
+// and batch time ≈ (cron limit) × 4 × timeout. With net.DEFAULT_TIMEOUT_MS = 10s and the cron's reconcile
+// limit (8) → ≤ ~5.3 min < this 10-min lease. Keep (limit × 4 × timeout) < LEASE_MINUTES if you retune.
+const LEASE_MINUTES = 10;
+
+// numericId now lives in server-side.server (so the pixel builders share the exact same canonicalization)
+// and recordCapture(FromResults) in delivery.server (so the outbox worker can stamp captures without an
+// import cycle). Re-exported here to keep the historical import surface (ingest, webhooks, tests) stable.
+export { numericId, recordCapture, recordCaptureFromResults };
+
+/** The order value carried by a stored pending-purchase job set, preferring GA4 (params.value), then
+ *  Meta (custom_data.value), then Google Ads (conversionValue) / Reddit (event_metadata.value_decimal).
+ *  Used for the recovered-revenue rollup. Pure. Returns 0 when absent. */
 export function purchaseValueFromJobs(jobs) {
-  const ga4 = Number(jobs?.ga4?.event?.params?.value);
-  if (Number.isFinite(ga4)) return ga4;
-  const meta = Number(jobs?.meta?.event?.custom_data?.value);
-  return Number.isFinite(meta) ? meta : 0;
-}
-
-/** Trailing run of digits from an order id (handles a numeric id, a "gid://.../Order/123", etc.). */
-export function numericId(x) {
-  if (x == null) return null;
-  const m = String(x).match(/\d+/g);
-  return m ? m[m.length - 1] : null;
+  const candidates = [
+    jobs?.ga4?.event?.params?.value,
+    jobs?.meta?.event?.custom_data?.value,
+    jobs?.google_ads?.event?.conversionValue,
+    jobs?.reddit?.event?.event_metadata?.value_decimal,
+  ];
+  for (const v of candidates) {
+    const n = Number(v);
+    if (Number.isFinite(n) && v != null) return n;
+  }
+  return 0;
 }
 
 const mapAddr = (a) =>
@@ -92,47 +111,35 @@ export function orderToTrackingEvent(order) {
 }
 
 /**
- * Record a paid order for later reconciliation. Builds the GA4 + Meta jobs NOW (Meta PII hashed at build
- * time) and stores just those two — the destinations with reliable server-side dedup. No-op if the shop
- * isn't delivering server-side or has neither GA4 nor Meta wired for checkout_completed. Idempotent
- * (upsert on shop+order). Best-effort.
+ * Record a paid order for later reconciliation. Builds the reconcilable jobs NOW (Meta/Reddit PII hashed
+ * at build time) and stores them — GA4, Meta, Google Ads and Reddit, the destinations with reliable
+ * server-side dedup. No-op if the shop isn't delivering server-side or has none of those wired for
+ * checkout_completed. Idempotent (upsert on shop+order). Best-effort.
  */
 export async function recordPendingPurchase(shopDomain, order, settings) {
   if (!settings?.serverSide || !settings?.reconciliation) return;
   const orderId = numericId(order?.id);
   if (!orderId) return;
   const event = orderToTrackingEvent(order);
-  const jobs = buildJobs(settings, event); // respects the matrix + configured credentials
-  const ga4 = jobs.find((j) => j.destination === "ga4") || null;
-  const meta = jobs.find((j) => j.destination === "meta") || null;
-  if (!ga4 && !meta) return; // nothing server-side to backfill
+  // Apply the SAME currency normalization the live ingest path uses, so a backfilled purchase reports
+  // the same `value` a pixel-delivered one would (otherwise a multi-currency shop's recovered orders ship
+  // raw store-currency amounts while live orders ship normalized ones — inconsistent). The Google Ads
+  // hook contributes the google_ads job (buildJobs only emits it when the hook is present).
+  const hooks = { ...(await fxHooks(settings)), ...googleAdsHook(settings) };
+  const jobs = buildJobs(settings, event, { hooks }); // respects the matrix + configured credentials
+  const stored = {};
+  for (const { destination } of RECONCILED_DESTINATIONS) {
+    const job = jobs.find((j) => j.destination === destination);
+    if (job) stored[destination] = job;
+  }
+  if (!Object.keys(stored).length) return; // nothing server-side to backfill
   await prisma.pendingPurchase
     .upsert({
       where: { shopDomain_orderId: { shopDomain, orderId } },
-      create: { shopDomain, orderId, payload: JSON.stringify({ ga4, meta }), status: "pending" },
+      create: { shopDomain, orderId, payload: encryptSecret(JSON.stringify(stored)), status: "pending" },
       update: {}, // a webhook redelivery must not reopen a row the reconcile pass already closed
     })
     .catch(() => {});
-}
-
-/** Mark which destinations have already delivered a purchase for an order (flags only ever flip true). */
-export async function recordCapture(shopDomain, orderId, { ga4 = false, meta = false } = {}) {
-  const id = numericId(orderId);
-  if (!id || (!ga4 && !meta)) return;
-  await prisma.purchaseCapture
-    .upsert({
-      where: { shopDomain_orderId: { shopDomain, orderId: id } },
-      create: { shopDomain, orderId: id, ga4, meta },
-      update: { ...(ga4 ? { ga4: true } : {}), ...(meta ? { meta: true } : {}), at: new Date() },
-    })
-    .catch(() => {});
-}
-
-/** Derive ga4/meta success from a fan-out result set and stamp PurchaseCapture for an order. */
-export async function recordCaptureFromResults(shopDomain, orderId, results) {
-  const ga4 = (results || []).some((r) => r.destination === "ga4" && r.ok);
-  const meta = (results || []).some((r) => r.destination === "meta" && r.ok);
-  if (ga4 || meta) await recordCapture(shopDomain, orderId, { ga4, meta });
 }
 
 /**
@@ -142,10 +149,31 @@ export async function recordCaptureFromResults(shopDomain, orderId, results) {
  */
 export async function reconcilePending({ graceMinutes = 20, limit = 200 } = {}) {
   const cutoff = new Date(Date.now() - graceMinutes * 60_000);
+  const now = new Date();
+  const unleased = [{ leasedUntil: null }, { leasedUntil: { lt: now } }];
   const due = await prisma.pendingPurchase
-    .findMany({ where: { status: "pending", createdAt: { lt: cutoff } }, orderBy: { createdAt: "asc" }, take: limit })
+    .findMany({ where: { status: "pending", createdAt: { lt: cutoff }, OR: unleased }, orderBy: { createdAt: "asc" }, take: limit })
     .catch(() => []);
-  if (!due.length) return { processed: 0, backfilled: 0, skipped: 0, ga4: 0, meta: 0 };
+  if (!due.length) return { processed: 0, backfilled: 0, skipped: 0, ga4: 0, meta: 0, google_ads: 0, reddit: 0 };
+
+  // Compare-and-swap lease (same shape as drainOutbox): stamp a unique token + push leasedUntil out on
+  // the still-unleased rows, then process ONLY the rows carrying our token. Postgres row locks serialize
+  // the two UPDATEs, so two overlapping cron ticks can't both claim a row — which would double-count the
+  // recovered revenue of the same order (purchase sends collapse platform-side, but the money metrics
+  // don't). Without this the reconcile pass had no concurrency guard at all.
+  const leaseToken = crypto.randomUUID();
+  const leasedUntil = new Date(Date.now() + LEASE_MINUTES * 60_000);
+  // Match the EXACT (shop, order) pairs we just read — PendingPurchase has a composite key, so a naive
+  // `shopDomain in […] AND orderId in […]` would cross-match a different shop's order that happens to
+  // share an order id. AND-combine the pair set with the still-unleased guard.
+  await prisma.pendingPurchase
+    .updateMany({
+      where: { status: "pending", AND: [{ OR: unleased }, { OR: due.map((r) => ({ shopDomain: r.shopDomain, orderId: r.orderId })) }] },
+      data: { leaseToken, leasedUntil },
+    })
+    .catch(() => {});
+  const claimed = await prisma.pendingPurchase.findMany({ where: { leaseToken }, take: limit }).catch(() => []);
+  if (!claimed.length) return { processed: 0, backfilled: 0, skipped: 0, ga4: 0, meta: 0, google_ads: 0, reddit: 0 };
 
   const settingsCache = new Map();
   const getSettings = async (shopDomain) => {
@@ -159,28 +187,37 @@ export async function reconcilePending({ graceMinutes = 20, limit = 200 } = {}) 
   let skipped = 0;
   let recovered = 0;
   let recoveredValue = 0;
-  const sent = { ga4: 0, meta: 0 };
-  for (const row of due) {
+  const sent = { ga4: 0, meta: 0, google_ads: 0, reddit: 0 };
+  for (const row of claimed) {
     const key = { shopDomain_orderId: { shopDomain: row.shopDomain, orderId: row.orderId } };
     let jobs = {};
     try {
-      jobs = JSON.parse(row.payload);
+      jobs = JSON.parse(decryptSecret(row.payload));
     } catch {
       jobs = {};
     }
     const cap = await prisma.purchaseCapture.findUnique({ where: key }).catch(() => null);
     const settings = await getSettings(row.shopDomain);
+    // Backfill every reconciled destination whose purchase the pixel didn't already capture. GA4/Meta
+    // plus Google Ads (orderId dedup) and Reddit (order-scoped conversion_id dedup) — all safe to re-send.
     const toSend = [];
-    if (jobs.ga4 && !cap?.ga4) toSend.push(jobs.ga4);
-    if (jobs.meta && !cap?.meta) toSend.push(jobs.meta);
+    for (const { destination, flag } of RECONCILED_DESTINATIONS) {
+      if (jobs[destination] && !cap?.[flag]) toSend.push(jobs[destination]);
+    }
 
     if (!settings?.serverSide || !toSend.length) {
       skipped++;
       await prisma.pendingPurchase
-        .update({ where: key, data: { status: "skipped", detail: !toSend.length ? "already captured" : "server-side off" } })
+        .update({ where: key, data: { status: "skipped", detail: !toSend.length ? "already captured" : "server-side off", leaseToken: null, leasedUntil: null } })
         .catch(() => {});
       continue;
     }
+
+    // A purchase the pixel captured NOWHERE (no prior capture on ANY reconciled destination) is a genuine
+    // recovery. This drives BOTH the recovered-revenue rollup AND whether we count purchasesDelivered:
+    // for a partial backfill the order was already counted at first ingest, so re-counting here would
+    // push the capture-rate numerator over 100%.
+    const capturedNowhere = !cap?.ga4 && !cap?.meta && !cap?.googleAds && !cap?.reddit;
 
     const results = [];
     for (const job of toSend) {
@@ -188,25 +225,23 @@ export async function reconcilePending({ graceMinutes = 20, limit = 200 } = {}) 
       results.push({ destination: job.destination, eventName: job.eventName || "checkout_completed", ok: !!r.ok, detail: r.detail || "", job, isPurchase: true });
       if (r.ok) sent[job.destination] = (sent[job.destination] || 0) + 1;
     }
-    await recordDeliveries(row.shopDomain, results);
+    await recordDeliveries(row.shopDomain, results, { countPurchases: capturedNowhere });
     await enqueueFailures(row.shopDomain, results); // transient failures still resolve via the outbox
     await recordCaptureFromResults(row.shopDomain, row.orderId, results);
     const okDests = results.filter((r) => r.ok).map((r) => r.destination);
     await prisma.pendingPurchase
-      .update({ where: key, data: { status: "reconciled", detail: okDests.length ? `backfilled ${okDests.join(", ")}` : "backfill failed (queued)" } })
+      .update({ where: key, data: { status: "reconciled", detail: okDests.length ? `backfilled ${okDests.join(", ")}` : "backfill failed (queued)", leaseToken: null, leasedUntil: null } })
       .catch(() => {});
     backfilled++;
-    // Recovered-revenue rollup: an order the storefront pixel captured NOWHERE (no prior capture on any
-    // destination) that we just backfilled is a purchase — and its revenue — that would otherwise be
-    // missing from the merchant's analytics/ad platforms entirely. Partial backfills (the pixel already
-    // captured one destination, we filled the other) are excluded — counting their revenue would double
-    // it against the pixel's own capture and overstate the recovery.
-    if (!cap?.ga4 && !cap?.meta && okDests.length) {
+    // Recovered-revenue rollup: a fully-missed order we backfilled is revenue that would otherwise be
+    // missing from the merchant's analytics/ad platforms entirely. Partial backfills are excluded —
+    // counting their revenue would double it against the pixel's own capture and overstate the recovery.
+    if (capturedNowhere && okDests.length) {
       recovered++;
       const value = purchaseValueFromJobs(jobs);
       recoveredValue += value;
       await bumpDaily(row.shopDomain, { purchasesRecovered: 1, revenueRecovered: value });
     }
   }
-  return { processed: due.length, backfilled, skipped, recovered, recoveredValue, ...sent };
+  return { processed: claimed.length, backfilled, skipped, recovered, recoveredValue, ...sent };
 }

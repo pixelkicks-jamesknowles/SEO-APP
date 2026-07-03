@@ -9,6 +9,7 @@ import { fanOutServerSide, validateGa4Event, ga4EventFor } from "../lib/server-s
 import { buildSubscriptionEvent } from "../lib/subscription";
 import { recordDeliveries } from "../lib/delivery.server";
 import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
+import { isSafePublicHttpsUrl } from "../lib/net.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
 import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, createOAuthState } from "../lib/google-ads.server";
 import { scanStorefront } from "../lib/pixel-scan.server";
@@ -30,6 +31,7 @@ export const loader = async ({ request }) => {
     hasKlaviyoKey: Boolean(keys.klaviyoApiKey),
     hasSnapToken: Boolean(keys.snapAccessToken),
     hasRedditToken: Boolean(keys.redditAccessToken),
+    hasLinkedinToken: Boolean(keys.linkedinAccessToken),
     pinterestAdAccountId: keys.pinterestAdAccountId || "",
     hasTiktokId: Boolean(tracking?.tiktokPixelId),
     hasPinterestId: Boolean(tracking?.pinterestId),
@@ -150,12 +152,18 @@ export const action = async ({ request }) => {
   if (form.get("klaviyoApiKey")) keys.klaviyoApiKey = form.get("klaviyoApiKey");
   if (form.get("snapAccessToken")) keys.snapAccessToken = form.get("snapAccessToken");
   if (form.get("redditAccessToken")) keys.redditAccessToken = form.get("redditAccessToken");
+  if (form.get("linkedinAccessToken")) keys.linkedinAccessToken = form.get("linkedinAccessToken");
   const pinterestAdAccountId = (form.get("pinterestAdAccountId") || "").trim();
   if (pinterestAdAccountId) keys.pinterestAdAccountId = pinterestAdAccountId;
   else delete keys.pinterestAdAccountId;
   const gtmServerUrl = (form.get("gtmServerUrl") || "").trim();
-  if (gtmServerUrl) keys.gtmServerUrl = gtmServerUrl;
-  else delete keys.gtmServerUrl;
+  if (gtmServerUrl) {
+    // SSRF guard: the server POSTs GA4 payloads to this container URL, so reject anything that isn't a
+    // public HTTPS endpoint (no localhost / private / cloud-metadata addresses).
+    const safe = isSafePublicHttpsUrl(gtmServerUrl);
+    if (!safe.ok) return { error: `Server-side GTM URL ${safe.reason}.` };
+    keys.gtmServerUrl = gtmServerUrl;
+  } else delete keys.gtmServerUrl;
   const serverSideKeys = writeServerSideKeys(keys);
   await prisma.trackingSettings.upsert({
     where: { shopDomain },
@@ -167,7 +175,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, hasKlaviyoKey, hasSnapToken, hasRedditToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, hasKlaviyoKey, hasSnapToken, hasRedditToken, hasLinkedinToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -183,6 +191,7 @@ export default function Settings() {
   const [klaviyoKey, setKlaviyoKey] = useState("");
   const [snapToken, setSnapToken] = useState("");
   const [redditToken, setRedditToken] = useState("");
+  const [linkedinToken, setLinkedinToken] = useState("");
   const [gads, setGads] = useState(googleAdsConfig || { customerId: "", loginCustomerId: "", conversionActionId: "" });
   const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
   const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
@@ -191,7 +200,7 @@ export default function Settings() {
   // forms). The keys form carries no `intent`, so a submit without one is the "save-keys" action.
   const submitting = nav.state !== "idle" ? (nav.formData?.get("intent") ?? "save-keys") : null;
   const busy = (intent) => submitting === intent;
-  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct || klaviyoKey !== "" || snapToken !== "" || redditToken !== "";
+  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct || klaviyoKey !== "" || snapToken !== "" || redditToken !== "" || linkedinToken !== "";
 
   // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
   // can't run inside the embedded iframe).
@@ -243,6 +252,7 @@ export default function Settings() {
       </SaveBar>
       <BlockStack gap="400">
         {actionData?.ok && <Banner tone="success">{actionData.ok}</Banner>}
+        {actionData?.error && <Banner tone="critical">{actionData.error}</Banner>}
         {actionData?.testOk && <Banner tone="success">{actionData.testOk}</Banner>}
         {actionData?.testError && <Banner tone="warning">{actionData.testError}</Banner>}
         {actionData?.gadsError && <Banner tone="warning">{actionData.gadsError}</Banner>}
@@ -263,6 +273,7 @@ export default function Settings() {
               <Badge tone={hasKlaviyoKey ? "success" : undefined}>{hasKlaviyoKey ? "Klaviyo key saved" : "No Klaviyo key"}</Badge>
               <Badge tone={hasSnapToken ? "success" : undefined}>{hasSnapToken ? "Snapchat token saved" : "No Snapchat token"}</Badge>
               <Badge tone={hasRedditToken ? "success" : undefined}>{hasRedditToken ? "Reddit token saved" : "No Reddit token"}</Badge>
+              <Badge tone={hasLinkedinToken ? "success" : undefined}>{hasLinkedinToken ? "LinkedIn token saved" : "No LinkedIn token"}</Badge>
             </InlineStack>
             <Form method="post" ref={keysForm}>
               <BlockStack gap="200">
@@ -348,6 +359,15 @@ export default function Settings() {
                   value={redditToken}
                   onChange={setRedditToken}
                   helpText={`${hasRedditToken ? "A token is saved. Enter a new one to replace it. " : ""}Reddit Ads, Events Manager, your pixel, Conversions API, generate a token. Set the Reddit Pixel ID and enable events on the Tracking page.`}
+                />
+                <TextField
+                  label="LinkedIn Conversions API token"
+                  name="linkedinAccessToken"
+                  autoComplete="off"
+                  type="password"
+                  value={linkedinToken}
+                  onChange={setLinkedinToken}
+                  helpText={`${hasLinkedinToken ? "A token is saved. Enter a new one to replace it. " : ""}LinkedIn Campaign Manager, Analyze, Conversion tracking, create a conversion rule, then generate a Conversions API access token. Set the LinkedIn conversion ID and enable events on the Tracking page.`}
                 />
                 <InlineStack>
                   <Button submit variant="primary" loading={busy("save-keys")} disabled={!dirty}>Save keys</Button>

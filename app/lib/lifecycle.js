@@ -33,14 +33,14 @@ export function buildFulfillmentEvent(fulfillment, { eventName = "order_fulfille
 /** A re-fetched full order (current_total_price + line_items) → GA4 `order_edited` carrying the NEW
  *  order total, so an edited order's updated value is visible in analytics. Distinct from `purchase`,
  *  so it never double-counts the conversion. Returns null without an order id. */
-export function buildOrderEditedEvent(order, { eventName = "order_edited", clientId } = {}) {
+export function buildOrderEditedEvent(order, { eventName = "order_edited", clientId, fallbackCurrency } = {}) {
   const orderId = order?.id;
   if (orderId == null) return null;
   const items = (order?.line_items || []).map(toItem);
   const params = {
     transaction_id: String(orderId),
     value: round2(order?.current_total_price ?? order?.total_price ?? 0),
-    currency: order?.currency || "USD",
+    currency: order?.currency || fallbackCurrency || "USD",
   };
   if (items.length) params.items = items;
   return { name: eventName, params, clientId };

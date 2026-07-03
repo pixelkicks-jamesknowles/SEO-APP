@@ -35,7 +35,8 @@ export const action = async ({ request }) => {
     if (!claimed) return new Response();
 
     const clientId = syntheticClientId(payload?.order_id);
-    const event = buildRefundEvent(payload, { clientId });
+    const fallbackCurrency = settings.reportingCurrency || undefined;
+    const event = buildRefundEvent(payload, { clientId, fallbackCurrency });
     // Margin mode: the refund must reverse the same (margin) value the purchase sent.
     withValueMode(event.params, settings.valueMode, settings.marginPct);
     await normalizeForShop(settings, event.params); // multi-currency (no-op if off)
@@ -50,7 +51,7 @@ export const action = async ({ request }) => {
       if (plan && rli.line_item) rli.line_item.selling_plan_allocation = { selling_plan: { id: plan.id, name: plan.name } };
     }
     // Reverse the subscription_purchase too, but only for the subscription portion of the refund.
-    const subRefund = buildSubscriptionRefundEvent(payload, { eventName: refundEventName(settings), clientId });
+    const subRefund = buildSubscriptionRefundEvent(payload, { eventName: refundEventName(settings), clientId, fallbackCurrency });
     if (subRefund) {
       await normalizeForShop(settings, subRefund.params);
       const sr = await sendGa4Event(settings, subRefund);

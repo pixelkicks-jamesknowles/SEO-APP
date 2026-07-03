@@ -34,7 +34,7 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   const eventId = rawId
     ? rawId
     : body.event.timestamp
-      ? `h:${sha256Hex([body.event.name, body.event.timestamp, body.event.clientId ?? "", JSON.stringify(body.event.data ?? null)].join("|"))}`
+      ? `h:${sha256Hex([body.event.name, body.event.timestamp, body.event.clientId ?? "", JSON.stringify(body.event.data ?? null), JSON.stringify(body.event.params ?? null)].join("|"))}`
       : null;
   if (eventId) {
     const claimed = await prisma.processedWebhook

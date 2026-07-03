@@ -9,8 +9,9 @@
 // server-side credentials.
 import crypto from "node:crypto";
 import prisma from "../db.server";
-import { sha256Hex } from "./server-side.server";
+import { sha256Hex, normalizePhoneE164 } from "./server-side.server";
 import { encryptSecret, decryptSecret } from "./secrets.server";
+import { fetchWithTimeout } from "./net.server";
 
 const GADS_VERSION = "v18";
 const OAUTH_SCOPE = "https://www.googleapis.com/auth/adwords";
@@ -68,8 +69,10 @@ export function formatGoogleDateTime(ts) {
 export function buildClickConversion(config, d = {}) {
   const hasClickId = d.gclid || d.gbraid || d.wbraid;
   const em = sha256Hex(d.email);
-  const phDigits = (d.phone || "").replace(/\D/g, "");
-  const ph = phDigits ? sha256Hex(phDigits) : null;
+  // Google Ads Enhanced Conversions require E.164 (with the leading "+") before hashing — a digits-only
+  // hash never matches Google's, so a phone-only conversion would be silently unattributable.
+  const phE164 = normalizePhoneE164(d.phone);
+  const ph = phE164 ? sha256Hex(phE164) : null;
   if (!hasClickId && !em && !ph) return null; // nothing to match on → skip
 
   const conv = {
@@ -204,7 +207,7 @@ export function googleAuthUrl(redirectUri, state) {
 }
 
 async function tokenRequest(body) {
-  const res = await fetch(TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body).toString() });
+  const res = await fetchWithTimeout(TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body).toString() });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.error_description || json?.error || `token HTTP ${res.status}`);
   return json;
@@ -275,7 +278,7 @@ export async function deliverGoogleAds(settings, job) {
   };
   if (config.loginCustomerId) headers["login-customer-id"] = String(config.loginCustomerId).replace(/\D/g, "");
   try {
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ conversions: [job.event], partialFailure: true }) });
+    const res = await fetchWithTimeout(url, { method: "POST", headers, body: JSON.stringify({ conversions: [job.event], partialFailure: true }) });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, detail: json?.error?.message || `HTTP ${res.status}` };
     if (json?.partialFailureError) return { ok: false, detail: json.partialFailureError.message || "partial failure" };

@@ -4,6 +4,7 @@
   "scripts": {
     "build": "remix vite:build",
     "test": "jest",
+    "test:coverage": "jest --coverage",
     "dev": "shopify app dev",
     "dev:local": "shopify app dev --use-localhost",
     "config:link": "shopify app config link",

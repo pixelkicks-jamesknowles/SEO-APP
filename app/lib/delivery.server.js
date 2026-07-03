@@ -1,6 +1,49 @@
 import prisma from "../db.server";
+import { numericId } from "./server-side.server";
 
 const today = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+
+// SINGLE SOURCE OF TRUTH: the destinations the reconcile + outbox backfill paths handle, and the
+// PurchaseCapture flag each one sets. Every reconciled destination has reliable server-side dedup (GA4
+// transaction_id, Meta event_id, Google Ads orderId, Reddit order-scoped conversion_id), so backfilling
+// can only fill a gap, never double-count. Adding a reconciled destination means editing ONLY this list.
+export const RECONCILED_DESTINATIONS = [
+  { destination: "ga4", flag: "ga4" },
+  { destination: "meta", flag: "meta" },
+  { destination: "google_ads", flag: "googleAds" },
+  { destination: "reddit", flag: "reddit" },
+];
+export const CAPTURE_FLAG_BY_DESTINATION = Object.fromEntries(RECONCILED_DESTINATIONS.map((d) => [d.destination, d.flag]));
+
+/**
+ * Mark which destinations have already delivered a purchase for an order (flags only ever flip true).
+ * The reconcile pass reads these flags to backfill ONLY the destinations the pixel missed, so stamping
+ * a capture is what stops a later backfill from re-sending — and double-counting — a purchase. Lives
+ * here (not reconcile) so the outbox retry worker can stamp it too without an import cycle. Best-effort.
+ */
+export async function recordCapture(shopDomain, orderId, { ga4 = false, meta = false, googleAds = false, reddit = false } = {}) {
+  const id = numericId(orderId);
+  if (!id || (!ga4 && !meta && !googleAds && !reddit)) return;
+  // Flags only ever flip true, so only include the ones being set (never overwrite a true back to false).
+  const set = { ...(ga4 ? { ga4: true } : {}), ...(meta ? { meta: true } : {}), ...(googleAds ? { googleAds: true } : {}), ...(reddit ? { reddit: true } : {}) };
+  await prisma.purchaseCapture
+    .upsert({
+      where: { shopDomain_orderId: { shopDomain, orderId: id } },
+      create: { shopDomain, orderId: id, ga4, meta, googleAds, reddit },
+      update: { ...set, at: new Date() },
+    })
+    .catch(() => {});
+}
+
+/** Derive per-destination capture from a fan-out result set and stamp PurchaseCapture for an order. */
+export async function recordCaptureFromResults(shopDomain, orderId, results) {
+  const flags = {};
+  for (const r of results || []) {
+    const flag = CAPTURE_FLAG_BY_DESTINATION[r.destination];
+    if (flag && r.ok) flags[flag] = true;
+  }
+  if (Object.keys(flags).length) await recordCapture(shopDomain, orderId, flags);
+}
 
 // Probabilistically trim a capped per-shop log (RecentEvent / DeliveryLog) back to `keep` newest rows.
 // Running this on every event would add findMany+deleteMany to every storefront hit; sampling keeps
@@ -26,7 +69,10 @@ export async function bumpDaily(shopDomain, fields) {
 }
 
 // Record per-destination delivery outcomes (capped 300/shop) + roll up daily counters.
-export async function recordDeliveries(shopDomain, results) {
+// countPurchases:false suppresses the purchasesDelivered bump — used by the outbox retry worker, where
+// the order was already counted (or not) at first ingest, so re-counting it on recovery would inflate
+// the per-order capture rate.
+export async function recordDeliveries(shopDomain, results, { countPurchases = true } = {}) {
   if (!results?.length) return;
   // Best-effort like every other DB write in the ingest path: a health-log write failure must not abort
   // ingestEvent after the delivery already happened (which would bubble a 500 to the proxy → retry →
@@ -53,7 +99,7 @@ export async function recordDeliveries(shopDomain, results) {
   // checkout_completed, or a server-side subscription purchase (flagged isPurchase). Recurring
   // subscription renewals never fire a storefront checkout, so the orders/paid webhook is the only
   // capture signal for them — without this they'd read as permanent misses in the match rate.
-  const purchaseDelivered = results.some((r) => r.ok && (r.eventName === "checkout_completed" || r.isPurchase));
+  const purchaseDelivered = countPurchases && results.some((r) => r.ok && (r.eventName === "checkout_completed" || r.isPurchase));
   await bumpDaily(shopDomain, {
     eventsSent: ok,
     eventsFailed: failed,

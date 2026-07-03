@@ -51,6 +51,17 @@ const clickIdsFromHref = (href) => {
   }
 };
 
+// Ad-network click ids from the landing URL for the newer server-side CAPIs (TikTok / Pinterest / Snap).
+// These raise match quality for logged-out, pre-checkout events that otherwise carry only IP + UA.
+const adClickIdsFromHref = (href) => {
+  try {
+    const u = new URL(href);
+    return { ttclid: u.searchParams.get("ttclid"), epik: u.searchParams.get("epik"), scclid: u.searchParams.get("ScCid") };
+  } catch {
+    return {};
+  }
+};
+
 // GA4 client_id from a `_ga` cookie value (GA1.1.<id>.<ts> → "<id>.<ts>"), so server-side events
 // stitch to the same GA4 user/session the on-page gtag created.
 const gaClientId = (gaCookie) => {
@@ -179,14 +190,29 @@ register(({ analytics, browser, settings, init }) => {
       // session_id: GA's if present, else a stable number from Shopify's per-session cookie.
       const sid = gaSessionId(gaSession) || hashNum(shopifyS);
       if (sid) payload.sessionId = sid;
-      // Marketing identifiers only with marketing consent — they feed Meta / Google Ads matching.
+      // Marketing identifiers only with marketing consent — they feed Meta / Google Ads / TikTok /
+      // Pinterest / Snap matching.
       if (marketingOk) {
-        const [fbp, fbc] = await Promise.all([browser.cookie.get("_fbp"), browser.cookie.get("_fbc")]);
+        const [fbp, fbc, ttp, epik, scid] = await Promise.all([
+          browser.cookie.get("_fbp"),
+          browser.cookie.get("_fbc"),
+          browser.cookie.get("_ttp"), // TikTok first-party cookie
+          browser.cookie.get("_epik"), // Pinterest first-party cookie
+          browser.cookie.get("_scid"), // Snap first-party cookie
+        ]);
         if (fbp) payload.fbp = fbp;
         if (fbc) payload.fbc = fbc;
+        if (ttp) payload.ttp = ttp;
+        if (epik) payload.epik = epik;
+        if (scid) payload.scid = scid;
         // Google Ads click ids from the landing URL (Enhanced Conversions match key).
         const clickIds = clickIdsFromHref(event?.context?.document?.location?.href);
         if (Object.keys(clickIds).length) payload.clickIds = clickIds;
+        // TikTok / Pinterest click ids from the landing URL (a cookie may not be set yet on first hit).
+        const adClickIds = adClickIdsFromHref(event?.context?.document?.location?.href);
+        if (adClickIds.ttclid) payload.ttclid = adClickIds.ttclid;
+        if (adClickIds.epik && !payload.epik) payload.epik = adClickIds.epik;
+        if (adClickIds.scclid) payload.scclid = adClickIds.scclid;
       }
     } catch {
       /* cookies unavailable — server falls back to a stable synthetic client_id */

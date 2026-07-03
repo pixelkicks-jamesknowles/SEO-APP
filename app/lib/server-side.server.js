@@ -6,6 +6,7 @@
 // sha256Hex / stableClientId) are exported and unit-tested without network IO.
 import crypto from "node:crypto";
 import { readServerSideKeys } from "./secrets.server";
+import { fetchWithTimeout } from "./net.server";
 
 const META_API_VERSION = "v21.0";
 
@@ -70,10 +71,58 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+/** Trailing run of digits from an order id (handles a numeric id, "gid://shopify/Order/123", etc.).
+ *  Canonicalizes the order id so every code path (pixel, reconcile backfill, outbox retry) derives the
+ *  SAME dedup keys — GA4 transaction_id and the Meta event_id — for a given order. Pure. */
+export function numericId(x) {
+  if (x == null) return null;
+  const m = String(x).match(/\d+/g);
+  return m ? m[m.length - 1] : null;
+}
+
+/** Deterministic, order-scoped Meta/Snap/etc. event_id for a purchase ("order:<numeric id>"), or null
+ *  when there's no order id. Shared by the pixel path and the reconcile backfill so both dedup. Pure. */
+export function purchaseEventId(orderId) {
+  const id = numericId(orderId);
+  return id ? `order:${id}` : null;
+}
+
 /** SHA-256 hex of a normalized string (Meta requires lower-cased, trimmed, hashed PII). */
 export function sha256Hex(value) {
   if (!value) return null;
   return crypto.createHash("sha256").update(String(value).trim().toLowerCase()).digest("hex");
+}
+
+/** SHA-256 of a value with ALL non-alphanumerics removed (lower-cased). This is the correct
+ *  normalization for Meta/Snap city + zip, which strip internal spaces and punctuation before hashing
+ *  ("New York" → "newyork", "LS1 1AA" → "ls11aa"). Hashing the un-stripped value would never match
+ *  the platform's own hash, silently lowering Event Match Quality. */
+export function sha256HexCompact(value) {
+  if (!value) return null;
+  const compact = String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+  return compact ? crypto.createHash("sha256").update(compact).digest("hex") : null;
+}
+
+/** Digits-only phone: the normalization Meta / Pinterest / Snap CAPI expect (country code, no + or
+ *  symbols) before SHA-256. */
+export function normalizePhoneDigits(phone) {
+  return String(phone || "").replace(/\D/g, "");
+}
+
+/** E.164 phone WITH the leading "+" — the normalization Google Ads Enhanced Conversions and TikTok
+ *  Events API require before SHA-256. Stripping the "+" (digits-only) makes the hash mismatch the
+ *  platform's, so phone-only matches silently fail on those two — hence a distinct normalizer. */
+export function normalizePhoneE164(phone) {
+  const digits = normalizePhoneDigits(phone);
+  return digits ? `+${digits}` : "";
+}
+
+/** Deterministic, order-scoped dedup id for a purchase ("order:<numeric id>"), else the Shopify event
+ *  id. Shared by every destination whose purchase can also be fired by a merchant's own client-side
+ *  pixel (TikTok/Snap/Pinterest) so the two collapse instead of double-counting. Pure. */
+export function dedupIdFor(name, ev) {
+  const orderScoped = name === "checkout_completed" ? purchaseEventId(ev?.data?.checkout?.order?.id) : null;
+  return orderScoped || (ev?.id ? String(ev.id) : undefined);
 }
 
 /** GA4 client_id from a `_ga` cookie value, e.g. "GA1.1.1234567890.1700000000" → "1234567890.1700000000". */
@@ -135,7 +184,11 @@ export function extractCommerce(name, data) {
     out.items = (co?.lineItems || []).map((li) => toItem(li.variant, li.quantity, li.title)).filter(Boolean);
     out.value = num(co?.totalPrice?.amount);
     out.currency = co?.currencyCode || co?.totalPrice?.currencyCode || null;
-    out.transactionId = co?.order?.id ? String(co.order.id) : co?.token || null;
+    // Canonicalize to the NUMERIC order id so GA4's transaction_id de-dup key matches across the pixel
+    // path (order.id is a gid://shopify/Order/<n>) and the reconcile backfill (a bare numeric id), and
+    // against the native Google & YouTube app's client-side purchase. Falls back to the checkout token
+    // only when there's no order id yet.
+    out.transactionId = numericId(co?.order?.id) || co?.token || null;
   } else if (name === "collection_viewed") {
     out.items = (data.collection?.productVariants || []).map((v) => toItem(v, 1)).filter(Boolean);
     out.listId = data.collection?.id ? String(data.collection.id) : null;
@@ -205,13 +258,18 @@ export function metaUserData(ev) {
     const h = sha256Hex(value);
     if (h) user_data[key] = [h];
   };
+  // City + zip use compact normalization (Meta/Snap strip internal spaces + punctuation before hashing).
+  const putCompact = (key, value) => {
+    const h = sha256HexCompact(value);
+    if (h) user_data[key] = [h];
+  };
   put("em", checkout?.email || ev?.email);
-  put("ph", (checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  put("ph", normalizePhoneDigits(checkout?.phone || ev?.phone));
   put("fn", addr.firstName);
   put("ln", addr.lastName);
-  put("ct", addr.city);
-  put("st", addr.provinceCode || addr.province);
-  put("zp", addr.zip);
+  putCompact("ct", addr.city);
+  putCompact("st", addr.provinceCode || addr.province); // Meta strips spaces/punctuation from state too
+  putCompact("zp", addr.zip);
   put("country", addr.countryCode || addr.country);
   // external_id (customer id) is not hashed by spec but commonly hashed for parity.
   if (ev?.externalId) user_data.external_id = [sha256Hex(String(ev.externalId))];
@@ -263,11 +321,14 @@ export function metaEventFor(name, ev) {
     if (ev.params.currency) custom_data.currency = ev.params.currency;
   }
 
+  // For a purchase, the event_id MUST be a deterministic, order-scoped id ("order:<numeric order id>")
+  // so the two server-side paths that can both fire a Purchase — the storefront pixel and the reconcile
+  // backfill — carry the SAME id and Meta collapses them. Non-purchase events keep the Shopify event id,
+  // which dedups against a client-side pixel hit. (Shared with TikTok/Snap/Pinterest via dedupIdFor.)
   return {
     event_name: META_MAP[name] || (ev?.custom && CUSTOM_META_MAP[name]) || name,
     event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
-    // event_id = the Shopify event id, so Meta de-dups this against any client-side pixel hit.
-    event_id: ev?.id ? String(ev.id) : undefined,
+    event_id: dedupIdFor(name, ev),
     action_source: "website",
     event_source_url: ev?.context?.document?.location?.href || undefined,
     user_data,
@@ -302,7 +363,8 @@ export function tiktokEventFor(name, ev) {
   if (ev?.userAgent) user.user_agent = ev.userAgent;
   const em = sha256Hex(checkout?.email || ev?.email);
   if (em) user.email = em;
-  const ph = sha256Hex((checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  // TikTok requires E.164 (with the leading "+") before hashing — digits-only would never match.
+  const ph = sha256Hex(normalizePhoneE164(checkout?.phone || ev?.phone));
   if (ph) user.phone = ph;
   if (ev?.externalId) user.external_id = sha256Hex(String(ev.externalId));
   const properties = {};
@@ -316,7 +378,8 @@ export function tiktokEventFor(name, ev) {
   return {
     event: TIKTOK_MAP[name] || name,
     event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
-    event_id: ev?.id ? String(ev.id) : undefined,
+    // Order-scoped for a purchase so it dedups against a merchant's own client-side TikTok pixel hit.
+    event_id: dedupIdFor(name, ev),
     user,
     page: { url: ev?.context?.document?.location?.href || undefined },
     properties,
@@ -332,7 +395,8 @@ export function pinterestEventFor(name, ev) {
   if (ev?.userAgent) user_data.client_user_agent = ev.userAgent;
   const em = sha256Hex(checkout?.email || ev?.email);
   if (em) user_data.em = [em];
-  const ph = sha256Hex((checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  // Pinterest CAPI expects digits-only phone (country code, no "+").
+  const ph = sha256Hex(normalizePhoneDigits(checkout?.phone || ev?.phone));
   if (ph) user_data.ph = [ph];
   if (ev?.externalId) user_data.external_id = [sha256Hex(String(ev.externalId))];
   if (ev?.epik) user_data.click_id = ev.epik;
@@ -349,7 +413,8 @@ export function pinterestEventFor(name, ev) {
     event_name: PINTEREST_MAP[name] || "custom",
     action_source: "web",
     event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
-    event_id: ev?.id ? String(ev.id) : undefined,
+    // Order-scoped for a purchase so it dedups against a merchant's own client-side Pinterest tag hit.
+    event_id: dedupIdFor(name, ev),
     event_source_url: ev?.context?.document?.location?.href || undefined,
     user_data,
     custom_data,
@@ -444,6 +509,9 @@ export function snapEventFor(name, ev) {
   const user_data = metaUserData(ev);
   delete user_data.fbp; // Meta-only cookies — meaningless to Snap
   delete user_data.fbc;
+  // Snap's own first-party browser id (_scid) + click id raise match quality the way fbp/fbc do for Meta.
+  if (ev?.scid) user_data.uuid_c1 = ev.scid;
+  if (ev?.scclid) user_data.sc_click_id = ev.scclid;
   const custom_data = {};
   if (c.currency) custom_data.currency = c.currency;
   if (c.value != null) custom_data.value = String(c.value); // Snap expects value as a string
@@ -460,7 +528,8 @@ export function snapEventFor(name, ev) {
   return {
     event_name: SNAP_MAP[name] || name,
     event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
-    event_id: ev?.id ? String(ev.id) : undefined,
+    // Order-scoped for a purchase so it dedups against a merchant's own client-side Snap pixel hit.
+    event_id: dedupIdFor(name, ev),
     action_source: "WEB",
     event_source_url: ev?.context?.document?.location?.href || undefined,
     user_data,
@@ -492,6 +561,11 @@ export function redditEventFor(name, ev) {
   if (ev?.clientIp) user.ip_address = sha256Hex(ev.clientIp); // Reddit expects the IP SHA-256 hashed
   if (ev?.userAgent) user.user_agent = ev.userAgent; // user agent is NOT hashed
   const event_metadata = {};
+  // conversion_id is Reddit's de-dup key: it collapses an outbox retry that actually reached Reddit,
+  // and a matching client-side Reddit Pixel hit. Order-scoped for a purchase (so it's stable across the
+  // pixel + any backfill), else the Shopify event id. Without this, every Reddit retry double-counted.
+  const redditDedupId = dedupIdFor(name, ev);
+  if (redditDedupId) event_metadata.conversion_id = redditDedupId;
   if (c.currency) event_metadata.currency = c.currency;
   if (c.value != null) event_metadata.value_decimal = c.value;
   if (c.items.length) {
@@ -513,13 +587,55 @@ export function redditEventFor(name, ev) {
   };
 }
 
+// LinkedIn Conversions API (REST). Server-side B2B conversions matched on a SHA-256 email and/or the
+// LinkedIn first-party ad-tracking id (li_fat_id). Unlike the ad-CAPIs above, the timestamp is epoch
+// MILLISECONDS and the value is nested under conversionValue{currencyCode, amount(string)}. Returns null
+// when there's no match key (no email and no li_fat_id) so no unattributable job is built.
+export function linkedinEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const checkout = ev?.data?.checkout;
+  const userIds = [];
+  const em = sha256Hex(checkout?.email || ev?.email);
+  if (em) userIds.push({ idType: "SHA256_EMAIL", idValue: em });
+  const liFat = ev?.liFatId || ev?.li_fat_id;
+  if (liFat) userIds.push({ idType: "LINKEDIN_FIRST_PARTY_ADS_TRACKING_UUID", idValue: String(liFat) });
+  if (!userIds.length) return null; // nothing LinkedIn can match on → skip
+  const event = {
+    conversionHappenedAt: ev?.timestamp ? Date.parse(ev.timestamp) : Date.now(), // epoch MS (LinkedIn spec)
+    user: { userIds },
+  };
+  // eventId dedups against a client-side LinkedIn Insight Tag conversion; order-scoped for a purchase so
+  // it's stable across the pixel + any retry (shared helper with the other destinations).
+  const eventId = dedupIdFor(name, ev);
+  if (eventId) event.eventId = eventId;
+  const value = c.value != null ? c.value : ev?.custom && ev?.params?.value != null ? num(ev.params.value) : null;
+  const currency = c.currency || (ev?.custom ? ev?.params?.currency : null);
+  if (value != null && currency) event.conversionValue = { currencyCode: currency, amount: String(value) };
+  return event;
+}
+
 // Best-effort POST that never throws; returns { ok, detail } for the delivery health log.
-async function postJson(url, body, headers = {}) {
+// `validate(json)` (optional) inspects the parsed response body for destinations that return HTTP 200
+// even when they REJECTED the event (Meta: 200 + { error } / events_received:0; TikTok: 200 + code!=0).
+// Without it those look "delivered" and are never retried — a silent conversion loss. It returns
+// { ok, detail } to override the status-only verdict, or undefined to accept it. The body is only read
+// when the response actually exposes .json() (real fetch), so status-only test mocks are unaffected.
+async function postJson(url, body, headers = {}, validate) {
   try {
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
-    return { ok: res.ok, detail: String(res.status) };
+    const res = await fetchWithTimeout(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+    let ok = res.ok;
+    let detail = String(res.status);
+    if (validate && typeof res.json === "function") {
+      const json = await res.json().catch(() => null);
+      const verdict = json ? validate(json) : null;
+      if (verdict) {
+        ok = verdict.ok;
+        if (verdict.detail) detail = verdict.detail;
+      }
+    }
+    return { ok, detail };
   } catch (e) {
-    return { ok: false, detail: e?.message || "network error" };
+    return { ok: false, detail: e?.name === "AbortError" ? "timeout" : e?.message || "network error" };
   }
 }
 
@@ -552,14 +668,24 @@ async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, co
 
 async function sendMeta(pixelId, token, event) {
   const url = `https://graph.facebook.com/${META_API_VERSION}/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(token)}`;
-  return postJson(url, { data: [event] });
+  // Meta returns HTTP 200 with an { error } block (bad token/pixel/payload) or events_received:0 even
+  // when it rejected the event; treat those as failures so the outbox retries instead of silently losing.
+  return postJson(url, { data: [event] }, {}, (json) => {
+    if (json.error) return { ok: false, detail: (json.error.message || "meta error").slice(0, 200) };
+    if (json.events_received === 0) return { ok: false, detail: "meta events_received=0" };
+    return undefined;
+  });
 }
 
 // TikTok Events API 1.3: server-to-server web events. Access-Token in the header, the pixel code as
 // event_source_id. Like the others this only inspects HTTP status for the health log.
 async function sendTiktok(pixelCode, token, event) {
   const body = { event_source: "web", event_source_id: pixelCode, data: [event] };
-  return postJson("https://business-api.tiktok.com/open_api/v1.3/event/track/", body, { "Access-Token": token });
+  // TikTok returns HTTP 200 with a non-zero `code` (+ message) when it rejects the event; treat that as
+  // a failure so it retries rather than being logged as delivered.
+  return postJson("https://business-api.tiktok.com/open_api/v1.3/event/track/", body, { "Access-Token": token }, (json) =>
+    json.code != null && json.code !== 0 ? { ok: false, detail: (json.message || `tiktok code ${json.code}`).slice(0, 200) } : undefined,
+  );
 }
 
 // Pinterest Conversions API (v5): events are posted under an ad account, Bearer-authed.
@@ -591,6 +717,20 @@ async function sendReddit(pixelId, token, event) {
   return postJson(url, { events: [event] }, { Authorization: `Bearer ${token}` });
 }
 
+// LinkedIn Conversions API: one conversion object POSTed to /rest/conversionEvents, Bearer-authed, with
+// the versioned REST headers. The conversion-rule urn goes in the body (built from the numeric id, or
+// passed through if the merchant saved the full urn). Returns HTTP 201 on success (postJson treats 2xx ok).
+const LINKEDIN_VERSION = "202406";
+async function sendLinkedin(conversionId, token, event) {
+  const id = String(conversionId);
+  const conversion = id.startsWith("urn:") ? id : `urn:lla:llaPartnerConversion:${id.replace(/\D/g, "")}`;
+  return postJson("https://api.linkedin.com/rest/conversionEvents", { conversion, ...event }, {
+    Authorization: `Bearer ${token}`,
+    "LinkedIn-Version": LINKEDIN_VERSION,
+    "X-Restli-Protocol-Version": "2.0.0",
+  });
+}
+
 // Send a Meta CAPI test event (tagged with a test_event_code so it shows under Test Events, not live
 // reporting) to verify the pixel id + CAPI token end-to-end. Returns { ok, messages }.
 export async function validateMetaEvent(settings, { testEventCode } = {}) {
@@ -608,7 +748,7 @@ export async function validateMetaEvent(settings, { testEventCode } = {}) {
   const body = { data: [event] };
   if (testEventCode) body.test_event_code = testEventCode;
   try {
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetchWithTimeout(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const json = await res.json().catch(() => ({}));
     if (res.ok && (json.events_received >= 1 || json.events_received === undefined)) return { ok: true, messages: [] };
     const msg = json?.error?.message || `HTTP ${res.status}`;
@@ -678,6 +818,9 @@ export async function deliverOne(settings, job) {
     case "reddit":
       if (!settings?.redditPixelId || !keys.redditAccessToken) return { ok: false, detail: "Reddit not configured" };
       return sendReddit(settings.redditPixelId, keys.redditAccessToken, event);
+    case "linkedin":
+      if (!settings?.linkedinConversionId || !keys.linkedinAccessToken) return { ok: false, detail: "LinkedIn not configured" };
+      return sendLinkedin(settings.linkedinConversionId, keys.linkedinAccessToken, event);
     case "gtm": {
       if (!keys.gtmServerUrl) return { ok: false, detail: "sGTM not configured" };
       const mid = keys.gtmMeasurementId || settings?.ga4Id;
@@ -778,6 +921,13 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   if (marketingOk && wants("reddit") && settings.redditPixelId && keys.redditAccessToken) {
     jobs.push({ destination: "reddit", eventName: name, event: redditEventFor(name, event) });
   }
+  // LinkedIn Conversions API: hashed-PII B2B conversions → marketing-consent-gated. Needs the conversion
+  // id + an access token; linkedinEventFor returns null when there's no email/li_fat_id to match on
+  // (e.g. an anonymous page_view), so those build no job.
+  if (marketingOk && wants("linkedin") && settings.linkedinConversionId && keys.linkedinAccessToken) {
+    const liEvent = linkedinEventFor(name, event);
+    if (liEvent) jobs.push({ destination: "linkedin", eventName: name, event: liEvent });
+  }
   // Extra jobs from later features (e.g. Google Ads Enhanced Conversions on a purchase).
   for (const extra of hooks.extraJobs?.(event, ga4Event, { clientId, consent, isPurchaseConv }) || []) {
     jobs.push(extra);
@@ -810,7 +960,7 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
   if (!keys.ga4ApiSecret) return { ok: false, messages: ["No GA4 Measurement Protocol secret saved."] };
   const url = `https://www.google-analytics.com/debug/mp/collect?measurement_id=${encodeURIComponent(settings.ga4Id)}&api_secret=${encodeURIComponent(keys.ga4ApiSecret)}`;
   try {
-    const res = await fetch(url, { method: "POST", body: JSON.stringify({ client_id: clientId || "test.0", events: [{ name, params }] }) });
+    const res = await fetchWithTimeout(url, { method: "POST", body: JSON.stringify({ client_id: clientId || "test.0", events: [{ name, params }] }) });
     const json = await res.json().catch(() => ({}));
     const messages = (json.validationMessages || []).map((m) => m.description || m.validationCode || JSON.stringify(m));
     return { ok: messages.length === 0, messages };

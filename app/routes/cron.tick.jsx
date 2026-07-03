@@ -45,9 +45,13 @@ async function purge() {
 async function tick() {
   // Reconcile runs AFTER the outbox drain so a purchase whose live send failed has already had a retry
   // this tick; the grace window (20 min) means it's ordered independently of the outbox anyway.
+  // Batch limits are bounded so a stuck batch (every send hitting the 10s timeout, processed sequentially)
+  // can't outlive the per-batch lease and let an overlapping tick re-claim + re-send its rows. See the
+  // LEASE_MINUTES invariant in outbox.server.js / reconcile.server.js. A backlog just drains over more
+  // ticks (the cron fires frequently) rather than risking a double-send.
   const [outbox, reconciled, fx, purged] = await Promise.all([
-    drainOutbox({ limit: 300 }),
-    reconcilePending({ graceMinutes: 20, limit: 300 }),
+    drainOutbox({ limit: 40 }),
+    reconcilePending({ graceMinutes: 20, limit: 8 }),
     refreshFxRates(),
     purge(),
   ]);

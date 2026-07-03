@@ -5,6 +5,7 @@
 jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./helpers/prisma-mock").makePrismaMock() }));
 
 import prisma from "../app/db.server.js";
+import { decryptSecret } from "../app/lib/secrets.server.js";
 import {
   numericId,
   orderToTrackingEvent,
@@ -62,11 +63,12 @@ describe("orderToTrackingEvent", () => {
 });
 
 describe("recordPendingPurchase", () => {
-  test("stores the pre-built GA4 + Meta jobs (no raw PII — Meta is hashed)", async () => {
+  test("stores the pre-built GA4 + Meta jobs, encrypted at rest (no raw PII — Meta is hashed)", async () => {
     await recordPendingPurchase(SHOP, ORDER, SETTINGS);
     expect(prisma.pendingPurchase.upsert).toHaveBeenCalledTimes(1);
     const arg = prisma.pendingPurchase.upsert.mock.calls[0][0];
-    const stored = JSON.parse(arg.create.payload);
+    expect(arg.create.payload).toMatch(/^enc:v1:/); // encrypted at rest, not plaintext JSON
+    const stored = JSON.parse(decryptSecret(arg.create.payload));
     expect(stored.ga4.destination).toBe("ga4");
     expect(stored.meta.destination).toBe("meta");
     // The stored Meta job carries only HASHED identifiers, never the raw email.
@@ -142,13 +144,87 @@ describe("reconcilePending", () => {
     );
   });
 
+  test("leases the batch with a compare-and-swap token before processing (concurrency guard)", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+    prisma.pendingPurchase.findMany.mockResolvedValue([pendingRow()]);
+    prisma.purchaseCapture.findUnique.mockResolvedValue(null);
+
+    await reconcilePending();
+
+    expect(prisma.pendingPurchase.updateMany).toHaveBeenCalledTimes(1);
+    const lease = prisma.pendingPurchase.updateMany.mock.calls[0][0];
+    expect(lease.data.leaseToken).toEqual(expect.any(String));
+    expect(lease.data.leaseToken.length).toBeGreaterThan(0);
+    // The rows to process are re-selected by that same token.
+    expect(prisma.pendingPurchase.findMany.mock.calls[1][0].where.leaseToken).toBe(lease.data.leaseToken);
+  });
+
+  test("concurrency: rows won by another tick (empty claim re-query) are not processed or re-sent", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+    // First findMany = due batch; second = rows carrying OUR token → empty (a concurrent tick leased them).
+    prisma.pendingPurchase.findMany.mockResolvedValueOnce([pendingRow()]).mockResolvedValueOnce([]);
+    prisma.purchaseCapture.findUnique.mockResolvedValue(null);
+
+    const summary = await reconcilePending();
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(prisma.pendingPurchase.update).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ processed: 0, backfilled: 0 });
+  });
+
+  test("partial backfill does NOT re-count purchasesDelivered (pixel already counted it at ingest)", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 204 });
+    prisma.pendingPurchase.findMany.mockResolvedValue([pendingRow()]);
+    prisma.purchaseCapture.findUnique.mockResolvedValue({ ga4: true, meta: false }); // pixel got GA4
+
+    await reconcilePending();
+
+    // recordDeliveries ran with countPurchases:false → no purchasesDelivered bump (would push >100%).
+    expect(prisma.trackingDaily.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ purchasesDelivered: 1 }) }),
+    );
+  });
+
+  test("extended backfill: recovers a Reddit purchase (order-scoped conversion_id) + stamps its capture", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    prisma.trackingSettings.findUnique.mockResolvedValue({
+      shopDomain: SHOP,
+      serverSide: true,
+      redditPixelId: "rd_1",
+      serverSideKeys: JSON.stringify({ redditAccessToken: "tok" }),
+    });
+    prisma.pendingPurchase.findMany.mockResolvedValue([
+      pendingRow({
+        payload: JSON.stringify({
+          reddit: {
+            destination: "reddit",
+            eventName: "checkout_completed",
+            event: { event_type: { tracking_type: "Purchase" }, user: {}, event_metadata: { conversion_id: "order:5500000000001", value_decimal: 120 } },
+          },
+        }),
+      }),
+    ]);
+    prisma.purchaseCapture.findUnique.mockResolvedValue(null);
+
+    const summary = await reconcilePending();
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toContain("ads-api.reddit.com");
+    expect(summary).toMatchObject({ backfilled: 1, reddit: 1, recovered: 1, recoveredValue: 120 });
+    expect(prisma.purchaseCapture.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: expect.objectContaining({ reddit: true }) }),
+    );
+  });
+
   afterEach(() => (global.fetch = undefined));
 });
 
 describe("purchaseValueFromJobs", () => {
-  test("reads the GA4 value first, falls back to Meta, else 0", () => {
+  test("reads GA4 first, then Meta, then Google Ads / Reddit, else 0", () => {
     expect(purchaseValueFromJobs({ ga4: { event: { params: { value: 120 } } } })).toBe(120);
     expect(purchaseValueFromJobs({ meta: { event: { custom_data: { value: 80 } } } })).toBe(80);
+    expect(purchaseValueFromJobs({ google_ads: { event: { conversionValue: 65 } } })).toBe(65);
+    expect(purchaseValueFromJobs({ reddit: { event: { event_metadata: { value_decimal: 42 } } } })).toBe(42);
     expect(purchaseValueFromJobs({})).toBe(0);
     expect(purchaseValueFromJobs(null)).toBe(0);
   });

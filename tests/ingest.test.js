@@ -125,6 +125,15 @@ test("id-less replay: the same payload hashes the same → deduped, no second se
   expect(prisma.recentEvent.create).not.toHaveBeenCalled();
 });
 
+test("id-less content hash includes params: two custom events differing only in params don't collide", async () => {
+  const base = { name: "generate_lead", custom: true, clientId: "1.1", timestamp: "2026-07-02T10:00:00.000Z", userAgent: "Mozilla/5.0 Chrome/120" };
+  await ingestEvent(SHOP, { event: { ...base, params: { form: "quote" } } }, undefined);
+  await ingestEvent(SHOP, { event: { ...base, params: { form: "trade-account" } } }, undefined);
+  const ids = prisma.processedWebhook.create.mock.calls.map((c) => c[0].data.webhookId);
+  expect(ids).toHaveLength(2);
+  expect(ids[0]).not.toBe(ids[1]); // distinct params → distinct claim → the second isn't dropped
+});
+
 test("id-less and timestamp-less event: no claim (won't risk dropping a legit repeat), still delivers", async () => {
   await ingestEvent(SHOP, { event: { name: "page_viewed", clientId: "1.1", userAgent: "Mozilla/5.0 Chrome/120" } }, undefined);
   expect(prisma.processedWebhook.create).not.toHaveBeenCalled();
