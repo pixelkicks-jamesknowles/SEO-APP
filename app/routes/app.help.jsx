@@ -20,10 +20,11 @@ const SECTIONS = [
       <>
         <Text as="p">
           It captures storefront and checkout events and delivers them server-side to GA4 (Measurement
-          Protocol), Meta (Conversions API) and a server-side GTM container. On top of the standard events
-          it adds subscription conversion tracking, refund / cancellation tracking, and SEO engagement
-          signals (scroll depth and engaged-content views) - with bot filtering and per-destination
-          delivery health built in.
+          Protocol), Meta, TikTok, Pinterest, Snapchat and Reddit (Conversions APIs), Klaviyo (onsite
+          events) and a server-side GTM container. On top of the standard events it adds subscription
+          conversion tracking, refund / cancellation tracking, SEO engagement signals (scroll depth and
+          engaged-content views), and an optional GTM web data layer — with bot filtering and
+          per-destination delivery health built in.
         </Text>
         <Text as="p" tone="subdued">
           Because delivery is server-side, events keep flowing past ad blockers, Safari ITP and the
@@ -48,9 +49,15 @@ const SECTIONS = [
         </List.Item>
         <List.Item>
           Both send one first-party beacon to the app proxy. <b>Bot filtering</b> drops known crawlers and
-          headless agents, then the app forwards the event server-side to GA4 / Meta / server-side GTM
-          using the credentials you store. In the strict pixel sandbox you cannot load gtag or fbq, so
-          server-side is the delivery path.
+          headless agents, then the app forwards the event server-side to each destination you&apos;ve
+          configured — GA4, Meta, TikTok, Pinterest, Snapchat, Reddit, Klaviyo and/or a server-side GTM
+          container — using the credentials you store. In the strict pixel sandbox you cannot load gtag or
+          fbq, so server-side is the delivery path.
+        </List.Item>
+        <List.Item>
+          Optionally, the <b>GTM web data layer</b> (Pro) pushes GA4-standard + Elevar-compatible
+          <code> dl_*</code> ecommerce events to <code>window.dataLayer</code> on your storefront, so your
+          own GTM web container gets the browse funnel too. Purchase still comes server-side.
         </List.Item>
         <List.Item>
           Subscription conversions (orders/paid), refunds (refunds/create, orders/cancelled) and
@@ -86,6 +93,36 @@ const SECTIONS = [
           To confirm events <i>are</i> flowing, don&apos;t look at Tag Assistant - use <b>GA4 DebugView</b>,
           the <Link to="/app/events">Live events</Link> page, or Debug mode. If a purchase lands in GA4 but
           page views don&apos;t, that&apos;s a <b>consent</b> question (see Consent below), not a tag one.
+        </Text>
+        <Text as="p" tone="subdued">
+          <b>Exception:</b> if you turn on the <Link to="/app/datalayer">GTM data layer</Link>, the app
+          <i> does</i> push events to <code>window.dataLayer</code> on your storefront — so Tag Assistant
+          will then detect whatever tags your own GTM container fires from them. That&apos;s the one case
+          where on-page tags are expected.
+        </Text>
+      </>
+    ),
+  },
+  {
+    id: "datalayer",
+    title: "GTM data layer (optional, Pro)",
+    summary: "Feed your own Google Tag Manager web container the browse funnel.",
+    body: (
+      <>
+        <Text as="p">
+          If you run your <b>own</b> GTM web container, enable the{" "}
+          <Link to="/app/datalayer">GTM data layer</Link> and the storefront app embed will push the browse
+          funnel to <code>window.dataLayer</code>: <code>view_item</code>, <code>view_item_list</code>,{" "}
+          <code>add_to_cart</code>, <code>view_cart</code>, <code>begin_checkout</code> and{" "}
+          <code>user_data</code>. Each fires twice — once in the GA4-standard shape and once as its
+          Elevar-compatible <code>dl_*</code> mirror — so it works with GTM&apos;s built-in GA4 tags and
+          with prebuilt Elevar containers alike.
+        </Text>
+        <Text as="p" tone="subdued">
+          <b>Purchase is not in the page data layer</b> — Shopify&apos;s checkout is no longer themeable, so
+          no app can push a <code>purchase</code> event there. Pixelify delivers the purchase conversion
+          server-side (deduped &amp; reconciled); point your GA4 config at that, or run a server-side GTM
+          container for it. Events are consent-gated and only fire once the toggle is on.
         </Text>
       </>
     ),
