@@ -10,6 +10,7 @@ import {
   orderToTrackingEvent,
   recordPendingPurchase,
   reconcilePending,
+  purchaseValueFromJobs,
 } from "../app/lib/reconcile.server.js";
 
 const SHOP = "s.myshopify.com";
@@ -100,7 +101,11 @@ describe("reconcilePending", () => {
     const summary = await reconcilePending();
 
     expect(global.fetch).toHaveBeenCalledTimes(2); // GA4 + Meta
-    expect(summary).toMatchObject({ processed: 1, backfilled: 1, ga4: 1, meta: 1 });
+    // A fully-missed order → counted as recovered revenue (the order value), and rolled into the daily.
+    expect(summary).toMatchObject({ processed: 1, backfilled: 1, ga4: 1, meta: 1, recovered: 1, recoveredValue: 120 });
+    expect(prisma.trackingDaily.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ purchasesRecovered: 1, revenueRecovered: 120 }) }),
+    );
     expect(prisma.pendingPurchase.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "reconciled" }) }),
     );
@@ -115,7 +120,12 @@ describe("reconcilePending", () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(1); // GA4 already captured → only Meta sent
     expect(global.fetch.mock.calls[0][0]).toContain("graph.facebook.com");
-    expect(summary).toMatchObject({ backfilled: 1, meta: 1, ga4: 0 });
+    // A partial backfill (the pixel already captured GA4) is NOT counted as recovered revenue — that
+    // would double it against the pixel's own capture.
+    expect(summary).toMatchObject({ backfilled: 1, meta: 1, ga4: 0, recovered: 0, recoveredValue: 0 });
+    expect(prisma.trackingDaily.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ purchasesRecovered: 1 }) }),
+    );
   });
 
   test("skips (no send) when both destinations were already captured", async () => {
@@ -133,4 +143,13 @@ describe("reconcilePending", () => {
   });
 
   afterEach(() => (global.fetch = undefined));
+});
+
+describe("purchaseValueFromJobs", () => {
+  test("reads the GA4 value first, falls back to Meta, else 0", () => {
+    expect(purchaseValueFromJobs({ ga4: { event: { params: { value: 120 } } } })).toBe(120);
+    expect(purchaseValueFromJobs({ meta: { event: { custom_data: { value: 80 } } } })).toBe(80);
+    expect(purchaseValueFromJobs({})).toBe(0);
+    expect(purchaseValueFromJobs(null)).toBe(0);
+  });
 });

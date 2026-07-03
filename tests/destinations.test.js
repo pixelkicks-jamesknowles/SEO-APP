@@ -1,6 +1,9 @@
 import {
   tiktokEventFor,
   pinterestEventFor,
+  klaviyoEventFor,
+  snapEventFor,
+  redditEventFor,
   metaIdentifierKeys,
   metaUserData,
   buildJobs,
@@ -65,6 +68,80 @@ describe("pinterestEventFor", () => {
   });
 });
 
+describe("klaviyoEventFor", () => {
+  const productView = {
+    name: "product_viewed",
+    id: "evt_pv1",
+    timestamp: "2026-07-03T10:00:00.000Z",
+    email: "Shopper@Example.com",
+    externalId: "cust_9",
+    context: { document: { location: { href: "https://s.example/products/tee" } } },
+    data: { productVariant: { sku: "SKU1", title: "Blue", price: { amount: 40, currencyCode: "USD" }, product: { id: "p1", title: "Tee" } } },
+  };
+
+  test("maps an onsite event, attaches the profile + value + dedup id", () => {
+    const a = klaviyoEventFor("product_viewed", productView).data.attributes;
+    expect(a.metric.data.attributes.name).toBe("Viewed Product");
+    expect(a.profile.data.attributes.email).toBe("shopper@example.com"); // lower-cased, not hashed
+    expect(a.profile.data.attributes.external_id).toBe("cust_9");
+    expect(a.value).toBe(40);
+    expect(a.value_currency).toBe("USD");
+    expect(a.unique_id).toBe("evt_pv1"); // Klaviyo dedups a replayed beacon on this
+    expect(a.properties.ProductName).toBe("Tee");
+  });
+
+  test("returns null for checkout_completed (Klaviyo's native Shopify integration owns Placed Order)", () => {
+    expect(klaviyoEventFor("checkout_completed", checkoutEvent)).toBeNull();
+  });
+
+  test("returns null when there is no profile identifier to attribute the event to", () => {
+    const anon = { name: "product_viewed", id: "e2", data: { productVariant: { sku: "S", price: { amount: 5 }, product: { id: "p", title: "X" } } } };
+    expect(klaviyoEventFor("product_viewed", anon)).toBeNull();
+  });
+
+  test("an unmapped standard event builds no body", () => {
+    expect(klaviyoEventFor("page_viewed", { name: "page_viewed", email: "a@b.com" })).toBeNull();
+  });
+});
+
+describe("snapEventFor", () => {
+  test("maps to PURCHASE, reuses hashed PII (minus Meta cookies), value is a string", () => {
+    const ev = snapEventFor("checkout_completed", checkoutEvent);
+    expect(ev.event_name).toBe("PURCHASE");
+    expect(ev.action_source).toBe("WEB");
+    expect(ev.event_id).toBe("evt_123");
+    expect(ev.user_data.em).toEqual([sha256Hex("buyer@example.com")]);
+    expect(ev.user_data.fbp).toBeUndefined(); // Meta-only cookie dropped
+    expect(ev.custom_data.value).toBe("120"); // string
+    expect(ev.custom_data.content_ids).toEqual(["AM-9"]);
+    expect(ev.custom_data.order_id).toBe("5500000000001");
+  });
+
+  test("an unmapped event passes through as its own name", () => {
+    expect(snapEventFor("page_viewed", { name: "page_viewed" }).event_name).toBe("PAGE_VIEW");
+    expect(snapEventFor("custom_thing", { name: "custom_thing" }).event_name).toBe("custom_thing");
+  });
+});
+
+describe("redditEventFor", () => {
+  test("maps to Purchase, hashes email + IP (UA raw), commerce under event_metadata", () => {
+    const ev = redditEventFor("checkout_completed", checkoutEvent);
+    expect(ev.event_type.tracking_type).toBe("Purchase");
+    expect(ev.user.email).toBe(sha256Hex("buyer@example.com"));
+    expect(ev.user.ip_address).toBe(sha256Hex("203.0.113.7")); // Reddit hashes the IP
+    expect(ev.user.user_agent).toBe("Mozilla/5.0"); // UA is not hashed
+    expect(ev.event_metadata.value_decimal).toBe(120);
+    expect(ev.event_metadata.item_count).toBe(2);
+    expect(ev.event_metadata.products[0].id).toBe("AM-9");
+  });
+
+  test("an event with no Reddit standard type is delivered as Custom with the original name", () => {
+    const ev = redditEventFor("checkout_started", { name: "checkout_started" });
+    expect(ev.event_type.tracking_type).toBe("Custom");
+    expect(ev.event_type.custom_event_name).toBe("checkout_started");
+  });
+});
+
 describe("metaIdentifierKeys", () => {
   test("reports exactly the identifiers a user_data block carries", () => {
     const keys = metaIdentifierKeys(metaUserData(checkoutEvent));
@@ -107,6 +184,54 @@ describe("buildJobs wiring", () => {
     expect(dests).not.toContain("tiktok");
     expect(dests).not.toContain("pinterest");
   });
+
+  const onsiteView = {
+    name: "product_viewed",
+    id: "e1",
+    email: "a@b.com",
+    data: { productVariant: { sku: "S", price: { amount: 5, currencyCode: "USD" }, product: { id: "p", title: "X" } } },
+  };
+  const klaviyoBase = { shopDomain: "s.myshopify.com", serverSide: true, eventMatrix: JSON.stringify({ klaviyo: ["product_viewed"] }) };
+
+  test("adds a Klaviyo job for a mapped onsite event only when the private key is present", () => {
+    const withKey = { ...klaviyoBase, serverSideKeys: JSON.stringify({ klaviyoApiKey: "pk_1" }) };
+    expect(buildJobs(withKey, onsiteView).some((j) => j.destination === "klaviyo")).toBe(true);
+    const noKey = { ...klaviyoBase, serverSideKeys: JSON.stringify({}) };
+    expect(buildJobs(noKey, onsiteView).some((j) => j.destination === "klaviyo")).toBe(false);
+  });
+
+  test("Klaviyo is suppressed when marketing consent is declined (it carries raw PII)", () => {
+    const withKey = { ...klaviyoBase, serverSideKeys: JSON.stringify({ klaviyoApiKey: "pk_1" }) };
+    const declined = { ...onsiteView, consent: { analytics: true, marketing: false } };
+    expect(buildJobs(withKey, declined).some((j) => j.destination === "klaviyo")).toBe(false);
+  });
+
+  const snapRedditBase = {
+    shopDomain: "s.myshopify.com",
+    serverSide: true,
+    snapPixelId: "snap-1",
+    redditPixelId: "a2_1",
+    eventMatrix: JSON.stringify({ snapchat: ["checkout_completed"], reddit: ["checkout_completed"] }),
+  };
+
+  test("adds Snapchat/Reddit jobs only when pixel id + token are both present", () => {
+    const full = { ...snapRedditBase, serverSideKeys: JSON.stringify({ snapAccessToken: "s", redditAccessToken: "r" }) };
+    const dests = buildJobs(full, checkoutEvent).map((j) => j.destination);
+    expect(dests).toContain("snapchat");
+    expect(dests).toContain("reddit");
+    const noTokens = { ...snapRedditBase, serverSideKeys: JSON.stringify({}) };
+    const none = buildJobs(noTokens, checkoutEvent).map((j) => j.destination);
+    expect(none).not.toContain("snapchat");
+    expect(none).not.toContain("reddit");
+  });
+
+  test("marketing-consent-declined suppresses Snapchat/Reddit (they carry PII)", () => {
+    const full = { ...snapRedditBase, serverSideKeys: JSON.stringify({ snapAccessToken: "s", redditAccessToken: "r" }) };
+    const declined = { ...checkoutEvent, consent: { analytics: true, marketing: false } };
+    const dests = buildJobs(full, declined).map((j) => j.destination);
+    expect(dests).not.toContain("snapchat");
+    expect(dests).not.toContain("reddit");
+  });
 });
 
 describe("deliverOne routing", () => {
@@ -130,8 +255,39 @@ describe("deliverOne routing", () => {
     expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer tok");
   });
 
+  test("klaviyo posts to the Events API with the Klaviyo-API-Key header + revision", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 202 });
+    const settings = { serverSideKeys: JSON.stringify({ klaviyoApiKey: "pk_1" }) };
+    const r = await deliverOne(settings, { destination: "klaviyo", event: { data: { type: "event" } } });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toBe("https://a.klaviyo.com/api/events");
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe("Klaviyo-API-Key pk_1");
+    expect(global.fetch.mock.calls[0][1].headers.revision).toBeTruthy();
+  });
+
+  test("snapchat posts to the v3 Conversions API with the pixel id in the path + token query param", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const settings = { snapPixelId: "snap-1", serverSideKeys: JSON.stringify({ snapAccessToken: "tok" }) };
+    const r = await deliverOne(settings, { destination: "snapchat", event: { event_name: "PURCHASE" } });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toContain("tr.snapchat.com/v3/snap-1/events");
+    expect(global.fetch.mock.calls[0][0]).toContain("access_token=tok");
+  });
+
+  test("reddit posts under the pixel id with a Bearer token", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const settings = { redditPixelId: "a2_1", serverSideKeys: JSON.stringify({ redditAccessToken: "tok" }) };
+    const r = await deliverOne(settings, { destination: "reddit", event: { event_type: { tracking_type: "Purchase" } } });
+    expect(r.ok).toBe(true);
+    expect(global.fetch.mock.calls[0][0]).toContain("ads-api.reddit.com/api/v2.0/conversions/events/a2_1");
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer tok");
+  });
+
   test("unconfigured destinations report a clean reason (no throw)", async () => {
     expect(await deliverOne({}, { destination: "tiktok", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "pinterest", event: {} })).toMatchObject({ ok: false });
+    expect(await deliverOne({}, { destination: "klaviyo", event: {} })).toMatchObject({ ok: false });
+    expect(await deliverOne({}, { destination: "snapchat", event: {} })).toMatchObject({ ok: false });
+    expect(await deliverOne({}, { destination: "reddit", event: {} })).toMatchObject({ ok: false });
   });
 });

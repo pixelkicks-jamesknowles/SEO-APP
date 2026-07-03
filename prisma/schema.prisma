@@ -79,6 +79,7 @@ model TrackingSettings {
   tiktokPixelId        String?
   pinterestId          String?
   snapPixelId          String?
+  redditPixelId        String? // Reddit pixel / advertiser id for the Conversions API path
   bingUetId            String?
   // Per-platform event opt-in, e.g. {"ga4":["page_viewed","product_viewed","checkout_completed"]}
   eventMatrix          String   @default("{}") // JSON
@@ -116,6 +117,12 @@ model TrackingSettings {
   // sandbox init failures, ITP), deduped so it can only fill gaps. On by default; only acts when
   // serverSide is on. TikTok Events API + Pinterest CAPI credentials live in serverSideKeys (JSON).
   reconciliation       Boolean  @default(true)
+  // GTM web-container data layer (Pro): the theme app embed pushes GA4-standard + Elevar-compatible
+  // dl_* ecommerce events (view_item / add_to_cart / begin_checkout …) to window.dataLayer on the
+  // storefront. Purchase is NOT emitted here (Shopify's checkout is no longer themeable) — it stays
+  // server-side. Gated behind requirePro at toggle time; the storefront reads the effective flag from
+  // the app-proxy /config endpoint so it can't be enabled from the theme editor to bypass billing.
+  dataLayerEnabled     Boolean  @default(false)
   updatedAt            DateTime @updatedAt
 }
 
@@ -205,6 +212,10 @@ model TrackingDaily {
   purchasesDelivered Int      @default(0)
   eventsSent         Int      @default(0)
   eventsFailed       Int      @default(0)
+  // Purchases the storefront pixel never captured that the reconciliation pass backfilled server-side,
+  // and their summed order value — the recovered-revenue headline on the Accuracy page.
+  purchasesRecovered Int      @default(0)
+  revenueRecovered   Float    @default(0)
   updatedAt          DateTime @updatedAt
 
   @@id([shopDomain, date])

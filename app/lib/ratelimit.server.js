@@ -12,8 +12,22 @@
 // A request is limited if EITHER ceiling is exceeded. Legitimate storefront traffic (one pageview burst
 // per visitor) sits far under these; the defaults are overridable via env for a high-traffic store.
 
+// Cross-replica correction. Each map is per-process, so with N load-balanced replicas a shop's traffic
+// is split ~1/N across them — a global per-shop ceiling enforced independently per replica would let
+// ~N× through before any one replica trips. Set RATE_LIMIT_REPLICAS to the replica count and the
+// per-shop ceiling is divided across them, so the AGGREGATE ceiling stays near the configured global
+// limit even though no replica sees the whole flood. (Per-IP is left at full strength: one visitor's
+// burst isn't spread evenly across replicas and is low-volume anyway, so dividing it would risk
+// 429-ing legitimate traffic.) A shared store would be exact; this keeps the abuse guard zero-DB.
+const REPLICAS = Math.max(1, Math.round(Number(process.env.RATE_LIMIT_REPLICAS) || 1));
+
+/** Per-process share of a global per-window ceiling given the replica count. Pure. */
+export function scaledShopLimit(base, replicas = REPLICAS) {
+  return Math.max(1, Math.round(base / Math.max(1, replicas)));
+}
+
 const PER_IP_LIMIT = Number(process.env.RATE_LIMIT_PER_IP) || 120; // events / window / (shop+ip)
-const PER_SHOP_LIMIT = Number(process.env.RATE_LIMIT_PER_SHOP) || 3000; // events / window / shop
+const PER_SHOP_LIMIT = scaledShopLimit(Number(process.env.RATE_LIMIT_PER_SHOP) || 3000); // per replica
 const WINDOW_MS = (Number(process.env.RATE_LIMIT_WINDOW_SEC) || 60) * 1000;
 
 // key -> { count, resetAt }. Swept lazily (below) so it can't grow without bound.
@@ -60,4 +74,4 @@ export function __resetRateLimiter() {
   lastSweep = 0;
 }
 
-export const RATE_LIMITS = { PER_IP_LIMIT, PER_SHOP_LIMIT, WINDOW_MS };
+export const RATE_LIMITS = { PER_IP_LIMIT, PER_SHOP_LIMIT, WINDOW_MS, REPLICAS };

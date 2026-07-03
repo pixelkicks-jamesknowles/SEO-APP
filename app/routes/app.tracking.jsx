@@ -48,6 +48,9 @@ const PLATFORMS = [
   { key: "meta", label: "Meta" },
   { key: "tiktok", label: "TikTok" },
   { key: "pinterest", label: "Pinterest" },
+  { key: "snapchat", label: "Snapchat" },
+  { key: "reddit", label: "Reddit" },
+  { key: "klaviyo", label: "Klaviyo" },
 ];
 
 // Light format hints so obviously-wrong IDs are caught before they reach the pixel.
@@ -72,8 +75,12 @@ export const loader = async ({ request }) => {
     metaPixelId: t?.metaPixelId ?? "",
     tiktokPixelId: t?.tiktokPixelId ?? "",
     pinterestId: t?.pinterestId ?? "",
+    snapPixelId: t?.snapPixelId ?? "",
+    redditPixelId: t?.redditPixelId ?? "",
     hasTiktokToken: Boolean(keys.tiktokAccessToken),
     hasPinterestToken: Boolean(keys.pinterestAccessToken && keys.pinterestAdAccountId),
+    hasSnapToken: Boolean(keys.snapAccessToken),
+    hasRedditToken: Boolean(keys.redditAccessToken),
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     consentSignals: t?.consentSignals ?? true,
@@ -135,6 +142,8 @@ export const action = async ({ request }) => {
     metaPixelId: form.get("metaPixelId") || null,
     tiktokPixelId: form.get("tiktokPixelId") || null,
     pinterestId: form.get("pinterestId") || null,
+    snapPixelId: form.get("snapPixelId") || null,
+    redditPixelId: form.get("redditPixelId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     consentSignals: form.get("consentSignals") === "on",
@@ -262,6 +271,8 @@ export default function Tracking() {
     metaPixelId: data.metaPixelId,
     tiktokPixelId: data.tiktokPixelId,
     pinterestId: data.pinterestId,
+    snapPixelId: data.snapPixelId,
+    redditPixelId: data.redditPixelId,
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
@@ -320,12 +331,12 @@ export default function Tracking() {
       monthDays: String(data.subscriptionConfig.monthDays ?? 28),
       clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
     });
-    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId });
+    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId });
   };
   const saveNow = () => submit(formRef.current, { method: "post" });
 
   // Inline config validation - catch the "set up but sends nothing" traps.
-  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId);
+  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -394,6 +405,23 @@ export default function Tracking() {
                     onChange={setId("pinterestId")}
                     placeholder="2612345678901"
                     helpText={data.hasPinterestToken ? "Delivered server-side via the Pinterest Conversions API." : "Add a Pinterest CAPI token + ad account ID on Settings to deliver these."}
+                  />
+                  <TextField
+                    label="Snapchat Pixel ID"
+                    name="snapPixelId"
+                    autoComplete="off"
+                    value={ids.snapPixelId}
+                    onChange={setId("snapPixelId")}
+                    helpText={data.hasSnapToken ? "Delivered server-side via the Snapchat Conversions API." : "Add a Snapchat Conversions API token on Settings to deliver these."}
+                  />
+                  <TextField
+                    label="Reddit Pixel ID"
+                    name="redditPixelId"
+                    autoComplete="off"
+                    value={ids.redditPixelId}
+                    onChange={setId("redditPixelId")}
+                    placeholder="a2_abcdef123456"
+                    helpText={data.hasRedditToken ? "Delivered server-side via the Reddit Conversions API." : "Add a Reddit Conversions API token on Settings to deliver these."}
                   />
                 </FormLayout.Group>
               </FormLayout>
@@ -465,6 +493,12 @@ export default function Tracking() {
               </tbody>
             </table>
             </div>
+            <Text as="p" variant="bodySm" tone="subdued">
+              Klaviyo receives onsite browse &amp; abandonment events (Viewed Product, Added to Cart, Started
+              Checkout) server-side, and only for shoppers it can identify (logged-in or post-email). Placed
+              Order stays with Klaviyo&rsquo;s own Shopify integration, so it isn&rsquo;t double-counted. Add a
+              Klaviyo private API key on Settings to deliver these.
+            </Text>
           </Card>
 
           <Card>

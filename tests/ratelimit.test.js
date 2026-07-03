@@ -1,8 +1,23 @@
-import { checkIngestRate, __resetRateLimiter, RATE_LIMITS } from "../app/lib/ratelimit.server.js";
+import { checkIngestRate, __resetRateLimiter, RATE_LIMITS, scaledShopLimit } from "../app/lib/ratelimit.server.js";
 
 beforeEach(() => __resetRateLimiter());
 
 const SHOP = "s.myshopify.com";
+
+describe("scaledShopLimit (cross-replica correction)", () => {
+  test("divides the global ceiling across replicas so the aggregate stays near the target", () => {
+    expect(scaledShopLimit(3000, 1)).toBe(3000);
+    expect(scaledShopLimit(3000, 3)).toBe(1000); // 3 replicas × 1000 ≈ the 3000 global ceiling
+    expect(scaledShopLimit(3000, 4)).toBe(750);
+  });
+  test("never drops below 1, and treats a bad/zero replica count as single-process", () => {
+    expect(scaledShopLimit(10, 100)).toBe(1);
+    expect(scaledShopLimit(3000, 0)).toBe(3000);
+  });
+  test("the default build is single-process (REPLICAS = 1)", () => {
+    expect(RATE_LIMITS.REPLICAS).toBe(1);
+  });
+});
 
 test("allows traffic under the per-IP ceiling, then 429s over it", () => {
   const now = 1_000_000;

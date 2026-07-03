@@ -109,9 +109,15 @@ register(({ analytics, browser, settings, init }) => {
     return { analytics: Boolean(c.analyticsProcessingAllowed), marketing: Boolean(c.marketingAllowed) };
   };
 
-  // Which platforms (with an id) opted into this event in the matrix.
+  // Which client-tag platforms (with an id) opted into this event in the matrix.
   const platformsFor = (name) =>
     PLATFORMS.filter((p) => cfg.ids[p] && (cfg.matrix[p] || []).includes(name));
+
+  // True if ANY destination in the matrix wants this event — including server-side-only ones (TikTok,
+  // Pinterest, Klaviyo, …) the client can't tag directly. The server re-reads the matrix and does the
+  // real per-destination fan-out, so the beacon must fire whenever any destination opted in, not only
+  // when a client platform (gtm/ga4/meta) did — otherwise a server-only setup never sends anything.
+  const anyWants = (name) => Object.values(cfg.matrix).some((arr) => Array.isArray(arr) && arr.includes(name));
 
   const route = async (name, event) => {
     const wanted = platformsFor(name);
@@ -147,7 +153,7 @@ register(({ analytics, browser, settings, init }) => {
       }
     }
 
-    if (!wanted.length) return;
+    if (!anyWants(name)) return;
 
     if (!analyticsOk) {
       // Analytics declined. Strict gate → suppress. Consent Mode v2 → send a flagged, PII-free hit

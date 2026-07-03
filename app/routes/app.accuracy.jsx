@@ -20,10 +20,13 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const health = await computeHealth(session.shop);
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const rows = await prisma.trackingDaily.findMany({
-    where: { shopDomain: session.shop, date: { gte: since } },
-    orderBy: { date: "desc" },
-  });
+  const [rows, tracking] = await Promise.all([
+    prisma.trackingDaily.findMany({
+      where: { shopDomain: session.shop, date: { gte: since } },
+      orderBy: { date: "desc" },
+    }),
+    prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop }, select: { reportingCurrency: true } }),
+  ]);
   const sum = (k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
   return {
     days: rows.map((r) => ({
@@ -38,7 +41,10 @@ export const loader = async ({ request }) => {
       purchasesDelivered: sum("purchasesDelivered"),
       eventsSent: sum("eventsSent"),
       eventsFailed: sum("eventsFailed"),
+      purchasesRecovered: sum("purchasesRecovered"),
+      revenueRecovered: rows.reduce((t, r) => t + (r.revenueRecovered || 0), 0),
     },
+    recoveredCurrency: tracking?.reportingCurrency || null,
     alerts: health.alerts,
     outboxPending: health.outboxPending,
     outboxDead: health.outboxDead,
@@ -63,13 +69,28 @@ function Stat({ title, value, sub, progress, tone }) {
   );
 }
 
+// Format a recovered-revenue amount. Uses the shop's reporting currency when set; otherwise shows a
+// plain number (mixed-currency stores have no single symbol to show).
+function formatMoney(amount, currency) {
+  const n = Math.round(amount || 0);
+  if (currency) {
+    try {
+      return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+    } catch {
+      /* invalid currency code → fall through to a plain number */
+    }
+  }
+  return n.toLocaleString();
+}
+
 export default function Accuracy() {
-  const { days, totals, alerts, outboxPending, outboxDead, matchQuality } = useLoaderData();
+  const { days, totals, recoveredCurrency, alerts, outboxPending, outboxDead, matchQuality } = useLoaderData();
   const revalidator = useRevalidator();
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
   const deliveryRate = pct(totals.eventsSent, sends);
   const hasData = totals.ordersPaid > 0 || sends > 0;
+  const recovered = totals.purchasesRecovered || 0;
 
   return (
     <Page
@@ -98,6 +119,16 @@ export default function Accuracy() {
                 sub={`${totals.purchasesDelivered} purchase events / ${totals.ordersPaid} paid orders`}
                 progress={matchRate ?? 0}
                 tone={matchRate != null && matchRate < 90 ? "critical" : "success"}
+              />
+              <Stat
+                title="Revenue recovered (30d)"
+                value={recovered === 0 ? formatMoney(0, recoveredCurrency) : formatMoney(totals.revenueRecovered, recoveredCurrency)}
+                sub={
+                  recovered === 0
+                    ? "Purchases the pixel missed are backfilled here"
+                    : `across ${recovered} purchase${recovered === 1 ? "" : "s"} the storefront pixel missed`
+                }
+                tone="success"
               />
               <Stat
                 title="Delivery success (30d)"

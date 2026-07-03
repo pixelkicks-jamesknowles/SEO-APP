@@ -12,12 +12,14 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 - **Client-side tracking** — GTM / GA4 / Meta / TikTok / Pinterest / Snap / Bing via the Web Pixel
   extension, with a per-platform event matrix, **consent-gated** through the Customer Privacy API.
 - **Server-side tracking** — GA4 Measurement Protocol + Meta CAPI + **TikTok Events API** + **Pinterest
-  Conversions API** + server-side GTM fan-out from the `/track` beacon (`app/lib/server-side.server.js`),
-  matrix-gated per destination.
+  Conversions API** + **Snapchat Conversions API** + **Reddit Conversions API** + **Klaviyo Events API**
+  (onsite browse/abandonment events) + server-side GTM fan-out from the `/track` beacon
+  (`app/lib/server-side.server.js`), matrix-gated per destination.
 - **Purchase reconciliation** — `orders/paid` records every paid order; a delayed cron pass backfills the
   GA4/Meta purchase for any order the storefront pixel never delivered (ad blockers, ITP, sandbox
   failures), deduped so it can only fill a gap — pushing purchase capture toward 100%
-  (`app/lib/reconcile.server.js`).
+  (`app/lib/reconcile.server.js`). The **revenue it recovers** (orders the pixel missed entirely) is
+  totalled on the Accuracy page.
 - **Match-quality diagnostics** — per-day Meta identifier coverage (email/phone/…) surfaced on the
   Accuracy page, so merchants can see and lift what drives Event Match Quality.
 - **Double-counting detection** — scans the storefront for existing trackers (native channels, theme

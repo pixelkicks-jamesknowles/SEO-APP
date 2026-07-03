@@ -46,25 +46,33 @@ describe("assertEncryptionKey", () => {
     warn.mockRestore();
   });
 
-  test("warns in production when the key is unset", () => {
+  test("THROWS in production when the key is unset (fail-fast, no silent fallback)", () => {
     delete process.env.APP_ENCRYPTION_KEY;
+    delete process.env.ALLOW_INSECURE_ENCRYPTION_FALLBACK;
     process.env.NODE_ENV = "production";
-    assertEncryptionKey();
+    expect(() => assertEncryptionKey()).toThrow(/APP_ENCRYPTION_KEY is not set/);
+  });
+
+  test("downgrades to a warning when the insecure fallback is explicitly allowed", () => {
+    delete process.env.APP_ENCRYPTION_KEY;
+    process.env.ALLOW_INSECURE_ENCRYPTION_FALLBACK = "true";
+    process.env.NODE_ENV = "production";
+    expect(() => assertEncryptionKey()).not.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("APP_ENCRYPTION_KEY is not set"));
   });
 
   test("stays silent outside production when unset", () => {
     delete process.env.APP_ENCRYPTION_KEY;
     process.env.NODE_ENV = "development";
-    assertEncryptionKey();
+    expect(() => assertEncryptionKey()).not.toThrow();
     expect(warn).not.toHaveBeenCalled();
   });
 
-  test("warns when the key is present but not 32 bytes", () => {
+  test("THROWS in production when the key is present but not 32 bytes", () => {
     process.env.APP_ENCRYPTION_KEY = "too-short";
+    delete process.env.ALLOW_INSECURE_ENCRYPTION_FALLBACK;
     process.env.NODE_ENV = "production";
-    assertEncryptionKey();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a valid 32-byte key"));
+    expect(() => assertEncryptionKey()).toThrow(/not a valid 32-byte key/);
   });
 
   test("stays silent for a valid 32-byte base64 key", () => {

@@ -356,6 +356,163 @@ export function pinterestEventFor(name, ev) {
   };
 }
 
+const KLAVIYO_API_REVISION = "2026-04-15";
+
+// Shopify customer-event → Klaviyo metric name. Deliberately EXCLUDES checkout_completed: Klaviyo's
+// native Shopify integration already emits "Placed Order" / "Ordered Product" server-to-server, so
+// sending our own would double-count in flows and reports (the same single-emitter rule the pixel
+// scanner enforces). What we add is the ONSITE events Klaviyo otherwise loses when its on-page JS can't
+// run — the abandonment/browse signals that drive its flows. An unmapped standard event → no send.
+const KLAVIYO_MAP = {
+  product_viewed: "Viewed Product",
+  product_added_to_cart: "Added to Cart",
+  checkout_started: "Started Checkout",
+};
+
+// The identifiers a Klaviyo profile can be keyed on. Klaviyo drops an event that carries no profile
+// identifier, so the presence of one of these also decides whether a job is built at all.
+function klaviyoProfile(ev) {
+  const checkout = ev?.data?.checkout;
+  const addr = checkout?.shippingAddress || checkout?.billingAddress || {};
+  const attrs = {};
+  const email = checkout?.email || ev?.email;
+  const phone = (checkout?.phone || ev?.phone || "").trim();
+  if (email) attrs.email = String(email).trim().toLowerCase();
+  if (phone) attrs.phone_number = phone; // Klaviyo wants E.164 as sent; it normalizes server-side
+  if (ev?.externalId) attrs.external_id = String(ev.externalId);
+  if (addr.firstName) attrs.first_name = addr.firstName;
+  if (addr.lastName) attrs.last_name = addr.lastName;
+  return attrs;
+}
+
+/**
+ * Build a Klaviyo Events API body for a Shopify event, or null when it must NOT be sent — i.e. the
+ * event is neither a mapped onsite metric nor a custom (window.pxp.track) event, OR there's no profile
+ * identifier to attach it to. Klaviyo dedups on unique_id (= the Shopify event id), so a replayed
+ * beacon collapses. Unlike the ad CAPIs, PII is NOT hashed here — Klaviyo matches profiles on the
+ * raw email/phone.
+ */
+export function klaviyoEventFor(name, ev) {
+  const metricName = KLAVIYO_MAP[name] || (ev?.custom ? name : null);
+  if (!metricName) return null;
+  const profile = klaviyoProfile(ev);
+  if (!profile.email && !profile.phone_number && !profile.external_id) return null; // unattributable
+  const c = extractCommerce(name, ev?.data);
+  const properties = {};
+  if (c.items.length) {
+    properties.Items = c.items.map((i) => ({ ProductID: i.item_id, ProductName: i.item_name, Quantity: i.quantity, ItemPrice: i.price }));
+    if (c.items.length === 1) {
+      properties.ProductID = c.items[0].item_id;
+      properties.ProductName = c.items[0].item_name;
+    }
+  }
+  const url = ev?.context?.document?.location?.href;
+  if (url) properties.URL = url;
+  // Custom / lead events carry value/currency in ev.params (no commerce extraction).
+  const value = c.value != null ? c.value : ev?.custom && ev?.params?.value != null ? num(ev.params.value) : null;
+  const currency = c.currency || (ev?.custom ? ev?.params?.currency : null);
+  const attributes = {
+    properties,
+    metric: { data: { type: "metric", attributes: { name: metricName } } },
+    profile: { data: { type: "profile", attributes: profile } },
+    time: ev?.timestamp || new Date().toISOString(),
+  };
+  if (value != null) attributes.value = value;
+  if (currency) attributes.value_currency = currency;
+  if (ev?.id) attributes.unique_id = String(ev.id);
+  return { data: { type: "event", attributes } };
+}
+
+// Shopify customer-event → Snapchat Conversions API (v3) event_name. Snap's v3 web schema mirrors Meta
+// CAPI (data[] of { event_name, event_time(s), user_data, custom_data }), so we reuse the same hashed
+// user_data and commerce extraction. An unmapped name passes through as-is (Snap treats unknown as custom).
+const SNAP_MAP = {
+  page_viewed: "PAGE_VIEW",
+  product_viewed: "VIEW_CONTENT",
+  collection_viewed: "VIEW_CONTENT",
+  search_submitted: "SEARCH",
+  product_added_to_cart: "ADD_CART",
+  checkout_started: "START_CHECKOUT",
+  payment_info_submitted: "ADD_BILLING",
+  checkout_completed: "PURCHASE",
+};
+
+/** Build a Snapchat Conversions API (v3) event for a Shopify event. Same hashed PII as Meta (minus the
+ *  Meta-only fbp/fbc cookies) + commerce; value is a string, like Pinterest. Deduped by Snap on event_id. */
+export function snapEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const user_data = metaUserData(ev);
+  delete user_data.fbp; // Meta-only cookies — meaningless to Snap
+  delete user_data.fbc;
+  const custom_data = {};
+  if (c.currency) custom_data.currency = c.currency;
+  if (c.value != null) custom_data.value = String(c.value); // Snap expects value as a string
+  if (c.items.length) {
+    custom_data.content_ids = c.items.map((i) => String(i.item_id));
+    custom_data.contents = c.items.map((i) => ({ id: String(i.item_id), quantity: i.quantity, item_price: String(i.price) }));
+    custom_data.num_items = c.items.reduce((s, i) => s + i.quantity, 0);
+  }
+  if (name === "checkout_completed" && c.transactionId) custom_data.order_id = c.transactionId;
+  if (ev?.custom && ev?.params) {
+    if (ev.params.value != null) custom_data.value = String(num(ev.params.value));
+    if (ev.params.currency) custom_data.currency = ev.params.currency;
+  }
+  return {
+    event_name: SNAP_MAP[name] || name,
+    event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
+    event_id: ev?.id ? String(ev.id) : undefined,
+    action_source: "WEB",
+    event_source_url: ev?.context?.document?.location?.href || undefined,
+    user_data,
+    custom_data,
+  };
+}
+
+// Shopify customer-event → Reddit Conversions API tracking_type. Reddit has a small standard set; an
+// unmapped name is delivered as a "Custom" type carrying the original name (checkout_started /
+// payment_info_submitted have no Reddit standard equivalent).
+const REDDIT_MAP = {
+  page_viewed: "PageVisit",
+  product_viewed: "ViewContent",
+  collection_viewed: "ViewContent",
+  search_submitted: "Search",
+  product_added_to_cart: "AddToCart",
+  checkout_completed: "Purchase",
+};
+
+/** Build a Reddit Conversions API event for a Shopify event. Reddit hashes email/external_id/IP with
+ *  SHA-256 (user_agent stays raw), and carries commerce under event_metadata (value as value_decimal). */
+export function redditEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const checkout = ev?.data?.checkout;
+  const user = {};
+  const em = sha256Hex(checkout?.email || ev?.email);
+  if (em) user.email = em;
+  if (ev?.externalId) user.external_id = sha256Hex(String(ev.externalId));
+  if (ev?.clientIp) user.ip_address = sha256Hex(ev.clientIp); // Reddit expects the IP SHA-256 hashed
+  if (ev?.userAgent) user.user_agent = ev.userAgent; // user agent is NOT hashed
+  const event_metadata = {};
+  if (c.currency) event_metadata.currency = c.currency;
+  if (c.value != null) event_metadata.value_decimal = c.value;
+  if (c.items.length) {
+    event_metadata.item_count = c.items.reduce((s, i) => s + i.quantity, 0);
+    event_metadata.products = c.items.map((i) => ({ id: String(i.item_id), name: i.item_name || undefined, category: i.item_category || undefined }));
+  }
+  if (ev?.custom && ev?.params) {
+    if (ev.params.value != null) event_metadata.value_decimal = num(ev.params.value);
+    if (ev.params.currency) event_metadata.currency = ev.params.currency;
+  }
+  const trackingType = REDDIT_MAP[name] || "Custom";
+  const event_type = { tracking_type: trackingType };
+  if (trackingType === "Custom") event_type.custom_event_name = name;
+  return {
+    event_at: ev?.timestamp || new Date().toISOString(), // ISO 8601
+    event_type,
+    user,
+    event_metadata,
+  };
+}
+
 // Best-effort POST that never throws; returns { ok, detail } for the delivery health log.
 async function postJson(url, body, headers = {}) {
   try {
@@ -409,6 +566,29 @@ async function sendTiktok(pixelCode, token, event) {
 async function sendPinterest(adAccountId, token, event) {
   const url = `https://api.pinterest.com/v5/ad_accounts/${encodeURIComponent(adAccountId)}/events`;
   return postJson(url, { data: [event] }, { Authorization: `Bearer ${token}` });
+}
+
+// Klaviyo Events API: the private API key goes in the Authorization header, the revision pins the
+// JSON:API schema version. Success is a 202 (postJson treats any 2xx as ok). The event body is already
+// the full JSON:API envelope from klaviyoEventFor.
+async function sendKlaviyo(apiKey, event) {
+  return postJson("https://a.klaviyo.com/api/events", event, {
+    Authorization: `Klaviyo-API-Key ${apiKey}`,
+    revision: KLAVIYO_API_REVISION,
+    Accept: "application/vnd.api+json",
+  });
+}
+
+// Snapchat Conversions API (v3): the pixel id is in the path, the access token is a query param.
+async function sendSnap(pixelId, token, event) {
+  const url = `https://tr.snapchat.com/v3/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(token)}`;
+  return postJson(url, { data: [event] });
+}
+
+// Reddit Conversions API (v2.0): events are posted under the pixel/advertiser id in the path, Bearer-authed.
+async function sendReddit(pixelId, token, event) {
+  const url = `https://ads-api.reddit.com/api/v2.0/conversions/events/${encodeURIComponent(pixelId)}`;
+  return postJson(url, { events: [event] }, { Authorization: `Bearer ${token}` });
 }
 
 // Send a Meta CAPI test event (tagged with a test_event_code so it shows under Test Events, not live
@@ -489,6 +669,15 @@ export async function deliverOne(settings, job) {
     case "pinterest":
       if (!keys.pinterestAccessToken || !keys.pinterestAdAccountId) return { ok: false, detail: "Pinterest not configured" };
       return sendPinterest(keys.pinterestAdAccountId, keys.pinterestAccessToken, event);
+    case "klaviyo":
+      if (!keys.klaviyoApiKey) return { ok: false, detail: "Klaviyo not configured" };
+      return sendKlaviyo(keys.klaviyoApiKey, event);
+    case "snapchat":
+      if (!settings?.snapPixelId || !keys.snapAccessToken) return { ok: false, detail: "Snapchat not configured" };
+      return sendSnap(settings.snapPixelId, keys.snapAccessToken, event);
+    case "reddit":
+      if (!settings?.redditPixelId || !keys.redditAccessToken) return { ok: false, detail: "Reddit not configured" };
+      return sendReddit(settings.redditPixelId, keys.redditAccessToken, event);
     case "gtm": {
       if (!keys.gtmServerUrl) return { ok: false, detail: "sGTM not configured" };
       const mid = keys.gtmMeasurementId || settings?.ga4Id;
@@ -570,6 +759,24 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // token in serverSideKeys. (Value-mode/margin isn't applied here — Pinterest wants value as a string.)
   if (marketingOk && wants("pinterest") && settings.pinterestId && keys.pinterestAccessToken && keys.pinterestAdAccountId) {
     jobs.push({ destination: "pinterest", eventName: name, event: pinterestEventFor(name, event) });
+  }
+  // Klaviyo Events API: onsite browse/abandonment events (Viewed Product / Added to Cart / Started
+  // Checkout) delivered server-side so they survive the sandbox and feed Klaviyo flows. Carries raw
+  // PII → marketing-consent-gated. klaviyoEventFor returns null for an unmapped event or one with no
+  // profile identifier (a logged-out product view, a page_view), so those build no job. Gated purely on
+  // the private key — Klaviyo needs no separate on-page pixel id for server-side events.
+  if (marketingOk && wants("klaviyo") && keys.klaviyoApiKey) {
+    const klaviyoEvent = klaviyoEventFor(name, event);
+    if (klaviyoEvent) jobs.push({ destination: "klaviyo", eventName: name, event: klaviyoEvent });
+  }
+  // Snapchat Conversions API + Reddit Conversions API: both carry hashed PII → marketing-consent-gated.
+  // Value-mode/FX normalization isn't applied (Snap wants value as a string, Reddit as value_decimal),
+  // matching the Pinterest treatment — they deliver the raw amount.
+  if (marketingOk && wants("snapchat") && settings.snapPixelId && keys.snapAccessToken) {
+    jobs.push({ destination: "snapchat", eventName: name, event: snapEventFor(name, event) });
+  }
+  if (marketingOk && wants("reddit") && settings.redditPixelId && keys.redditAccessToken) {
+    jobs.push({ destination: "reddit", eventName: name, event: redditEventFor(name, event) });
   }
   // Extra jobs from later features (e.g. Google Ads Enhanced Conversions on a purchase).
   for (const extra of hooks.extraJobs?.(event, ga4Event, { clientId, consent, isPurchaseConv }) || []) {

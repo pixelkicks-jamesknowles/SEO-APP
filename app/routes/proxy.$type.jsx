@@ -1,11 +1,29 @@
+import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { ingestEvent } from "../lib/ingest.server";
 import { checkIngestRate } from "../lib/ratelimit.server";
+import { effectiveDataLayerConfig } from "../lib/datalayer";
 
-// App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/track here. Used by the SEO-
+// App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/<type> here. Used by the SEO-
 // engagement theme embed (main-page context, so it can hit the same-origin proxy). The Web Pixel can't
 // use this (its strict sandbox blocks same-origin requests) and posts to /pixel/track instead.
-//   track -> bot-filter, record the event, fan out server-side to GA4 / Meta CAPI / sGTM, log outcomes.
+//   GET  config -> the effective storefront config (GTM data-layer enabled flag + event list).
+//   POST track  -> bot-filter, record the event, fan out server-side to GA4 / Meta CAPI / sGTM, log.
+//
+// GET /apps/<subpath>/config: the embed reads whether the (Pro) data layer is on. App-proxy-signed, so
+// the shop is authenticated. Cached briefly so it's not re-fetched on every pageview of a session.
+export const loader = async ({ request, params }) => {
+  const { session } = await authenticate.public.appProxy(request);
+  const shopDomain = session?.shop;
+  if (!shopDomain) return new Response("Unauthorized", { status: 401 });
+  if (params.type !== "config") return new Response("Not found", { status: 404 });
+  const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain } }).catch(() => null);
+  return Response.json(
+    { dataLayer: effectiveDataLayerConfig(settings) },
+    { headers: { "Cache-Control": "public, max-age=300" } },
+  );
+};
+
 export const action = async ({ request, params }) => {
   const { session } = await authenticate.public.appProxy(request);
   const shopDomain = session?.shop;

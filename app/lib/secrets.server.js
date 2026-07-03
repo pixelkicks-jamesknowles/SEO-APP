@@ -23,28 +23,39 @@ function key() {
   return crypto.createHash("sha256").update(`pixelify-secrets:${secret}`).digest();
 }
 
-/** Boot-time check for the credential-encryption key. Called once at startup. Warns (does not throw)
- *  so an already-running deployment on the SHOPIFY_API_SECRET fallback isn't bricked — but surfaces
- *  the two silent footguns: (1) no dedicated key → an app-secret rotation orphans all stored
- *  credentials; (2) a present-but-malformed key silently falls through to the fallback. */
+/** Boot-time check for the credential-encryption key. Called once at startup. In production a missing
+ *  or malformed key is a FAIL-FAST error, because silently falling through to the SHOPIFY_API_SECRET-
+ *  derived key hides two data-loss footguns: (1) no dedicated key → an app-secret rotation orphans every
+ *  stored credential; (2) a present-but-malformed key silently uses the fallback. An already-running
+ *  deployment that was bootstrapped on the fallback can set ALLOW_INSECURE_ENCRYPTION_FALLBACK=true to
+ *  downgrade the error to a warning (so a redeploy isn't bricked) while it migrates to a real key.
+ *  Outside production this is silent — dev/test run on the derived key by design. */
 export function assertEncryptionKey() {
   const raw = process.env.APP_ENCRYPTION_KEY;
+  const inProd = process.env.NODE_ENV === "production";
+  const allowFallback = process.env.ALLOW_INSECURE_ENCRYPTION_FALLBACK === "true";
+  // Fail loudly in production unless the insecure fallback is explicitly allowed; warn if it is; stay
+  // silent elsewhere.
+  const flag = (msg) => {
+    if (inProd && !allowFallback) throw new Error(msg);
+    if (inProd) console.warn(msg);
+  };
   if (!raw) {
-    if (process.env.NODE_ENV === "production") {
-      console.warn(
-        "[secrets] APP_ENCRYPTION_KEY is not set — merchant credentials are encrypted with a key " +
-          "derived from SHOPIFY_API_SECRET. Set a dedicated 32-byte APP_ENCRYPTION_KEY (base64 or " +
-          "hex) so credentials survive an app-secret rotation. See DEPLOY.md.",
-      );
-    }
+    flag(
+      "[secrets] APP_ENCRYPTION_KEY is not set. Merchant ad-platform credentials would be encrypted with " +
+        "a key derived from SHOPIFY_API_SECRET, so rotating the app secret would orphan every stored " +
+        "credential. Set a dedicated 32-byte APP_ENCRYPTION_KEY (base64 or hex) — see DEPLOY.md. To run " +
+        "on the insecure fallback anyway, set ALLOW_INSECURE_ENCRYPTION_FALLBACK=true.",
+    );
     return;
   }
   const buf = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
   if (buf.length !== 32) {
-    console.warn(
+    flag(
       `[secrets] APP_ENCRYPTION_KEY is set but is not a valid 32-byte key (got ${buf.length} bytes; ` +
-        "expected 32 as base64 or 64 hex chars). Falling back to the SHOPIFY_API_SECRET-derived key. " +
-        "Fix the value in DEPLOY.md's env vars.",
+        "expected 32 as base64 or 64 hex chars) — it would silently fall through to the " +
+        "SHOPIFY_API_SECRET-derived key. Fix the value (see DEPLOY.md), or set " +
+        "ALLOW_INSECURE_ENCRYPTION_FALLBACK=true to run on the fallback.",
     );
   }
 }

@@ -15,8 +15,17 @@
 //      late pixel event mostly collapses. Result: every paid order reaches GA4/Meta at least once.
 import prisma from "../db.server";
 import { buildJobs, deliverOne } from "./server-side.server";
-import { recordDeliveries } from "./delivery.server";
+import { recordDeliveries, bumpDaily } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
+
+/** The order value carried by a stored pending-purchase job pair (GA4 params.value, else Meta
+ *  custom_data.value). Used for the recovered-revenue rollup. Pure. Returns 0 when absent. */
+export function purchaseValueFromJobs(jobs) {
+  const ga4 = Number(jobs?.ga4?.event?.params?.value);
+  if (Number.isFinite(ga4)) return ga4;
+  const meta = Number(jobs?.meta?.event?.custom_data?.value);
+  return Number.isFinite(meta) ? meta : 0;
+}
 
 /** Trailing run of digits from an order id (handles a numeric id, a "gid://.../Order/123", etc.). */
 export function numericId(x) {
@@ -148,6 +157,8 @@ export async function reconcilePending({ graceMinutes = 20, limit = 200 } = {}) 
 
   let backfilled = 0;
   let skipped = 0;
+  let recovered = 0;
+  let recoveredValue = 0;
   const sent = { ga4: 0, meta: 0 };
   for (const row of due) {
     const key = { shopDomain_orderId: { shopDomain: row.shopDomain, orderId: row.orderId } };
@@ -185,6 +196,17 @@ export async function reconcilePending({ graceMinutes = 20, limit = 200 } = {}) 
       .update({ where: key, data: { status: "reconciled", detail: okDests.length ? `backfilled ${okDests.join(", ")}` : "backfill failed (queued)" } })
       .catch(() => {});
     backfilled++;
+    // Recovered-revenue rollup: an order the storefront pixel captured NOWHERE (no prior capture on any
+    // destination) that we just backfilled is a purchase — and its revenue — that would otherwise be
+    // missing from the merchant's analytics/ad platforms entirely. Partial backfills (the pixel already
+    // captured one destination, we filled the other) are excluded — counting their revenue would double
+    // it against the pixel's own capture and overstate the recovery.
+    if (!cap?.ga4 && !cap?.meta && okDests.length) {
+      recovered++;
+      const value = purchaseValueFromJobs(jobs);
+      recoveredValue += value;
+      await bumpDaily(row.shopDomain, { purchasesRecovered: 1, revenueRecovered: value });
+    }
   }
-  return { processed: due.length, backfilled, skipped, ...sent };
+  return { processed: due.length, backfilled, skipped, recovered, recoveredValue, ...sent };
 }

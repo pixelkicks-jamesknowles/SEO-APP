@@ -14,7 +14,7 @@ import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisc
 import { scanStorefront } from "../lib/pixel-scan.server";
 import { SectionHeading } from "../components/SectionHeading";
 
-const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM", tiktok: "TikTok", pinterest: "Pinterest" };
+const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM", tiktok: "TikTok", pinterest: "Pinterest", klaviyo: "Klaviyo", snapchat: "Snapchat", reddit: "Reddit" };
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -27,6 +27,9 @@ export const loader = async ({ request }) => {
     gtmServerUrl: keys.gtmServerUrl || "",
     hasTiktokToken: Boolean(keys.tiktokAccessToken),
     hasPinterestToken: Boolean(keys.pinterestAccessToken),
+    hasKlaviyoKey: Boolean(keys.klaviyoApiKey),
+    hasSnapToken: Boolean(keys.snapAccessToken),
+    hasRedditToken: Boolean(keys.redditAccessToken),
     pinterestAdAccountId: keys.pinterestAdAccountId || "",
     hasTiktokId: Boolean(tracking?.tiktokPixelId),
     hasPinterestId: Boolean(tracking?.pinterestId),
@@ -144,6 +147,9 @@ export const action = async ({ request }) => {
   if (form.get("metaCapiToken")) keys.metaCapiToken = form.get("metaCapiToken");
   if (form.get("tiktokAccessToken")) keys.tiktokAccessToken = form.get("tiktokAccessToken");
   if (form.get("pinterestAccessToken")) keys.pinterestAccessToken = form.get("pinterestAccessToken");
+  if (form.get("klaviyoApiKey")) keys.klaviyoApiKey = form.get("klaviyoApiKey");
+  if (form.get("snapAccessToken")) keys.snapAccessToken = form.get("snapAccessToken");
+  if (form.get("redditAccessToken")) keys.redditAccessToken = form.get("redditAccessToken");
   const pinterestAdAccountId = (form.get("pinterestAdAccountId") || "").trim();
   if (pinterestAdAccountId) keys.pinterestAdAccountId = pinterestAdAccountId;
   else delete keys.pinterestAdAccountId;
@@ -161,7 +167,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, hasKlaviyoKey, hasSnapToken, hasRedditToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -174,6 +180,9 @@ export default function Settings() {
   const [tiktokToken, setTiktokToken] = useState("");
   const [pinToken, setPinToken] = useState("");
   const [pinAdAcct, setPinAdAcct] = useState(savedPinAdAcct);
+  const [klaviyoKey, setKlaviyoKey] = useState("");
+  const [snapToken, setSnapToken] = useState("");
+  const [redditToken, setRedditToken] = useState("");
   const [gads, setGads] = useState(googleAdsConfig || { customerId: "", loginCustomerId: "", conversionActionId: "" });
   const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
   const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
@@ -182,7 +191,7 @@ export default function Settings() {
   // forms). The keys form carries no `intent`, so a submit without one is the "save-keys" action.
   const submitting = nav.state !== "idle" ? (nav.formData?.get("intent") ?? "save-keys") : null;
   const busy = (intent) => submitting === intent;
-  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct;
+  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct || klaviyoKey !== "" || snapToken !== "" || redditToken !== "";
 
   // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
   // can't run inside the embedded iframe).
@@ -201,6 +210,9 @@ export default function Settings() {
       setCapiToken("");
       setTiktokToken("");
       setPinToken("");
+      setKlaviyoKey("");
+      setSnapToken("");
+      setRedditToken("");
       shopify.saveBar.hide("settings-save");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -213,6 +225,9 @@ export default function Settings() {
     setTiktokToken("");
     setPinToken("");
     setPinAdAcct(savedPinAdAcct);
+    setKlaviyoKey("");
+    setSnapToken("");
+    setRedditToken("");
   };
   const saveNow = () => submit(keysForm.current, { method: "post" });
 
@@ -245,6 +260,9 @@ export default function Settings() {
               <Badge tone={savedGtmUrl ? "success" : undefined}>{savedGtmUrl ? "sGTM URL saved" : "No sGTM URL"}</Badge>
               <Badge tone={hasTiktokToken ? "success" : undefined}>{hasTiktokToken ? "TikTok token saved" : "No TikTok token"}</Badge>
               <Badge tone={hasPinterestToken ? "success" : undefined}>{hasPinterestToken ? "Pinterest token saved" : "No Pinterest token"}</Badge>
+              <Badge tone={hasKlaviyoKey ? "success" : undefined}>{hasKlaviyoKey ? "Klaviyo key saved" : "No Klaviyo key"}</Badge>
+              <Badge tone={hasSnapToken ? "success" : undefined}>{hasSnapToken ? "Snapchat token saved" : "No Snapchat token"}</Badge>
+              <Badge tone={hasRedditToken ? "success" : undefined}>{hasRedditToken ? "Reddit token saved" : "No Reddit token"}</Badge>
             </InlineStack>
             <Form method="post" ref={keysForm}>
               <BlockStack gap="200">
@@ -302,6 +320,34 @@ export default function Settings() {
                   onChange={setPinAdAcct}
                   placeholder="549761234567890"
                   helpText="Required for Pinterest CAPI — events are posted under this ad account. Pinterest, Ads, Business, the account's ID."
+                />
+                <TextField
+                  label="Klaviyo private API key"
+                  name="klaviyoApiKey"
+                  autoComplete="off"
+                  type="password"
+                  value={klaviyoKey}
+                  onChange={setKlaviyoKey}
+                  placeholder="pk_xxxxxxxxxxxxxxxx"
+                  helpText={`${hasKlaviyoKey ? "A key is saved. Enter a new one to replace it. " : ""}Klaviyo, Settings, API keys, Create Private API Key with the events:write scope. Delivers onsite browse & abandonment events server-side; enable them for Klaviyo on the Tracking page.`}
+                />
+                <TextField
+                  label="Snapchat Conversions API token"
+                  name="snapAccessToken"
+                  autoComplete="off"
+                  type="password"
+                  value={snapToken}
+                  onChange={setSnapToken}
+                  helpText={`${hasSnapToken ? "A token is saved. Enter a new one to replace it. " : ""}Snapchat Ads Manager, Events Manager, your pixel, generate a Conversions API token. Set the Snapchat Pixel ID and enable events on the Tracking page.`}
+                />
+                <TextField
+                  label="Reddit Conversions API token"
+                  name="redditAccessToken"
+                  autoComplete="off"
+                  type="password"
+                  value={redditToken}
+                  onChange={setRedditToken}
+                  helpText={`${hasRedditToken ? "A token is saved. Enter a new one to replace it. " : ""}Reddit Ads, Events Manager, your pixel, Conversions API, generate a token. Set the Reddit Pixel ID and enable events on the Tracking page.`}
                 />
                 <InlineStack>
                   <Button submit variant="primary" loading={busy("save-keys")} disabled={!dirty}>Save keys</Button>

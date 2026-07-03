@@ -39,7 +39,9 @@ Set these in **Service → Variables**:
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
 | `SCOPES` | `write_pixels,read_customer_events,read_orders,read_fulfillments` (matches `shopify.app.toml`) |
 | `SHOPIFY_APP_URL` | Your Railway URL, e.g. `https://pixel-kicks-tracking.up.railway.app` (or a custom domain) |
-| `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Set this before storing any server-side keys.** If omitted, credentials are encrypted with a key derived from `SHOPIFY_API_SECRET`, so rotating the app secret would orphan them (they'd decrypt to empty). Once set, don't change it or stored credentials must be re-entered. |
+| `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Required in production: the app now fails to boot without it** (missing or malformed), so a silent fallback can't orphan credentials. **Set this before storing any server-side keys.** Once set, don't change it or stored credentials must be re-entered. |
+| `ALLOW_INSECURE_ENCRYPTION_FALLBACK` | *(optional escape hatch)* Set to `true` only for a deployment already bootstrapped on the `SHOPIFY_API_SECRET`-derived key: it downgrades the boot failure above to a warning so a redeploy isn't bricked while you migrate to a real `APP_ENCRYPTION_KEY`. Leave unset on new installs. |
+| `RATE_LIMIT_REPLICAS` | *(optional)* Number of web replicas. The storefront-ingest rate limiter is per-process, so set this to your replica count and the per-shop ceiling is divided across them, keeping the aggregate near the intended global limit. Defaults to `1` (single process). |
 
 `NODE_ENV` and `PORT` are set by the Dockerfile/Railway — don't override. Migrations run
 automatically on boot (`prisma migrate deploy` in the container CMD).

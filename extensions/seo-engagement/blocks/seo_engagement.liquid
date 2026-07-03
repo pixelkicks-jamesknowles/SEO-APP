@@ -17,6 +17,21 @@
 </script>
 <script src="{{ 'seo-engagement.js' | asset_url }}" defer></script>
 
+{%- comment -%}
+  GTM data layer (Pro). Layout scope reliably exposes `customer`, `shop` and `localization` but NOT
+  `product`/`collection`, so those are read client-side from Shopify's AJAX API. We hand the embed only
+  what Liquid can give accurately here; the script fetches the effective on/off flag from the app proxy.
+{%- endcomment -%}
+<script>
+  window.__pxpDl = {
+    base: "/apps/{{ block.settings.proxy_subpath | default: 'pixelify-seo' }}",
+    currency: {{ localization.country.currency.iso_code | default: shop.currency | json }},
+    customer: {%- if customer -%}{ id: {{ customer.id | json }}, email: {{ customer.email | json }} }{%- else -%}null{%- endif -%},
+    requireConsent: {{ block.settings.require_consent | default: true | json }}
+  };
+</script>
+<script src="{{ 'pxp-datalayer.js' | asset_url }}" defer></script>
+
 {% schema %}
 {
   "name": "Pixelify SEO engagement",

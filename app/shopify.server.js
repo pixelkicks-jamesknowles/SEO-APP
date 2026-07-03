@@ -9,7 +9,8 @@ import prisma from "./db.server";
 import { assertEncryptionKey } from "./lib/secrets.server";
 import { billingConfig } from "./lib/billing.server";
 
-// Surface credential-encryption-key misconfiguration at boot (warns; never throws).
+// Surface credential-encryption-key misconfiguration at boot. In production a missing/malformed key
+// throws (fail-fast) unless ALLOW_INSECURE_ENCRYPTION_FALLBACK=true; outside production it's silent.
 assertEncryptionKey();
 
 // Free app today. The Pro plan is DEFINED here (so Shopify knows it exists) but NOT enforced — no route
