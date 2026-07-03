@@ -1,5 +1,7 @@
-import { useLoaderData, useRevalidator } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge } from "@shopify/polaris";
+import { Suspense } from "react";
+import { useLoaderData, useRevalidator, Await } from "@remix-run/react";
+import { defer } from "@remix-run/node";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
@@ -8,7 +10,14 @@ import { identityStats } from "../lib/identity.server";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  // Defer the report so the page shell paints immediately and the tables stream in — this report scans up
+  // to two 5,000-row tables + aggregates, so keeping it off the initial paint is the main LCP lever here.
+  return defer({ report: buildReport(session.shop) });
+};
+
+// Build the attribution report (all reads in one round-trip group). Kept as a non-awaited promise by the
+// loader so it streams after the shell.
+async function buildReport(shopDomain) {
   // Cap the scan so a very busy shop's report stays fast; newest visitors first. When a cap is hit the
   // report reflects only the most recent SCAN_CAP rows, so we flag it rather than presenting a partial
   // aggregate as if it were the whole history.
@@ -35,7 +44,7 @@ export const loader = async ({ request }) => {
     channelTotalOrders: revenue.totalOrders,
     identity,
   };
-};
+}
 
 // Compact money formatting for the revenue table (the merchant's own store currency; no symbol assumed).
 const fmtMoney = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -81,18 +90,64 @@ function Table({ caption, head, rows }) {
   );
 }
 
-export default function Attribution() {
-  const { totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, identity } = useLoaderData();
-  const revalidator = useRevalidator();
-  const hasData = totalVisitors > 0 || channels.length > 0;
+// Placeholder shown while the report streams in — a stat row + two table cards so a sizeable element
+// paints early (helps LCP) and the layout stays stable when the data arrives.
+function AttributionSkeleton() {
+  return (
+    <BlockStack gap="400">
+      <InlineStack gap="400" wrap>
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} style={{ flex: "1 1 200px" }}>
+            <Card>
+              <BlockStack gap="200">
+                <SkeletonBodyText lines={1} />
+                <SkeletonDisplayText size="large" />
+              </BlockStack>
+            </Card>
+          </div>
+        ))}
+      </InlineStack>
+      <Card>
+        <BlockStack gap="300">
+          <SkeletonDisplayText size="small" />
+          <Divider />
+          <SkeletonBodyText lines={6} />
+        </BlockStack>
+      </Card>
+      <Card>
+        <BlockStack gap="300">
+          <SkeletonDisplayText size="small" />
+          <Divider />
+          <SkeletonBodyText lines={5} />
+        </BlockStack>
+      </Card>
+    </BlockStack>
+  );
+}
 
+export default function Attribution() {
+  const { report } = useLoaderData();
+  const revalidator = useRevalidator();
   return (
     <Page
       title="Attribution"
       subtitle="Which channels drive revenue, where your visitors first came from, and how their journey builds across sessions and devices."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
-      <BlockStack gap="400">
+      <Suspense fallback={<AttributionSkeleton />}>
+        <Await resolve={report} errorElement={<Banner tone="critical" title="Couldn't load attribution data">Refresh to try again.</Banner>}>
+          {(resolved) => <AttributionBody {...resolved} />}
+        </Await>
+      </Suspense>
+    </Page>
+  );
+}
+
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, identity }) {
+  const hasData = totalVisitors > 0 || channels.length > 0;
+
+  return (
+    <BlockStack gap="400">
         {!hasData ? (
           <Banner tone="info">
             No attribution data yet. This populates as visitors arrive with UTM-tagged links (utm_source /
@@ -191,6 +246,5 @@ export default function Attribution() {
           </>
         )}
       </BlockStack>
-    </Page>
   );
 }

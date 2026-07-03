@@ -1,5 +1,7 @@
-import { useLoaderData, useRevalidator } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider } from "@shopify/polaris";
+import { Suspense } from "react";
+import { useLoaderData, useRevalidator, Await } from "@remix-run/react";
+import { defer } from "@remix-run/node";
+import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { computeHealth } from "../lib/health.server";
@@ -18,12 +20,16 @@ const ID_LABELS = [
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const shopDomain = session.shop;
+  // Defer the data so the page shell (title + skeleton) paints immediately and the metrics stream in —
+  // keeps LCP off the several DB round-trips this report needs. authenticate must still be awaited (it
+  // can redirect for auth); only the data build is deferred.
+  return defer({ data: buildAccuracy(session.shop) });
+};
+
+// The report build (all independent reads in one round-trip group). Kept as a non-awaited promise by the
+// loader so it streams after the shell.
+async function buildAccuracy(shopDomain) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  // These four are independent (health, the per-day rows, the currency setting, and match-quality read
-  // different tables), so run them in ONE round-trip group. Previously computeHealth and getMatchQuality
-  // were each awaited separately, stacking three sequential DB round-trip groups before the page could
-  // paint — the biggest lever on this page's LCP.
   const [health, rows, tracking, matchQuality] = await Promise.all([
     computeHealth(shopDomain),
     prisma.trackingDaily.findMany({ where: { shopDomain, date: { gte: since } }, orderBy: { date: "desc" } }),
@@ -53,7 +59,7 @@ export const loader = async ({ request }) => {
     outboxDead: health.outboxDead,
     matchQuality,
   };
-};
+}
 
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : null);
 
@@ -86,9 +92,53 @@ function formatMoney(amount, currency) {
   return n.toLocaleString();
 }
 
+// Placeholder shown while the metrics stream in — a large stat row + card so a sizeable element paints
+// early (helps LCP) and the layout doesn't jump when the data arrives.
+function AccuracySkeleton() {
+  return (
+    <BlockStack gap="400">
+      <InlineStack gap="400" wrap>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} style={{ flex: "1 1 220px" }}>
+            <Card>
+              <BlockStack gap="200">
+                <SkeletonBodyText lines={1} />
+                <SkeletonDisplayText size="large" />
+              </BlockStack>
+            </Card>
+          </div>
+        ))}
+      </InlineStack>
+      <Card>
+        <BlockStack gap="300">
+          <SkeletonDisplayText size="small" />
+          <Divider />
+          <SkeletonBodyText lines={8} />
+        </BlockStack>
+      </Card>
+    </BlockStack>
+  );
+}
+
 export default function Accuracy() {
-  const { days, totals, recoveredCurrency, alerts, outboxPending, outboxDead, matchQuality } = useLoaderData();
+  const { data } = useLoaderData();
   const revalidator = useRevalidator();
+  return (
+    <Page
+      title="Accuracy"
+      subtitle="How completely your store's purchases and events are being captured and delivered (last 30 days)."
+      primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
+    >
+      <Suspense fallback={<AccuracySkeleton />}>
+        <Await resolve={data} errorElement={<Banner tone="critical" title="Couldn't load accuracy data">Refresh to try again.</Banner>}>
+          {(resolved) => <AccuracyBody {...resolved} />}
+        </Await>
+      </Suspense>
+    </Page>
+  );
+}
+
+function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, outboxDead, matchQuality }) {
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
   const deliveryRate = pct(totals.eventsSent, sends);
@@ -96,12 +146,7 @@ export default function Accuracy() {
   const recovered = totals.purchasesRecovered || 0;
 
   return (
-    <Page
-      title="Accuracy"
-      subtitle="How completely your store's purchases and events are being captured and delivered (last 30 days)."
-      primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
-    >
-      <BlockStack gap="400">
+    <BlockStack gap="400">
         {!hasData ? (
           <Banner tone="info">
             No data yet. These figures populate as paid orders and storefront events start flowing.
@@ -230,6 +275,5 @@ export default function Accuracy() {
           </>
         )}
       </BlockStack>
-    </Page>
   );
 }
