@@ -111,6 +111,11 @@ model TrackingSettings {
   // GOOGLE_ADS_* / GOOGLE_OAUTH_* env vars are set AND the merchant has connected + configured below.
   googleAdsEnabled     Boolean  @default(false)
   googleAdsConfig      String   @default("{}") // JSON: { customerId, loginCustomerId, conversionActionId }
+  // Server-side purchase reconciliation: orders/paid records every paid order; a delayed cron pass
+  // backfills the GA4/Meta purchase for any order the storefront pixel never delivered (ad blockers,
+  // sandbox init failures, ITP), deduped so it can only fill gaps. On by default; only acts when
+  // serverSide is on. TikTok Events API + Pinterest CAPI credentials live in serverSideKeys (JSON).
+  reconciliation       Boolean  @default(true)
   updatedAt            DateTime @updatedAt
 }
 
@@ -292,6 +297,63 @@ model AuditSnapshot {
   createdAt  DateTime @default(now())
 
   @@index([shopDomain, createdAt])
+}
+
+// Server-side purchase reconciliation queue. orders/paid inserts one row per paid order (the trimmed
+// order payload needed to rebuild the GA4/Meta purchase). A delayed cron pass (grace window) checks
+// PurchaseCapture: any destination the storefront pixel never delivered is backfilled server-side, then
+// the row is marked reconciled. GA4 dedups on transaction_id (= order id) and Meta on a deterministic
+// event_id (= "order:<id>"), so a backfill can only fill a gap — never double-count.
+model PendingPurchase {
+  shopDomain String
+  orderId    String // numeric order id (Shopify's source of truth)
+  payload    String // JSON: trimmed order fields (line items, totals, hashed-able identifiers)
+  status     String   @default("pending") // pending | reconciled | skipped
+  detail     String? // what the reconcile pass did (destinations sent / why skipped)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([shopDomain, orderId])
+  @@index([status, createdAt])
+}
+
+// Which destinations already delivered a purchase for an order, keyed on the numeric order id. Upserted
+// from the storefront-pixel checkout_completed delivery (ingest) AND the subscription webhook purchase,
+// so the reconcile pass knows exactly which per-destination purchases are missing and fills only those.
+model PurchaseCapture {
+  shopDomain String
+  orderId    String
+  ga4        Boolean  @default(false)
+  meta       Boolean  @default(false)
+  at         DateTime @default(now())
+
+  @@id([shopDomain, orderId])
+  @@index([shopDomain, at])
+}
+
+// Per-day Meta identifier-coverage counters for the match-quality diagnostics (Event Match Quality is
+// driven by how many identifiers each purchase carries). Bumped on every checkout_completed: `purchases`
+// is the denominator, each identifier column counts purchases that carried it. Coverage % = col/purchases.
+model MatchQualityDaily {
+  shopDomain String
+  date       String // YYYY-MM-DD (UTC)
+  purchases  Int      @default(0)
+  em         Int      @default(0)
+  ph         Int      @default(0)
+  fn         Int      @default(0)
+  ln         Int      @default(0)
+  ct         Int      @default(0)
+  st         Int      @default(0)
+  zp         Int      @default(0)
+  country    Int      @default(0)
+  externalId Int      @default(0)
+  fbp        Int      @default(0)
+  fbc        Int      @default(0)
+  clientIp   Int      @default(0)
+  userAgent  Int      @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@id([shopDomain, date])
 }
 
 // Recent storefront events forwarded by the Web Pixel (server-side beacon), for the live

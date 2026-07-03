@@ -7,11 +7,13 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 import { assertEncryptionKey } from "./lib/secrets.server";
+import { billingConfig } from "./lib/billing.server";
 
 // Surface credential-encryption-key misconfiguration at boot (warns; never throws).
 assertEncryptionKey();
 
-// Free app — no billing. (SEO features + plan tiers archived to branch archive/seo-full-featured.)
+// Free app today. The Pro plan is DEFINED here (so Shopify knows it exists) but NOT enforced — no route
+// calls billing.require until a pricing decision is made. See lib/billing.server.js (BILLING_ENFORCED).
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
@@ -23,6 +25,7 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  billing: billingConfig,
   future: {
     unstable_newEmbeddedAuthStrategy: true,
     removeRest: true,

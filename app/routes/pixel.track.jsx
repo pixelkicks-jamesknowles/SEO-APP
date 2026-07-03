@@ -1,5 +1,6 @@
 import { ingestEvent } from "../lib/ingest.server";
 import { verifyPixelToken } from "../lib/pixel-token.server";
+import { checkIngestRate } from "../lib/ratelimit.server";
 
 // Direct cross-origin ingest endpoint for the Web Pixel. The strict pixel sandbox blocks requests to
 // the shop's own origin (RestrictedUrlError), so it CANNOT use the app proxy — it beacons here on the
@@ -25,6 +26,11 @@ export const action = async ({ request }) => {
     return new Response(null, { status: 204, headers: CORS });
   }
   const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
+  // Abuse guard: shed floods before they cost a DB write or a send against the shop's ad credentials.
+  // 429 (not a silent 204) so a legit client can honour Retry-After; the token check above already ran,
+  // so this can't be used to probe which shops are installed.
+  const rl = checkIngestRate(shopDomain, clientIp);
+  if (!rl.ok) return new Response(null, { status: 429, headers: { ...CORS, "Retry-After": String(rl.retryAfter) } });
   await ingestEvent(shopDomain, body, clientIp).catch(() => {});
   return new Response(null, { status: 204, headers: CORS });
 };

@@ -42,6 +42,29 @@ const CUSTOM_META_MAP = {
   schedule: "Schedule",
 };
 
+// Shopify customer-event → TikTok Events API standard event. page_viewed is intentionally absent (TikTok
+// has no PageView standard event); an unmapped name passes through as a TikTok custom event.
+const TIKTOK_MAP = {
+  product_viewed: "ViewContent",
+  collection_viewed: "ViewContent",
+  search_submitted: "Search",
+  product_added_to_cart: "AddToCart",
+  checkout_started: "InitiateCheckout",
+  payment_info_submitted: "AddPaymentInfo",
+  checkout_completed: "CompletePayment",
+};
+
+// Shopify customer-event → Pinterest Conversions API event_name. Pinterest requires one of its enums or
+// "custom", so anything unmapped falls back to "custom".
+const PINTEREST_MAP = {
+  page_viewed: "page_visit",
+  product_viewed: "page_visit",
+  collection_viewed: "view_category",
+  search_submitted: "search",
+  product_added_to_cart: "add_to_cart",
+  checkout_completed: "checkout",
+};
+
 const num = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -252,6 +275,87 @@ export function metaEventFor(name, ev) {
   };
 }
 
+// Which of the Meta match keys a built user_data block actually carries. Column names match the
+// MatchQualityDaily model, so the ingest path can bump per-identifier coverage counters (Event Match
+// Quality is driven by identifier coverage). Pure — unit-tested.
+const META_ID_COLUMNS = {
+  em: "em", ph: "ph", fn: "fn", ln: "ln", ct: "ct", st: "st", zp: "zp", country: "country",
+  external_id: "externalId", fbp: "fbp", fbc: "fbc", client_ip_address: "clientIp", client_user_agent: "userAgent",
+};
+export function metaIdentifierKeys(userData) {
+  const out = [];
+  for (const [k, col] of Object.entries(META_ID_COLUMNS)) {
+    const v = userData?.[k];
+    if (Array.isArray(v) ? v.length : v) out.push(col);
+  }
+  return out;
+}
+
+/** Build a TikTok Events API event object for a Shopify event (hashed PII + ttp/ttclid + commerce). */
+export function tiktokEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const checkout = ev?.data?.checkout;
+  const user = {};
+  if (ev?.ttp) user.ttp = ev.ttp;
+  if (ev?.ttclid) user.ttclid = ev.ttclid;
+  if (ev?.clientIp) user.ip = ev.clientIp;
+  if (ev?.userAgent) user.user_agent = ev.userAgent;
+  const em = sha256Hex(checkout?.email || ev?.email);
+  if (em) user.email = em;
+  const ph = sha256Hex((checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  if (ph) user.phone = ph;
+  if (ev?.externalId) user.external_id = sha256Hex(String(ev.externalId));
+  const properties = {};
+  if (c.currency) properties.currency = c.currency;
+  if (c.value != null) properties.value = c.value;
+  if (c.items.length) {
+    properties.content_type = "product";
+    properties.contents = c.items.map((i) => ({ content_id: String(i.item_id), content_name: i.item_name, quantity: i.quantity, price: i.price }));
+  }
+  if (name === "checkout_completed" && c.transactionId) properties.order_id = c.transactionId;
+  return {
+    event: TIKTOK_MAP[name] || name,
+    event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
+    event_id: ev?.id ? String(ev.id) : undefined,
+    user,
+    page: { url: ev?.context?.document?.location?.href || undefined },
+    properties,
+  };
+}
+
+/** Build a Pinterest Conversions API event object for a Shopify event (hashed PII arrays + commerce). */
+export function pinterestEventFor(name, ev) {
+  const c = extractCommerce(name, ev?.data);
+  const checkout = ev?.data?.checkout;
+  const user_data = {};
+  if (ev?.clientIp) user_data.client_ip_address = ev.clientIp;
+  if (ev?.userAgent) user_data.client_user_agent = ev.userAgent;
+  const em = sha256Hex(checkout?.email || ev?.email);
+  if (em) user_data.em = [em];
+  const ph = sha256Hex((checkout?.phone || ev?.phone || "").replace(/\D/g, ""));
+  if (ph) user_data.ph = [ph];
+  if (ev?.externalId) user_data.external_id = [sha256Hex(String(ev.externalId))];
+  if (ev?.epik) user_data.click_id = ev.epik;
+  const custom_data = {};
+  if (c.currency) custom_data.currency = c.currency;
+  if (c.value != null) custom_data.value = String(c.value); // Pinterest expects value as a string
+  if (c.items.length) {
+    custom_data.content_ids = c.items.map((i) => String(i.item_id));
+    custom_data.contents = c.items.map((i) => ({ id: String(i.item_id), quantity: i.quantity, item_price: String(i.price) }));
+    custom_data.num_items = c.items.reduce((s, i) => s + i.quantity, 0);
+  }
+  if (name === "checkout_completed" && c.transactionId) custom_data.order_id = c.transactionId;
+  return {
+    event_name: PINTEREST_MAP[name] || "custom",
+    action_source: "web",
+    event_time: Math.floor((ev?.timestamp ? Date.parse(ev.timestamp) : Date.now()) / 1000),
+    event_id: ev?.id ? String(ev.id) : undefined,
+    event_source_url: ev?.context?.document?.location?.href || undefined,
+    user_data,
+    custom_data,
+  };
+}
+
 // Best-effort POST that never throws; returns { ok, detail } for the delivery health log.
 async function postJson(url, body, headers = {}) {
   try {
@@ -292,6 +396,19 @@ async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, co
 async function sendMeta(pixelId, token, event) {
   const url = `https://graph.facebook.com/${META_API_VERSION}/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(token)}`;
   return postJson(url, { data: [event] });
+}
+
+// TikTok Events API 1.3: server-to-server web events. Access-Token in the header, the pixel code as
+// event_source_id. Like the others this only inspects HTTP status for the health log.
+async function sendTiktok(pixelCode, token, event) {
+  const body = { event_source: "web", event_source_id: pixelCode, data: [event] };
+  return postJson("https://business-api.tiktok.com/open_api/v1.3/event/track/", body, { "Access-Token": token });
+}
+
+// Pinterest Conversions API (v5): events are posted under an ad account, Bearer-authed.
+async function sendPinterest(adAccountId, token, event) {
+  const url = `https://api.pinterest.com/v5/ad_accounts/${encodeURIComponent(adAccountId)}/events`;
+  return postJson(url, { data: [event] }, { Authorization: `Bearer ${token}` });
 }
 
 // Send a Meta CAPI test event (tagged with a test_event_code so it shows under Test Events, not live
@@ -366,6 +483,12 @@ export async function deliverOne(settings, job) {
     case "meta":
       if (!settings?.metaPixelId || !keys.metaCapiToken) return { ok: false, detail: "Meta not configured" };
       return sendMeta(settings.metaPixelId, keys.metaCapiToken, event);
+    case "tiktok":
+      if (!settings?.tiktokPixelId || !keys.tiktokAccessToken) return { ok: false, detail: "TikTok not configured" };
+      return sendTiktok(settings.tiktokPixelId, keys.tiktokAccessToken, event);
+    case "pinterest":
+      if (!keys.pinterestAccessToken || !keys.pinterestAdAccountId) return { ok: false, detail: "Pinterest not configured" };
+      return sendPinterest(keys.pinterestAdAccountId, keys.pinterestAccessToken, event);
     case "gtm": {
       if (!keys.gtmServerUrl) return { ok: false, detail: "sGTM not configured" };
       const mid = keys.gtmMeasurementId || settings?.ga4Id;
@@ -434,6 +557,19 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
   if (wants("gtm") && settings.gtmId && keys.gtmServerUrl && (keys.gtmMeasurementId || settings.ga4Id)) {
     jobs.push({ destination: "gtm", eventName: name, event: ga4Event, clientId, consent });
+  }
+  // TikTok Events API: carries hashed PII, so it's marketing-consent-gated like Meta. Needs the pixel
+  // code (settings.tiktokPixelId) + an access token in serverSideKeys.
+  if (marketingOk && wants("tiktok") && settings.tiktokPixelId && keys.tiktokAccessToken) {
+    const ttEvent = tiktokEventFor(name, event);
+    if (isPurchaseConv) withValueMode(ttEvent.properties, settings.valueMode, settings.marginPct);
+    hooks.normalizeParams?.(ttEvent.properties);
+    jobs.push({ destination: "tiktok", eventName: name, event: ttEvent });
+  }
+  // Pinterest Conversions API: also marketing-consent-gated. Needs the tag id + an ad-account id and
+  // token in serverSideKeys. (Value-mode/margin isn't applied here — Pinterest wants value as a string.)
+  if (marketingOk && wants("pinterest") && settings.pinterestId && keys.pinterestAccessToken && keys.pinterestAdAccountId) {
+    jobs.push({ destination: "pinterest", eventName: name, event: pinterestEventFor(name, event) });
   }
   // Extra jobs from later features (e.g. Google Ads Enhanced Conversions on a purchase).
   for (const extra of hooks.extraJobs?.(event, ga4Event, { clientId, consent, isPurchaseConv }) || []) {

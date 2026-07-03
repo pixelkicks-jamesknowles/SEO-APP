@@ -1,5 +1,6 @@
 import { authenticate } from "../shopify.server";
 import { ingestEvent } from "../lib/ingest.server";
+import { checkIngestRate } from "../lib/ratelimit.server";
 
 // App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/track here. Used by the SEO-
 // engagement theme embed (main-page context, so it can hit the same-origin proxy). The Web Pixel can't
@@ -11,8 +12,13 @@ export const action = async ({ request, params }) => {
   if (!shopDomain) return new Response("Unauthorized", { status: 401 });
   if (params.type !== "track") return new Response("Not found", { status: 404 });
 
-  const body = await request.json().catch(() => null);
   const clientIp = (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() || undefined;
+  // Abuse guard (same limiter as /pixel/track). This path is app-proxy-signed, so it's lower risk, but
+  // a compromised/looping embed shouldn't be able to flood a shop's server-side sends either.
+  const rl = checkIngestRate(shopDomain, clientIp);
+  if (!rl.ok) return new Response("Too Many Requests", { status: 429, headers: { "Retry-After": String(rl.retryAfter) } });
+
+  const body = await request.json().catch(() => null);
   // Best-effort, like /pixel/track: a post-delivery DB hiccup must not turn a successful send into a
   // 500 (Shopify would retry the proxy call → a duplicate fan-out). Always ack with 204.
   await ingestEvent(shopDomain, body, clientIp).catch(() => {});

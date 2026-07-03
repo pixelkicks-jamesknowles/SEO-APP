@@ -81,6 +81,42 @@ export async function recordVisit(shopDomain, clientId, utm) {
     .catch(() => {});
 }
 
+// Match-quality diagnostics: bump the per-day identifier-coverage counters for a purchase. `keys` is
+// the set of Meta identifiers the built user_data carried (from metaIdentifierKeys). `purchases` is the
+// denominator; each identifier column counts the purchases that carried it → coverage % = col/purchases.
+// Meta Event Match Quality is driven by identifier coverage, so this surfaces the actionable gaps
+// ("only 12% of purchases carried a phone") without persisting any PII. Best-effort.
+const MQ_COLUMNS = ["em", "ph", "fn", "ln", "ct", "st", "zp", "country", "externalId", "fbp", "fbc", "clientIp", "userAgent"];
+export async function bumpMatchQuality(shopDomain, keys) {
+  const date = today();
+  const present = new Set(keys || []);
+  const inc = { purchases: { increment: 1 } };
+  const create = { shopDomain, date, purchases: 1 };
+  for (const col of MQ_COLUMNS) {
+    const hit = present.has(col) ? 1 : 0;
+    inc[col] = { increment: hit };
+    create[col] = hit;
+  }
+  await prisma.matchQualityDaily
+    .upsert({ where: { shopDomain_date: { shopDomain, date } }, create, update: inc })
+    .catch(() => {});
+}
+
+/** Roll up identifier coverage over the last `days` into { purchases, coverage: { col: pct } }. */
+export async function getMatchQuality(shopDomain, days = 30) {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const rows = await prisma.matchQualityDaily.findMany({ where: { shopDomain, date: { gte: since } } }).catch(() => []);
+  const totals = { purchases: 0 };
+  for (const col of MQ_COLUMNS) totals[col] = 0;
+  for (const r of rows) {
+    totals.purchases += r.purchases;
+    for (const col of MQ_COLUMNS) totals[col] += r[col];
+  }
+  const coverage = {};
+  for (const col of MQ_COLUMNS) coverage[col] = totals.purchases ? Math.round((totals[col] / totals.purchases) * 100) : 0;
+  return { purchases: totals.purchases, coverage, columns: MQ_COLUMNS };
+}
+
 // Look up a visitor's first-touch source by client_id (for enriching a later conversion).
 export async function getFirstTouch(shopDomain, clientId) {
   if (!clientId) return null;

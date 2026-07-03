@@ -11,8 +11,18 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 ## What it does
 - **Client-side tracking** — GTM / GA4 / Meta / TikTok / Pinterest / Snap / Bing via the Web Pixel
   extension, with a per-platform event matrix, **consent-gated** through the Customer Privacy API.
-- **Server-side tracking** — GA4 Measurement Protocol + Meta CAPI fan-out from the `/track` App-Proxy
-  beacon (`app/lib/server-side.server.js`).
+- **Server-side tracking** — GA4 Measurement Protocol + Meta CAPI + **TikTok Events API** + **Pinterest
+  Conversions API** + server-side GTM fan-out from the `/track` beacon (`app/lib/server-side.server.js`),
+  matrix-gated per destination.
+- **Purchase reconciliation** — `orders/paid` records every paid order; a delayed cron pass backfills the
+  GA4/Meta purchase for any order the storefront pixel never delivered (ad blockers, ITP, sandbox
+  failures), deduped so it can only fill a gap — pushing purchase capture toward 100%
+  (`app/lib/reconcile.server.js`).
+- **Match-quality diagnostics** — per-day Meta identifier coverage (email/phone/…) surfaced on the
+  Accuracy page, so merchants can see and lift what drives Event Match Quality.
+- **Double-counting detection** — scans the storefront for existing trackers (native channels, theme
+  tags, other apps) and warns before they double-count (`app/lib/pixel-scan.server.js`).
+- **Abuse guard** — the public ingest endpoints are rate-limited per shop + IP (`app/lib/ratelimit.server.js`).
 - **Subscription conversion tracking** — `orders/paid` → a GA4 `subscription_purchase` event with
   `subscription` / `subscription_interval` (per-order + per-line) and the actual discounted amount
   (`app/lib/subscription.js`; spec: [seo-subscription-tracking-v1](../../docs/specs/seo-subscription-tracking-v1.md)).
@@ -28,10 +38,12 @@ app/routes/webhooks.orders.paid.jsx   subscription_purchase → GA4
 app/lib/{server-side,subscription,activity}.server.js · extensions/tracking-pixel
 ```
 
-## Free — no billing
-Billing + plan tiers were removed; every feature (incl. server-side + subscription) is available with
-no Pro gate. Unused SEO tables (SeoSettings, Redirect404Log, …) remain in the schema but are dormant —
-left in place to avoid a destructive migration (drop later if desired).
+## Free — billing defined but not enforced
+Every feature is available with no Pro gate. A `Pro` plan is **defined** (`app/lib/billing.server.js`,
+wired into `shopify.server.js`) so it's ready to charge later, but nothing calls `billing.require` until
+`BILLING_ENFORCED=true` — flipping that is the only change needed to start gating. Unused SEO tables
+(SeoSettings, Redirect404Log, …) remain in the schema but are dormant — left in place to avoid a
+destructive migration (drop later if desired).
 
 ## First run
 ```bash

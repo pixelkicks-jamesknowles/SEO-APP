@@ -1,7 +1,8 @@
 import prisma from "../db.server";
-import { fanOutServerSide, isBot, sha256Hex } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch, pruneCap } from "./delivery.server";
+import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
+import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
 import { googleAdsHook } from "./google-ads.server";
 import { redactEvent } from "./redact";
@@ -75,4 +76,13 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   await recordDeliveries(shopDomain, results);
   // Durable retry: queue any destination that failed so /cron/tick re-sends it with backoff.
   await enqueueFailures(shopDomain, results);
+
+  // Purchase-specific bookkeeping: stamp which destinations delivered (so the reconcile pass knows this
+  // order was captured client-side and won't re-send it), and roll up Meta identifier coverage for the
+  // match-quality diagnostics. Both keyed on the order id the pixel reported.
+  if (event.name === "checkout_completed") {
+    const orderId = numericId(event.data?.checkout?.order?.id);
+    if (orderId) await recordCaptureFromResults(shopDomain, orderId, results);
+    await bumpMatchQuality(shopDomain, metaIdentifierKeys(metaUserData(event)));
+  }
 }

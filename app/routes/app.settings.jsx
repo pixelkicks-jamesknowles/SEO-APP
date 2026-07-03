@@ -11,9 +11,10 @@ import { recordDeliveries } from "../lib/delivery.server";
 import { readServerSideKeys, writeServerSideKeys } from "../lib/secrets.server";
 import { EVENT_SAMPLES, SUBSCRIPTION_SAMPLE } from "../lib/event-samples";
 import { googleAdsEnvReady, googleAdsConnected, googleAdsConfigOf, googleAdsDisconnect, googleAuthUrl, googleRedirectUri, createOAuthState } from "../lib/google-ads.server";
+import { scanStorefront } from "../lib/pixel-scan.server";
 import { SectionHeading } from "../components/SectionHeading";
 
-const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM" };
+const DEST_LABEL = { ga4: "GA4", meta: "Meta CAPI", gtm: "Server-side GTM", tiktok: "TikTok", pinterest: "Pinterest" };
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -24,6 +25,11 @@ export const loader = async ({ request }) => {
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),
     gtmServerUrl: keys.gtmServerUrl || "",
+    hasTiktokToken: Boolean(keys.tiktokAccessToken),
+    hasPinterestToken: Boolean(keys.pinterestAccessToken),
+    pinterestAdAccountId: keys.pinterestAdAccountId || "",
+    hasTiktokId: Boolean(tracking?.tiktokPixelId),
+    hasPinterestId: Boolean(tracking?.pinterestId),
     hasGa4Id: Boolean(tracking?.ga4Id),
     serverSideOn: Boolean(tracking?.serverSide),
     canTest: Boolean(tracking?.serverSide && tracking?.ga4Id && keys.ga4ApiSecret),
@@ -97,6 +103,14 @@ export const action = async ({ request }) => {
     };
   }
 
+  // Double-counting detection: fetch the storefront and report any existing trackers, so the merchant
+  // can dedup (or remove) them instead of silently double-counting the same purchase.
+  if (intent === "scanPixels") {
+    const scan = await scanStorefront(shopDomain);
+    await logActivity(shopDomain, `Scanned storefront for existing pixels (${scan.detected.length} found)`);
+    return { scan };
+  }
+
   // Google Ads (gated): connect (return the OAuth URL for the client to open), disconnect, or save config.
   if (intent === "googleConnect") {
     if (!googleAdsEnvReady()) return { gadsError: "Google Ads isn't enabled on this app (missing operator credentials)." };
@@ -128,6 +142,11 @@ export const action = async ({ request }) => {
   const keys = readServerSideKeys(tracking);
   if (form.get("ga4ApiSecret")) keys.ga4ApiSecret = form.get("ga4ApiSecret");
   if (form.get("metaCapiToken")) keys.metaCapiToken = form.get("metaCapiToken");
+  if (form.get("tiktokAccessToken")) keys.tiktokAccessToken = form.get("tiktokAccessToken");
+  if (form.get("pinterestAccessToken")) keys.pinterestAccessToken = form.get("pinterestAccessToken");
+  const pinterestAdAccountId = (form.get("pinterestAdAccountId") || "").trim();
+  if (pinterestAdAccountId) keys.pinterestAdAccountId = pinterestAdAccountId;
+  else delete keys.pinterestAdAccountId;
   const gtmServerUrl = (form.get("gtmServerUrl") || "").trim();
   if (gtmServerUrl) keys.gtmServerUrl = gtmServerUrl;
   else delete keys.gtmServerUrl;
@@ -142,7 +161,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Settings() {
-  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
+  const { hasGa4Secret, hasCapiToken, gtmServerUrl: savedGtmUrl, hasTiktokToken, hasPinterestToken, pinterestAdAccountId: savedPinAdAcct, hasTiktokId, hasPinterestId, hasGa4Id, serverSideOn, canTest, googleAdsEnv, googleAdsEnabled, googleAdsConnected: gadsConnected, googleAdsConfig } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const shopify = useAppBridge();
@@ -152,6 +171,9 @@ export default function Settings() {
   const [ga4Secret, setGa4Secret] = useState("");
   const [capiToken, setCapiToken] = useState("");
   const [gtmUrl, setGtmUrl] = useState(savedGtmUrl);
+  const [tiktokToken, setTiktokToken] = useState("");
+  const [pinToken, setPinToken] = useState("");
+  const [pinAdAcct, setPinAdAcct] = useState(savedPinAdAcct);
   const [gads, setGads] = useState(googleAdsConfig || { customerId: "", loginCustomerId: "", conversionActionId: "" });
   const [gadsEnabled, setGadsEnabled] = useState(Boolean(googleAdsEnabled));
   const setGadsField = (k) => (v) => setGads((s) => ({ ...s, [k]: v.replace(/\D/g, "") }));
@@ -160,7 +182,7 @@ export default function Settings() {
   // forms). The keys form carries no `intent`, so a submit without one is the "save-keys" action.
   const submitting = nav.state !== "idle" ? (nav.formData?.get("intent") ?? "save-keys") : null;
   const busy = (intent) => submitting === intent;
-  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl;
+  const dirty = ga4Secret !== "" || capiToken !== "" || gtmUrl !== savedGtmUrl || tiktokToken !== "" || pinToken !== "" || pinAdAcct !== savedPinAdAcct;
 
   // When the connect action returns an OAuth URL, open Google consent in a new tab (top-level — it
   // can't run inside the embedded iframe).
@@ -177,6 +199,8 @@ export default function Settings() {
     if (actionData?.ok && nav.state === "idle") {
       setGa4Secret("");
       setCapiToken("");
+      setTiktokToken("");
+      setPinToken("");
       shopify.saveBar.hide("settings-save");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,6 +210,9 @@ export default function Settings() {
     setGa4Secret("");
     setCapiToken("");
     setGtmUrl(savedGtmUrl);
+    setTiktokToken("");
+    setPinToken("");
+    setPinAdAcct(savedPinAdAcct);
   };
   const saveNow = () => submit(keysForm.current, { method: "post" });
 
@@ -216,6 +243,8 @@ export default function Settings() {
               <Badge tone={hasGa4Secret ? "success" : undefined}>{hasGa4Secret ? "GA4 secret saved" : "No GA4 secret"}</Badge>
               <Badge tone={hasCapiToken ? "success" : undefined}>{hasCapiToken ? "Meta token saved" : "No Meta token"}</Badge>
               <Badge tone={savedGtmUrl ? "success" : undefined}>{savedGtmUrl ? "sGTM URL saved" : "No sGTM URL"}</Badge>
+              <Badge tone={hasTiktokToken ? "success" : undefined}>{hasTiktokToken ? "TikTok token saved" : "No TikTok token"}</Badge>
+              <Badge tone={hasPinterestToken ? "success" : undefined}>{hasPinterestToken ? "Pinterest token saved" : "No Pinterest token"}</Badge>
             </InlineStack>
             <Form method="post" ref={keysForm}>
               <BlockStack gap="200">
@@ -246,6 +275,33 @@ export default function Settings() {
                   onChange={setGtmUrl}
                   placeholder="https://sgtm.yourdomain.com"
                   helpText="Required for GTM events. A web container (GTM-XXXX) can't load in the pixel sandbox, so GTM events are delivered to your server-side GTM container's GA4 client. Leave blank to disable GTM."
+                />
+                <TextField
+                  label="TikTok Events API access token"
+                  name="tiktokAccessToken"
+                  autoComplete="off"
+                  type="password"
+                  value={tiktokToken}
+                  onChange={setTiktokToken}
+                  helpText={`${hasTiktokToken ? "A token is saved. Enter a new one to replace it. " : ""}TikTok Events Manager, your pixel, Settings, Events API, Generate access token. Set the TikTok pixel ID and enable events on the Tracking page.${hasTiktokId ? "" : " (No TikTok pixel ID set yet.)"}`}
+                />
+                <TextField
+                  label="Pinterest Conversions API access token"
+                  name="pinterestAccessToken"
+                  autoComplete="off"
+                  type="password"
+                  value={pinToken}
+                  onChange={setPinToken}
+                  helpText={`${hasPinterestToken ? "A token is saved. Enter a new one to replace it. " : ""}Pinterest, Ads, Conversions, generate a Conversions API token. Set the Pinterest tag ID and enable events on the Tracking page.${hasPinterestId ? "" : " (No Pinterest tag ID set yet.)"}`}
+                />
+                <TextField
+                  label="Pinterest ad account ID"
+                  name="pinterestAdAccountId"
+                  autoComplete="off"
+                  value={pinAdAcct}
+                  onChange={setPinAdAcct}
+                  placeholder="549761234567890"
+                  helpText="Required for Pinterest CAPI — events are posted under this ad account. Pinterest, Ads, Business, the account's ID."
                 />
                 <InlineStack>
                   <Button submit variant="primary" loading={busy("save-keys")} disabled={!dirty}>Save keys</Button>
@@ -338,6 +394,40 @@ export default function Settings() {
               </Form>
               {!canTest && <Button url="/app/tracking" variant="plain">Open Tracking</Button>}
             </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <SectionHeading
+              title="Existing pixels on your storefront"
+              description="Scans your storefront's homepage for trackers already installed by your theme, Shopify's native channels, or another app. If one of these fires the same purchase this app already sends, you'll double-count — remove the duplicate, or rely on dedup (GA4 collapses on transaction_id, Meta on event_id, both of which this app sets)."
+            />
+            {actionData?.scan && (
+              <Banner tone={actionData.scan.detected.length ? "warning" : actionData.scan.ok ? "success" : "info"}>
+                {actionData.scan.detected.length > 0 ? (
+                  <BlockStack gap="100">
+                    <Text as="p">Found {actionData.scan.detected.length} tracker(s) already on {actionData.scan.url}:</Text>
+                    <InlineStack gap="200">
+                      {actionData.scan.detected.map((d) => (
+                        <Badge key={d.key} tone="warning">{d.label}</Badge>
+                      ))}
+                    </InlineStack>
+                    <Text as="p" tone="subdued" variant="bodySm">
+                      Make sure each of these isn't also sending the events this app sends. Where both fire, keep the transaction_id / event_id dedup in place (see Help) or remove one source.
+                    </Text>
+                  </BlockStack>
+                ) : actionData.scan.ok ? (
+                  <Text as="p">No known trackers detected on {actionData.scan.url}. (A password-protected or JS-rendered storefront can hide tags, so this isn't a guarantee.)</Text>
+                ) : (
+                  <Text as="p">Couldn't scan the storefront: {actionData.scan.note}</Text>
+                )}
+              </Banner>
+            )}
+            <Form method="post">
+              <input type="hidden" name="intent" value="scanPixels" />
+              <Button submit loading={busy("scanPixels")}>Scan storefront</Button>
+            </Form>
           </BlockStack>
         </Card>
       </BlockStack>

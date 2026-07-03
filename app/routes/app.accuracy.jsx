@@ -3,7 +3,18 @@ import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, 
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { computeHealth } from "../lib/health.server";
+import { getMatchQuality } from "../lib/delivery.server";
 import { SectionHeading } from "../components/SectionHeading";
+
+// Human labels for the Meta identifier columns, ordered by match-quality impact (email/phone move EMQ
+// the most). Reconciliation-backfilled purchases carry no browser cookies, so fbp/fbc read lower — the
+// copy explains that.
+const ID_LABELS = [
+  ["em", "Email"], ["ph", "Phone"], ["fn", "First name"], ["ln", "Last name"],
+  ["ct", "City"], ["st", "State"], ["zp", "Zip"], ["country", "Country"],
+  ["externalId", "Customer ID"], ["fbp", "Meta browser ID (fbp)"], ["fbc", "Meta click ID (fbc)"],
+  ["clientIp", "IP address"], ["userAgent", "User agent"],
+];
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -31,6 +42,7 @@ export const loader = async ({ request }) => {
     alerts: health.alerts,
     outboxPending: health.outboxPending,
     outboxDead: health.outboxDead,
+    matchQuality: await getMatchQuality(session.shop, 30),
   };
 };
 
@@ -52,7 +64,7 @@ function Stat({ title, value, sub, progress, tone }) {
 }
 
 export default function Accuracy() {
-  const { days, totals, alerts, outboxPending, outboxDead } = useLoaderData();
+  const { days, totals, alerts, outboxPending, outboxDead, matchQuality } = useLoaderData();
   const revalidator = useRevalidator();
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
@@ -148,10 +160,38 @@ export default function Accuracy() {
               </BlockStack>
             </Card>
 
+            <Card>
+              <BlockStack gap="300">
+                <SectionHeading
+                  title="Meta match quality (30d)"
+                  description="Meta's Event Match Quality is driven by how many identifiers each purchase carries. Higher coverage = more conversions attributed. Email and phone move it the most; capture them at checkout to lift the low ones."
+                />
+                <Divider />
+                {matchQuality.purchases === 0 ? (
+                  <Text as="p" tone="subdued" variant="bodySm">No purchases recorded yet in the last 30 days.</Text>
+                ) : (
+                  <BlockStack gap="200">
+                    <Text as="span" variant="bodySm" tone="subdued">Across {matchQuality.purchases.toLocaleString()} purchase{matchQuality.purchases === 1 ? "" : "s"}:</Text>
+                    {ID_LABELS.map(([col, label]) => {
+                      const cov = matchQuality.coverage[col] ?? 0;
+                      return (
+                        <InlineStack key={col} gap="300" blockAlign="center" wrap={false}>
+                          <div style={{ width: 160 }}><Text as="span" variant="bodySm">{label}</Text></div>
+                          <div style={{ flex: 1 }}><ProgressBar progress={cov} tone={cov >= 70 ? "success" : cov >= 30 ? "highlight" : "critical"} size="small" /></div>
+                          <div style={{ width: 44, textAlign: "right" }}><Text as="span" variant="bodySm" tone="subdued">{cov}%</Text></div>
+                        </InlineStack>
+                      );
+                    })}
+                  </BlockStack>
+                )}
+              </BlockStack>
+            </Card>
+
             <Text as="p" tone="subdued" variant="bodySm">
               Match rate compares purchase events we delivered against paid orders Shopify reported.
               Below 100% is normal (consent, bots, sessions that didn&apos;t reach checkout tracking);
-              a sudden drop is the signal to investigate.
+              a sudden drop is the signal to investigate. Missed purchases are automatically backfilled
+              server-side within about 20 minutes (reconciliation), so this should trend toward 100%.
             </Text>
           </>
         )}

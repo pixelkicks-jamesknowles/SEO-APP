@@ -10,6 +10,7 @@ import { sendGa4Event, withValueMode } from "../lib/server-side.server";
 import { bumpDaily, recordDeliveries } from "../lib/delivery.server";
 import { enqueue } from "../lib/outbox.server";
 import { normalizeForShop } from "../lib/fx.server";
+import { recordPendingPurchase, recordCapture } from "../lib/reconcile.server";
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
@@ -31,6 +32,12 @@ export const action = async ({ request }) => {
     await bumpDaily(shop, { ordersPaid: 1 });
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
+
+    // Reconciliation: record EVERY paid order so a delayed cron pass can backfill the GA4/Meta purchase
+    // if the storefront pixel never delivered it. Safe for subscription orders too (GA4 dedups on order
+    // id; the subscription branch below stamps GA4 capture so reconcile skips the redundant send).
+    await recordPendingPurchase(shop, payload, settings);
+
     if (!settings?.serverSide || !settings?.subscriptionTracking) return new Response();
 
     let cfg = {};
@@ -123,6 +130,9 @@ export const action = async ({ request }) => {
       { destination: "ga4", eventName: purchaseEvent.name, ok: !!buyRes?.sent, detail: buyRes?.detail || "", isPurchase: true },
       { destination: "ga4", eventName: subEvent.name, ok: !!subRes?.sent, detail: subRes?.detail || "" },
     ]);
+    // Stamp GA4 capture for this order so the reconcile pass doesn't re-send the purchase we just
+    // delivered server-side (GA4 would dedup it anyway, but this avoids the redundant call).
+    if (buyRes?.sent) await recordCapture(shop, payload?.id, { ga4: true });
   } catch (e) {
     console.warn("[orders/paid] subscription tracking:", e?.message || e);
   }

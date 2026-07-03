@@ -46,6 +46,8 @@ const PLATFORMS = [
   { key: "gtm", label: "GTM" },
   { key: "ga4", label: "GA4" },
   { key: "meta", label: "Meta" },
+  { key: "tiktok", label: "TikTok" },
+  { key: "pinterest", label: "Pinterest" },
 ];
 
 // Light format hints so obviously-wrong IDs are caught before they reach the pixel.
@@ -68,6 +70,10 @@ export const loader = async ({ request }) => {
     gtmId: t?.gtmId ?? "",
     ga4Id: t?.ga4Id ?? "",
     metaPixelId: t?.metaPixelId ?? "",
+    tiktokPixelId: t?.tiktokPixelId ?? "",
+    pinterestId: t?.pinterestId ?? "",
+    hasTiktokToken: Boolean(keys.tiktokAccessToken),
+    hasPinterestToken: Boolean(keys.pinterestAccessToken && keys.pinterestAdAccountId),
     eventMatrix: JSON.parse(t?.eventMatrix ?? "{}"),
     consentMode: t?.consentMode ?? true,
     consentSignals: t?.consentSignals ?? true,
@@ -127,6 +133,8 @@ export const action = async ({ request }) => {
     gtmId: form.get("gtmId") || null,
     ga4Id: form.get("ga4Id") || null,
     metaPixelId: form.get("metaPixelId") || null,
+    tiktokPixelId: form.get("tiktokPixelId") || null,
+    pinterestId: form.get("pinterestId") || null,
     eventMatrix: JSON.stringify(eventMatrix),
     consentMode: form.get("consentMode") === "on",
     consentSignals: form.get("consentSignals") === "on",
@@ -252,6 +260,8 @@ export default function Tracking() {
     gtmId: data.gtmId,
     ga4Id: data.ga4Id,
     metaPixelId: data.metaPixelId,
+    tiktokPixelId: data.tiktokPixelId,
+    pinterestId: data.pinterestId,
   });
   const setId = (k) => (v) => setIds((s) => ({ ...s, [k]: v }));
 
@@ -310,12 +320,12 @@ export default function Tracking() {
       monthDays: String(data.subscriptionConfig.monthDays ?? 28),
       clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
     });
-    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId });
+    setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId });
   };
   const saveNow = () => submit(formRef.current, { method: "post" });
 
   // Inline config validation - catch the "set up but sends nothing" traps.
-  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId);
+  const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -366,6 +376,26 @@ export default function Tracking() {
                   <TextField label="GA4 measurement ID" name="ga4Id" autoComplete="off" value={ids.ga4Id} onChange={setId("ga4Id")} placeholder="G-XXXXXXXXXX" error={idError("ga4", ids.ga4Id)} />
                 </FormLayout.Group>
                 <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} />
+                <FormLayout.Group>
+                  <TextField
+                    label="TikTok Pixel ID"
+                    name="tiktokPixelId"
+                    autoComplete="off"
+                    value={ids.tiktokPixelId}
+                    onChange={setId("tiktokPixelId")}
+                    placeholder="C4XXXXXXXXXXXXXXXXXX"
+                    helpText={data.hasTiktokToken ? "Delivered server-side via the TikTok Events API." : "Add a TikTok Events API access token on Settings to deliver these."}
+                  />
+                  <TextField
+                    label="Pinterest tag ID"
+                    name="pinterestId"
+                    autoComplete="off"
+                    value={ids.pinterestId}
+                    onChange={setId("pinterestId")}
+                    placeholder="2612345678901"
+                    helpText={data.hasPinterestToken ? "Delivered server-side via the Pinterest Conversions API." : "Add a Pinterest CAPI token + ad account ID on Settings to deliver these."}
+                  />
+                </FormLayout.Group>
               </FormLayout>
             </BlockStack>
           </Card>
