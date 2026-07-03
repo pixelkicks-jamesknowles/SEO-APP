@@ -13,6 +13,7 @@ export const loader = async ({ request }) => {
   return {
     enabled: Boolean(tracking?.dataLayerEnabled),
     pro, // { active, enforced, plan }
+    planName: PRO_PLAN, // passed via loader data so the component never imports the .server module
     events: DATA_LAYER_EVENTS,
   };
 };
@@ -37,7 +38,7 @@ export const action = async ({ request }) => {
 };
 
 export default function DataLayer() {
-  const { enabled: savedEnabled, pro, events } = useLoaderData();
+  const { enabled: savedEnabled, pro, planName, events } = useLoaderData();
   const actionData = useActionData();
   const nav = useNavigation();
   const enabled = actionData?.ok ? actionData.enabled : savedEnabled;
@@ -51,7 +52,7 @@ export default function DataLayer() {
       <BlockStack gap="400">
         {pro.enforced && !pro.active && (
           <Banner tone="info" title="This is a Pro feature">
-            The GTM data layer is part of {PRO_PLAN}. Turning it on will prompt you to start the subscription.
+            The GTM data layer is part of {planName}. Turning it on will prompt you to start the subscription.
           </Banner>
         )}
         {actionData?.ok && (
