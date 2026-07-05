@@ -390,6 +390,18 @@ model MatchQualityDaily {
   @@id([shopDomain, date])
 }
 
+// Background-worker liveness. One `_global` row, upserted at the end of every /cron/tick, so the app can
+// tell whether the scheduled worker is running (drives delivery retries, reconciliation, subscription
+// conversions). A stale row → the dashboard tile + a cron_stale health alert. See heartbeat.server.js.
+model CronHeartbeat {
+  scope      String   @id @default("_global")
+  lastTickAt DateTime @default(now())
+  durationMs Int      @default(0)
+  jobs       String   @default("{}") // JSON: per-sub-job summary of the last tick
+  errors     String? // JSON: [{ job, message }] from the last tick, null when clean
+  updatedAt  DateTime @updatedAt
+}
+
 // Recent storefront events forwarded by the Web Pixel (server-side beacon), for the live
 // event debugger. Capped per shop at write time. Empty until the app proxy is live (deployed).
 model RecentEvent {

@@ -14,6 +14,7 @@ import { reconcilePending } from "../lib/reconcile.server";
 import { processPendingSubscriptions } from "../lib/subscription-cron.server";
 import { refreshFxRates } from "../lib/fx.server";
 import { runAlerts } from "../lib/alerting.server";
+import { recordTick } from "../lib/heartbeat.server";
 
 // Constant-time compare of the presented secret against CRON_SECRET (same pattern as pixel-token).
 // Header-only: a `?key=` query param would land in access logs / referrers, so the secret must be
@@ -56,19 +57,30 @@ async function tick() {
   // can't outlive the per-batch lease and let an overlapping tick re-claim + re-send its rows. See the
   // LEASE_MINUTES invariant in outbox.server.js / reconcile.server.js. A backlog just drains over more
   // ticks (the cron fires frequently) rather than risking a double-send.
-  const [outbox, reconciled, subscriptions, fx, purged, alerts] = await Promise.all([
-    drainOutbox({ limit: 40 }),
-    reconcilePending({ graceMinutes: 20, limit: 8 }),
-    // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
-    // as soon as the next tick fires. Leased like reconcile so overlapping ticks can't double-send.
-    processPendingSubscriptions({ limit: 6 }),
-    refreshFxRates(),
-    purge(),
-    // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
-    // an alerting failure must never wedge the outbox/reconcile work above.
-    runAlerts().catch(() => ({ shops: 0, notified: 0 })),
-  ]);
-  return { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts };
+  const startedAt = Date.now();
+  try {
+    const [outbox, reconciled, subscriptions, fx, purged, alerts] = await Promise.all([
+      drainOutbox({ limit: 40 }),
+      reconcilePending({ graceMinutes: 20, limit: 8 }),
+      // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
+      // as soon as the next tick fires. Leased like reconcile so overlapping ticks can't double-send.
+      processPendingSubscriptions({ limit: 6 }),
+      refreshFxRates(),
+      purge(),
+      // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
+      // an alerting failure must never wedge the outbox/reconcile work above.
+      runAlerts().catch(() => ({ shops: 0, notified: 0 })),
+    ]);
+    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts };
+    // Stamp the heartbeat so the app can tell the worker is alive (dashboard tile + cron_stale alert).
+    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, alerts } });
+    return result;
+  } catch (e) {
+    // Record the failed run too (the worker is up, just erroring) so it shows as "last run errored" rather
+    // than silently looking stale, then rethrow so the endpoint surfaces the 500.
+    await recordTick({ durationMs: Date.now() - startedAt, errors: [{ job: "tick", message: String(e?.message || e) }] });
+    throw e;
+  }
 }
 
 export const loader = async ({ request }) => {

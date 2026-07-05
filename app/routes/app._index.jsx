@@ -4,6 +4,8 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { readServerSideKeys } from "../lib/secrets.server";
 import { computeHealth, dismissAlert } from "../lib/health.server";
+import { getHeartbeat } from "../lib/heartbeat.server";
+import { minutesSince, CRON_STALE_MIN, CRON_ALERT_MIN } from "../lib/heartbeat";
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -18,11 +20,12 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [tracking, recentEvents, deliveryFailures, health] = await Promise.all([
+  const [tracking, recentEvents, deliveryFailures, health, heartbeat] = await Promise.all([
     prisma.trackingSettings.findUnique({ where: { shopDomain } }),
     prisma.recentEvent.count({ where: { shopDomain } }),
     prisma.deliveryLog.count({ where: { shopDomain, ok: false, createdAt: { gte: since } } }),
     computeHealth(shopDomain),
+    getHeartbeat(),
   ]);
   const keys = readServerSideKeys(tracking);
   const idKeys = ["gtmId", "ga4Id", "metaPixelId"];
@@ -49,12 +52,23 @@ export const loader = async ({ request }) => {
     subscriptionTracking: tracking?.subscriptionTracking ?? false,
     warnings,
     alerts: health.alerts,
+    // Background-worker liveness: minutes since the last /cron/tick, or null if it has never run.
+    workerLastRunMin: heartbeat ? minutesSince(heartbeat.lastTickAt) : null,
   };
 };
 
+// Worker-status badge descriptor from "minutes since last tick" (null = never run yet).
+function workerBadge(min) {
+  if (min == null) return { tone: undefined, label: "Worker: awaiting first run" };
+  if (min >= CRON_ALERT_MIN) return { tone: "critical", label: `Worker: stopped (${min}m ago)` };
+  if (min >= CRON_STALE_MIN) return { tone: "warning", label: `Worker: lagging (${min}m ago)` };
+  return { tone: "success", label: min <= 1 ? "Worker: healthy" : `Worker: ran ${min}m ago` };
+}
+
 export default function Index() {
-  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts } = useLoaderData();
+  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts, workerLastRunMin } = useLoaderData();
   const notConfigured = platforms === 0;
+  const worker = workerBadge(workerLastRunMin);
   const dismisser = useFetcher();
 
   return (
@@ -113,6 +127,7 @@ export default function Index() {
                 </Badge>
                 {recentEvents > 0 && <Badge tone="info">{`${recentEvents} recent event${recentEvents > 1 ? "s" : ""}`}</Badge>}
                 {deliveryFailures > 0 && <Badge tone="critical">{`${deliveryFailures} delivery failure${deliveryFailures > 1 ? "s" : ""} (24h)`}</Badge>}
+                <Badge tone={worker.tone}>{worker.label}</Badge>
               </InlineStack>
               <InlineStack gap="300">
                 <Button url="/app/tracking" variant="primary">Open Tracking</Button>

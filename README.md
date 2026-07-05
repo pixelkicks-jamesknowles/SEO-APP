@@ -36,6 +36,11 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 - **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
   drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
   (`app/lib/alerting.server.js`).
+- **Background-worker heartbeat** — every `/cron/tick` stamps a heartbeat (`app/lib/heartbeat.server.js`);
+  the Home dashboard shows a **Worker** badge (healthy / lagging / stopped) and a `cron_stale` health alert
+  fires if the worker stops — so a dead cron (missed schedule, unset `CRON_SECRET`) can't silently stall
+  retries, reconciliation and subscription delivery. Staleness thresholds are pure + unit-tested
+  (`app/lib/heartbeat.js`).
 - **Match-quality diagnostics** — per-day Meta identifier coverage (email/phone/…) surfaced on the
   Accuracy page, so merchants can see and lift what drives Event Match Quality.
 - **Double-counting detection** — scans the storefront for existing trackers (native channels, theme

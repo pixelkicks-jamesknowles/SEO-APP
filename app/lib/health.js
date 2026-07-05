@@ -1,6 +1,7 @@
 // Pure delivery-health evaluation (no IO — unit-tested). Turns a shop's reconciliation metrics into a
 // ranked list of actionable alerts for the in-app banners on Home + Accuracy. computeHealth (health.
 // server.js) gathers the metrics from the DB and calls this.
+import { cronStaleAlert } from "./heartbeat";
 
 export const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : null);
 
@@ -24,6 +25,12 @@ export function evaluateHealth(metrics = {}) {
   const sends = (m.eventsSent30 || 0) + (m.eventsFailed30 || 0);
   const deliveryRate = pct(m.eventsSent30 || 0, sends);
   const alerts = [];
+
+  // Most fundamental: if the background worker has stopped, everything deferred (retries, reconciliation,
+  // subscription conversions) silently stalls — flag it first. `cronStaleMinutes` is null on a fresh install
+  // (worker never ran) so we don't alarm before the first tick.
+  const cron = cronStaleAlert(m.cronStaleMinutes ?? null);
+  if (cron) alerts.push(cron);
 
   // Critical: dead-lettered sends are conversions we will never deliver without action.
   if ((m.outboxDead || 0) > 0) {

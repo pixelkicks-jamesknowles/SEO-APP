@@ -421,6 +421,33 @@ const SECTIONS = [
     ),
   },
   {
+    id: "worker",
+    title: "Background worker status",
+    summary: "How you know the scheduled worker that retries and reconciles is alive.",
+    body: (
+      <BlockStack gap="200">
+        <Text as="p">
+          Several things happen on a schedule rather than the instant an event arrives: retrying failed
+          sends, backfilling any purchase the pixel missed (reconciliation), delivering subscription
+          conversions, refreshing exchange rates and pushing health alerts. These are driven by a{" "}
+          <b>background worker</b> (a scheduled call to <code>/cron/tick</code>).
+        </Text>
+        <Text as="p">
+          The <Link to="/app">Home</Link> page shows a <b>Worker</b> badge with when it last ran. Green means
+          it&apos;s healthy; amber (<b>lagging</b>) means it hasn&apos;t run in a little while; red
+          (<b>stopped</b>) means it hasn&apos;t run for long enough that retries and reconciliation have
+          likely stalled - and a health alert is raised (in-app, and to your alert webhook if set). If you
+          see it stopped, check that the scheduled cron service is running and that its <code>CRON_SECRET</code>{" "}
+          matches - see the deploy runbook.
+        </Text>
+        <Text as="p" tone="subdued">
+          On a brand-new install the badge reads &ldquo;awaiting first run&rdquo; until the worker ticks for
+          the first time - that&apos;s expected, not an error.
+        </Text>
+      </BlockStack>
+    ),
+  },
+  {
     id: "doublecount",
     title: "Avoiding double-counting with the Google & YouTube app",
     summary: "How this app coexists with native GA4 / Google Ads tracking.",

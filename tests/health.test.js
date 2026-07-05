@@ -1,4 +1,5 @@
 import { evaluateHealth, CAPTURE_MIN, DELIVERY_MIN, OUTBOX_BACKLOG_MAX } from "../app/lib/health.js";
+import { CRON_STALE_MIN, CRON_ALERT_MIN } from "../app/lib/heartbeat.js";
 
 const kinds = (h) => h.alerts.map((a) => a.kind);
 
@@ -45,5 +46,22 @@ describe("evaluateHealth", () => {
     expect(h.captureRate).toBeNull();
     expect(h.deliveryRate).toBeNull();
     expect(h.alerts).toHaveLength(0);
+  });
+
+  test("a stopped worker is critical and ranked first", () => {
+    const h = evaluateHealth({ ordersPaid30: 10, purchasesDelivered30: 10, eventsSent30: 10, eventsFailed30: 0, cronStaleMinutes: CRON_ALERT_MIN + 5 });
+    expect(h.alerts[0].kind).toBe("cron_stale");
+    expect(h.alerts[0].severity).toBe("critical");
+  });
+
+  test("a lagging worker warns", () => {
+    const h = evaluateHealth({ cronStaleMinutes: CRON_STALE_MIN + 1 });
+    expect(kinds(h)).toContain("cron_stale");
+    expect(h.alerts.find((a) => a.kind === "cron_stale").severity).toBe("warning");
+  });
+
+  test("worker never run (null) → no cron_stale alarm", () => {
+    const h = evaluateHealth({ cronStaleMinutes: null });
+    expect(kinds(h)).not.toContain("cron_stale");
   });
 });

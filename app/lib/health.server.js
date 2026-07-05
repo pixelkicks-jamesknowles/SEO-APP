@@ -3,6 +3,8 @@
 // a merchant can silence a banner but a still-broken thing resurfaces later.
 import prisma from "../db.server";
 import { evaluateHealth } from "./health";
+import { getHeartbeat } from "./heartbeat.server";
+import { minutesSince } from "./heartbeat";
 
 const REARM_DAYS = 7; // a dismissed alert reappears after this if the condition still holds
 const dateStr = (d) => d.toISOString().slice(0, 10);
@@ -11,12 +13,15 @@ export async function computeHealth(shopDomain) {
   const since30 = dateStr(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
   const since24 = dateStr(new Date(Date.now() - 24 * 60 * 60 * 1000));
 
-  const [rows30, rows24, outboxPending, outboxDead, dismissals] = await Promise.all([
+  const [rows30, rows24, outboxPending, outboxDead, dismissals, heartbeat] = await Promise.all([
     prisma.trackingDaily.findMany({ where: { shopDomain, date: { gte: since30 } } }).catch(() => []),
     prisma.trackingDaily.findMany({ where: { shopDomain, date: { gte: since24 } } }).catch(() => []),
     prisma.deliveryOutbox.count({ where: { shopDomain, status: "pending" } }).catch(() => 0),
     prisma.deliveryOutbox.count({ where: { shopDomain, status: "dead", updatedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } } }).catch(() => 0),
     prisma.alertDismissal.findMany({ where: { shopDomain } }).catch(() => []),
+    // Worker liveness is global (one _global row) — a stopped cron affects every shop, so it surfaces on
+    // each shop's dashboard. Null when the worker has never run (fresh install → no cron_stale alarm).
+    getHeartbeat(),
   ]);
 
   const sum = (rows, k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
@@ -29,6 +34,7 @@ export async function computeHealth(shopDomain) {
     purchasesDelivered24: sum(rows24, "purchasesDelivered"),
     outboxPending,
     outboxDead,
+    cronStaleMinutes: heartbeat ? minutesSince(heartbeat.lastTickAt) : null,
   };
 
   const health = evaluateHealth(metrics);
