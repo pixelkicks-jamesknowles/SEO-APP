@@ -93,6 +93,12 @@ export function orderToTrackingEvent(order) {
     id: `order:${oid}`,
     timestamp: order?.created_at || undefined,
     clientId: null, // filled with a stable id by buildJobs (stableClientId of event.id)
+    // Marketing consent for the backfill: the storefront pixel gates PII destinations (Meta/Google
+    // Ads/Reddit/…) on the shopper's Customer Privacy marketing consent, but this webhook path can't see
+    // that banner state — so we honour the order's own marketing signal (`buyer_accepts_marketing`).
+    // Absent/false → no hashed PII is sent to ad platforms for a shopper who didn't opt in. GA4/sGTM
+    // still send (consent-flagged) because they carry no PII. Under-sending is the compliant failure mode.
+    consent: { analytics: true, marketing: !!order?.buyer_accepts_marketing },
     email: order?.email || order?.customer?.email || undefined,
     phone: order?.phone || order?.customer?.phone || undefined,
     externalId: order?.customer?.id != null ? String(order.customer.id) : undefined,

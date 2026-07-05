@@ -50,6 +50,25 @@ export async function resolveCustomerKey(shopDomain, durableId) {
   return row?.customerKey || null;
 }
 
+/** Cross-device / cross-session first-touch: given the customer a conversion belongs to, find the
+ *  EARLIEST first-touch recorded on ANY device or session linked to that customer via the identity graph.
+ *  Lets a conversion inherit the visitor's original source even when they first browsed on a different
+ *  device (or in a since-churned _ga session) — the same-device key alone would look direct.
+ *  `firstTouchFor` is delivery.getFirstTouch, injected to avoid an import cycle. Best-effort → null. */
+export async function resolveIdentityFirstTouch(shopDomain, customerKey, firstTouchFor) {
+  if (!customerKey || typeof firstTouchFor !== "function") return null;
+  const rows = await prisma.visitorIdentity
+    .findMany({ where: { shopDomain, customerKey }, orderBy: { firstSeen: "asc" } })
+    .catch(() => []);
+  // Rows are earliest-linked first; first-touch is keyed on the visitor key (durable id, else client id),
+  // exactly as recordVisit/getFirstTouch store it. Return the earliest device that has a recorded source.
+  for (const row of rows) {
+    const ft = (await firstTouchFor(shopDomain, row.durableId)) || (row.clientId ? await firstTouchFor(shopDomain, row.clientId) : null);
+    if (ft) return ft;
+  }
+  return null;
+}
+
 /** Counts for the attribution dashboard: total durable visitors tracked and how many have been stitched
  *  to a customer (identified). Best-effort → zeros. */
 export async function identityStats(shopDomain) {

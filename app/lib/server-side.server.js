@@ -978,7 +978,12 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // For a subscription checkout, the GA4 purchase comes from the orders/paid webhook (all items) plus
   // a scoped subscription_purchase — so suppress the pixel's GA4 purchase here to avoid doubling GA4
   // revenue. Meta/GTM below still fire (they aren't sent by the webhook and want the pixel's cookies).
-  const suppressGa4Purchase = isPurchaseConv && checkoutHasSubscription(event);
+  //
+  // Only suppress when subscription tracking is actually ON — that's the only case where the webhook
+  // delivers the GA4 purchase. With it OFF the webhook sends nothing, so suppressing here would drop the
+  // GA4 purchase entirely (permanent loss when reconciliation is also off). Gate on the setting, not just
+  // the line-item shape.
+  const suppressGa4Purchase = isPurchaseConv && !!settings.subscriptionTracking && checkoutHasSubscription(event);
   if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret && !suppressGa4Purchase) {
     jobs.push({ destination: "ga4", eventName: name, event: ga4Event, clientId, consent });
   }

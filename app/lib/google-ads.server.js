@@ -100,6 +100,12 @@ export function googleAdsHook(settings) {
   return {
     extraJobs: (event, ga4Event, ctx) => {
       if (!ctx?.isPurchaseConv) return [];
+      // Enhanced Conversions carry hashed PII (email/phone), so — like Meta/TikTok/etc. — they need
+      // marketing consent. Unknown consent is treated as granted (mirrors buildJobs). Without this gate a
+      // consent-declining visitor's hashed PII would still reach Google Ads on both the live and the
+      // reconcile-backfill paths.
+      const marketingOk = !ctx?.consent || ctx.consent.marketing;
+      if (!marketingOk) return [];
       const ids = googleAdsIdentifiers(event);
       const conversion = buildClickConversion(config, {
         value: ga4Event?.params?.value,

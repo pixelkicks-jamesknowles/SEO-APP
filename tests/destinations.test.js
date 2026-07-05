@@ -263,6 +263,27 @@ describe("buildJobs wiring", () => {
     expect(dests).not.toContain("pinterest");
   });
 
+  test("subscription GA4-purchase suppression is gated on the subscriptionTracking setting (no permanent GA4 loss)", () => {
+    const ga4Base = {
+      shopDomain: "s.myshopify.com",
+      serverSide: true,
+      ga4Id: "G-TEST",
+      serverSideKeys: JSON.stringify({ ga4ApiSecret: "sec" }),
+      eventMatrix: JSON.stringify({ ga4: ["checkout_completed"] }),
+    };
+    const subEvent = {
+      ...checkoutEvent,
+      data: { checkout: { ...checkoutEvent.data.checkout, lineItems: [{ ...checkoutEvent.data.checkout.lineItems[0], sellingPlanAllocation: { sellingPlan: { id: "sp1" } } }] } },
+    };
+    // Subscription tracking OFF: the webhook won't deliver the GA4 purchase, so the pixel MUST still send
+    // it (suppressing here was the permanent-loss bug).
+    expect(buildJobs(ga4Base, subEvent).some((j) => j.destination === "ga4")).toBe(true);
+    // Subscription tracking ON: the webhook delivers it, so the pixel GA4 purchase is suppressed (no double).
+    expect(buildJobs({ ...ga4Base, subscriptionTracking: true }, subEvent).some((j) => j.destination === "ga4")).toBe(false);
+    // A non-subscription checkout always sends GA4 regardless of the setting.
+    expect(buildJobs(ga4Base, checkoutEvent).some((j) => j.destination === "ga4")).toBe(true);
+  });
+
   const linkedinBase = { shopDomain: "s.myshopify.com", serverSide: true, linkedinConversionId: "12345678", eventMatrix: JSON.stringify({ linkedin: ["checkout_completed"] }) };
 
   test("adds a LinkedIn job only with a conversion id + access token, and marketing-consent-gated", () => {

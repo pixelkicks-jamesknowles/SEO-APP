@@ -30,6 +30,7 @@ const ORDER = {
   created_at: "2026-07-03T10:00:00Z",
   currency: "USD",
   current_total_price: "120.00",
+  buyer_accepts_marketing: true, // consented → hashed PII may reach Meta/Google Ads/Reddit on backfill
   email: "buyer@example.com",
   customer: { id: 99, email: "buyer@example.com" },
   shipping_address: { first_name: "Sam", last_name: "Jones", city: "Reno", province_code: "NV", zip: "89501", country_code: "US" },
@@ -79,6 +80,21 @@ describe("recordPendingPurchase", () => {
   test("no-op when server-side delivery is off (nothing to backfill to)", async () => {
     await recordPendingPurchase(SHOP, ORDER, { ...SETTINGS, serverSide: false });
     expect(prisma.pendingPurchase.upsert).not.toHaveBeenCalled();
+  });
+
+  test("respects marketing consent: a buyer who declined marketing gets NO hashed-PII Meta job stored", async () => {
+    await recordPendingPurchase(SHOP, { ...ORDER, buyer_accepts_marketing: false }, SETTINGS);
+    expect(prisma.pendingPurchase.upsert).toHaveBeenCalledTimes(1);
+    const stored = JSON.parse(decryptSecret(prisma.pendingPurchase.upsert.mock.calls[0][0].create.payload));
+    expect(stored.ga4.destination).toBe("ga4"); // GA4 carries no PII → still recorded (consent-flagged)
+    expect(stored.meta).toBeUndefined(); // Meta carries hashed PII → gated on marketing consent
+  });
+
+  test("missing marketing signal is treated as declined (conservative default)", async () => {
+    const { buyer_accepts_marketing, ...noSignal } = ORDER; // eslint-disable-line no-unused-vars
+    await recordPendingPurchase(SHOP, noSignal, SETTINGS);
+    const stored = JSON.parse(decryptSecret(prisma.pendingPurchase.upsert.mock.calls[0][0].create.payload));
+    expect(stored.meta).toBeUndefined();
   });
 });
 

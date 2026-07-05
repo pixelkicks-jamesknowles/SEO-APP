@@ -6,7 +6,7 @@ import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
 import { googleAdsHook } from "./google-ads.server";
 import { cogsEnabled, resolveOrderCost } from "./cogs.server";
-import { visitorKey, eventCustomerKey, linkIdentity } from "./identity.server";
+import { visitorKey, eventCustomerKey, linkIdentity, resolveIdentityFirstTouch } from "./identity.server";
 import { redactEvent } from "./redact";
 
 // Shared storefront-event ingestion: bot-filter, buffer for Live events (PII-redacted), first-touch
@@ -73,10 +73,16 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   // returning visitor's original source survives _ga/ITP churn (cross-session). Record the identity
   // links (durableId ↔ clientId ↔ customer) so a conversion can be tied back across sessions/devices.
   const vkey = visitorKey(event);
+  const customerKey = eventCustomerKey(event);
   await recordVisit(shopDomain, vkey, event.utm);
-  await linkIdentity(shopDomain, { durableId: event.durableId, clientId: event.clientId, customerKey: eventCustomerKey(event) });
+  await linkIdentity(shopDomain, { durableId: event.durableId, clientId: event.clientId, customerKey });
   if (event.name === "checkout_completed") {
-    event.firstTouch = await getFirstTouch(shopDomain, vkey);
+    // First-touch: prefer this device's own recorded source; if it looks direct (no first-touch on this
+    // device — e.g. the shopper first browsed on another device, or in a session whose _ga has churned),
+    // fall back to the customer's earliest first-touch across every device linked via the identity graph.
+    // This is the cross-device / cross-session stitching the graph exists for.
+    event.firstTouch =
+      (await getFirstTouch(shopDomain, vkey)) || (await resolveIdentityFirstTouch(shopDomain, customerKey, getFirstTouch));
     // True-profit (COGS) valuation: resolve the order's cost of goods from Shopify's per-variant cost so
     // buildJobs sends profit as the conversion value. Purchases are low-volume, so the extra Admin fetch
     // is off the page-view hot path; best-effort (null cost → withValueMode falls back to revenue).
