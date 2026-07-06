@@ -4,9 +4,9 @@
 # deployed host in application_url, [auth].redirect_urls, and [app_proxy].url (same origin).
 # During `shopify app dev`, automatically_update_urls_on_dev keeps these pointed at the tunnel.
 
-client_id = "31805a879297077ae82cb978d093a0d3"
+client_id = "708d7107539ef297a6230ea9b0716a2a"
 name = "Pixel Kicks Tracking"
-application_url = "https://respectful-liberation-production-18bc.up.railway.app"
+application_url = "https://tracking.pixelkicks.co.uk"
 embedded = true
 
 [build]
@@ -28,9 +28,9 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://respectful-liberation-production-18bc.up.railway.app/auth/callback",
-  "https://respectful-liberation-production-18bc.up.railway.app/auth/shopify/callback",
-  "https://respectful-liberation-production-18bc.up.railway.app/api/auth/callback",
+  "https://tracking.pixelkicks.co.uk/auth/callback",
+  "https://tracking.pixelkicks.co.uk/auth/shopify/callback",
+  "https://tracking.pixelkicks.co.uk/api/auth/callback",
 ]
 
 [webhooks]
@@ -78,6 +78,6 @@ api_version = "2026-04"
 # signs and forwards here. `url` is the deployed host (same origin as application_url); subpath/prefix
 # MUST match proxyPath in app/routes/app.tracking.jsx + the seo-engagement embed.
 [app_proxy]
-url = "https://respectful-liberation-production-18bc.up.railway.app/proxy"
+url = "https://tracking.pixelkicks.co.uk/proxy"
 subpath = "pixelify-seo"
 prefix = "apps"
