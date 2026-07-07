@@ -1,4 +1,4 @@
-import { useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
+import { Link, useLoaderData, useActionData, useNavigation, Form } from "@remix-run/react";
 import { Page, Card, BlockStack, InlineStack, Text, Banner, Button, Icon, Badge, Divider, TextField, Box } from "@shopify/polaris";
 import { CheckCircleIcon, AlertCircleIcon } from "@shopify/polaris-icons";
 import { useState } from "react";
@@ -59,7 +59,10 @@ function Check({ item }) {
           <Text as="span" variant="bodyMd">{item.label}</Text>
           {!item.ok && (
             <Text as="span" variant="bodySm" tone="subdued">
-              {item.hint} <a href={item.url}>Fix</a>
+              {/* Remix Link = client-side nav that stays inside the embedded App Bridge session. A raw
+                  <a href> did a full-page load, dropped the session token, and bounced to /auth/login
+                  (→ accounts.shopify.com refusing to load in the iframe). */}
+              {item.hint} <Link to={item.url}>Fix</Link>
             </Text>
           )}
         </BlockStack>
