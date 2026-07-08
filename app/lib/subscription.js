@@ -27,7 +27,7 @@ export function lineIsSubscription(line) {
   return !!(line?.selling_plan_allocation?.selling_plan || line?.sellingPlan);
 }
 
-function linePlanName(line) {
+export function linePlanName(line) {
   return line?.selling_plan_allocation?.selling_plan?.name || line?.sellingPlan?.name || "";
 }
 
@@ -81,7 +81,9 @@ function toGaLine(l, monthDays, intervals) {
     price: round2((gross - disc) / qty),
     quantity: qty,
     discount: round2(disc / qty),
-    item_subscription: isSub,
+    // Numeric 1/0 (not a boolean): GA4 coerces booleans on item params inconsistently (true→"1",
+    // false→"false"), so we send an explicit integer for a clean, consistent custom-dimension value.
+    item_subscription: isSub ? 1 : 0,
     item_subscription_interval: isSub ? (resolved ?? parseIntervalDays(linePlanName(l), { monthDays })) : 0,
   };
 }
@@ -103,7 +105,8 @@ export function buildSubscriptionEvent(order, { eventName = "subscription_purcha
     // Subscription-only subtotal — the sum of the subscription lines' net totals (price × qty).
     value: round2(subItems.reduce((s, i) => s + i.price * i.quantity, 0)),
     currency: order?.currency || "USD",
-    subscription: subItems.length > 0,
+    // Numeric 1/0 for the same reason as item_subscription (consistent GA4 custom-dimension value).
+    subscription: subItems.length > 0 ? 1 : 0,
     // Order-level interval = the first subscription line's; per-item intervals are authoritative.
     subscription_interval: subItems[0]?.item_subscription_interval || 0,
     items: subItems,

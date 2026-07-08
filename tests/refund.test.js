@@ -15,6 +15,9 @@ describe("buildRefundEvent", () => {
     expect(ev.params.currency).toBe("GBP");
     expect(ev.params.items).toHaveLength(1);
     expect(ev.params.items[0]).toMatchObject({ item_id: "AM-9", quantity: 1, price: 24 });
+    // Non-subscription line → tagged numeric 0 (never "(not set)" on the refund path).
+    expect(ev.params.items[0].item_subscription).toBe(0);
+    expect(ev.params.items[0].item_subscription_interval).toBe(0);
     expect(ev.clientId).toBe("111.222");
   });
 
@@ -75,6 +78,9 @@ describe("buildSubscriptionRefundEvent", () => {
     expect(ev.params.currency).toBe("GBP");
     expect(ev.params.items).toHaveLength(1);
     expect(ev.params.items[0].item_id).toBe("SUB");
+    // Subscription line → tagged numeric 1 (consistent with the purchase builders), interval from the plan name.
+    expect(ev.params.items[0].item_subscription).toBe(1);
+    expect(ev.params.items[0].item_subscription_interval).toBe(28); // "Monthly" → 28 (client default monthDays)
   });
 
   test("custom event name; falls back to price×qty when no subtotal", () => {

@@ -93,7 +93,7 @@ describe("buildSubscriptionEvent", () => {
     expect(params.value).toBe(44.8);
     expect(params.currency).toBe("GBP");
     expect(params.coupon).toBe("WELCOME5");
-    expect(params.subscription).toBe(true);
+    expect(params.subscription).toBe(1);
     expect(params.subscription_interval).toBe(7); // first sub line
   });
 
@@ -102,7 +102,7 @@ describe("buildSubscriptionEvent", () => {
     expect(params.items).toHaveLength(1);
     const beef = params.items[0];
     expect(beef.item_id).toBe("SKU-BEEF-500");
-    expect(beef.item_subscription).toBe(true);
+    expect(beef.item_subscription).toBe(1);
     expect(beef.item_subscription_interval).toBe(7);
     expect(beef.price).toBe(2.8); // (2.95*16 - 2.40)/16 = 2.8
     expect(beef.discount).toBe(0.15); // 2.40/16
@@ -110,7 +110,7 @@ describe("buildSubscriptionEvent", () => {
 
   test("one-time-only order → subscription false, interval 0, empty items, zero value", () => {
     const { params } = buildSubscriptionEvent({ id: 1, currency: "GBP", current_total_price: "5.00", line_items: [{ sku: "X", price: "5.00", quantity: 1 }] }, {});
-    expect(params.subscription).toBe(false);
+    expect(params.subscription).toBe(0);
     expect(params.subscription_interval).toBe(0);
     expect(params.items).toHaveLength(0);
     expect(params.value).toBe(0);

@@ -165,6 +165,12 @@ function toItem(v, quantity, fallbackName) {
     item_category: v.product?.type || undefined,
     price: num(v.price?.amount),
     quantity: Math.max(1, num(quantity) || 1),
+    // Storefront customer-event items don't carry selling-plan data, so we can't tell subscription status
+    // here — default to 0 (numeric, matching the purchase/refund builders) so the item_subscription custom
+    // dimension is never "(not set)". Authoritative subscription tagging comes from the orders/paid pipeline
+    // (subscription.js), whose purchase dedupes against this one on transaction_id.
+    item_subscription: 0,
+    item_subscription_interval: 0,
   };
 }
 

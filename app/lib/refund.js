@@ -1,16 +1,23 @@
 // Pure builders for GA4 `refund` events from Shopify refund / cancellation payloads. Refunds feed
 // GA4 (its standard `refund` event), and via GA4 -> Google Ads import they net off ad conversions,
 // so campaigns stop optimising toward high-return orders. No IO here (unit-tested).
-import { lineIsSubscription } from "./subscription";
+import { lineIsSubscription, parseIntervalDays, linePlanName } from "./subscription";
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function lineItem(li, quantity) {
+  // Tag every refund/cancellation item with the same subscription fields the purchase items carry, so the
+  // item_subscription / _interval custom dimensions are consistent (numeric 1/0) across every event rather
+  // than "(not set)" on the refund paths. monthDays uses the client default (28) — refund payloads don't
+  // carry the shop's subscriptionConfig, and the interval on a reversal is informational.
+  const isSub = lineIsSubscription(li);
   return {
     item_id: li?.sku || String(li?.variant_id || ""),
     item_name: li?.title || "",
     price: round2(li?.price),
     quantity: Math.max(1, Number(quantity) || 1),
+    item_subscription: isSub ? 1 : 0,
+    item_subscription_interval: isSub ? parseIntervalDays(linePlanName(li), { monthDays: 28 }) : 0,
   };
 }
 
