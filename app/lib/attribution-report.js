@@ -36,6 +36,39 @@ export function channelGroupOf(source, medium) {
   return "Unassigned";
 }
 
+/** Bare host of a referrer URL (leading www. stripped), or null if unparseable. */
+function referrerHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * First-touch source/medium/campaign for a storefront visit. UTMs win; otherwise derive from the referrer
+ * host the same way the order-side journey logic does — a search engine host → organic, a social host →
+ * social, anything else → that host as a referral. Returns null for a truly direct visit (no UTMs, no
+ * external referrer) so the caller records no row and "(direct)" is never invented. Pure.
+ *
+ * The referrer is expected to already be EXTERNAL (the embed drops same-host referrers, which are internal
+ * navigation, before sending) so we don't misread the shop's own domain as a referral source.
+ */
+export function visitAttribution(utm = null, referrer = null) {
+  const source = utm?.utm_source || null;
+  const medium = utm?.utm_medium || null;
+  const campaign = utm?.utm_campaign || null;
+  if (source || medium || campaign) return { source, medium, campaign };
+  const host = referrerHost(referrer);
+  if (!host) return null;
+  const labels = host.split("."); // match a known engine/network anywhere in the host (search.yahoo.com, l.facebook.com)
+  const search = labels.find((l) => SEARCH_SOURCES.has(l));
+  if (search) return { source: search, medium: "organic", campaign: null };
+  const social = labels.find((l) => SOCIAL_SOURCES.has(l));
+  if (social) return { source: social, medium: "social", campaign: null };
+  return { source: host, medium: "referral", campaign: null };
+}
+
 /** Roll ChannelRevenueDaily rows up by GA4-style channel group (subscription split kept), sorted by revenue. */
 export function byChannelGroup(rows = []) {
   const map = new Map();

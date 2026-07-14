@@ -1,4 +1,4 @@
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, channelGroupOf, byChannelGroup } from "../app/lib/attribution-report.js";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, channelGroupOf, byChannelGroup, visitAttribution } from "../app/lib/attribution-report.js";
 
 const visitors = [
   { source: "google", medium: "cpc", visits: 3, lastSource: "google" },
@@ -149,5 +149,30 @@ describe("byChannelGroup", () => {
 
   test("empty input → empty array", () => {
     expect(byChannelGroup([])).toEqual([]);
+  });
+});
+
+describe("visitAttribution (storefront first-touch: UTMs, else referrer)", () => {
+  test("UTMs win outright", () => {
+    expect(visitAttribution({ utm_source: "google", utm_medium: "cpc", utm_campaign: "brand" }, "https://anything.com")).toEqual({
+      source: "google",
+      medium: "cpc",
+      campaign: "brand",
+    });
+  });
+  test("a search-engine referrer becomes organic", () => {
+    expect(visitAttribution(null, "https://www.google.com/search?q=dog+food")).toEqual({ source: "google", medium: "organic", campaign: null });
+    expect(visitAttribution(null, "https://search.yahoo.com/")).toEqual({ source: "yahoo", medium: "organic", campaign: null });
+  });
+  test("a social referrer becomes social", () => {
+    expect(visitAttribution(null, "https://l.facebook.com/")).toEqual({ source: "facebook", medium: "social", campaign: null });
+  });
+  test("any other referrer is a referral by host", () => {
+    expect(visitAttribution(null, "https://blog.somepartner.co.uk/post")).toEqual({ source: "blog.somepartner.co.uk", medium: "referral", campaign: null });
+  });
+  test("no UTMs and no referrer → null (direct, records nothing)", () => {
+    expect(visitAttribution(null, null)).toBeNull();
+    expect(visitAttribution({}, "")).toBeNull();
+    expect(visitAttribution(null, "not a url")).toBeNull();
   });
 });

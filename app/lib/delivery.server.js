@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { numericId } from "./server-side.server";
+import { visitAttribution } from "./attribution-report";
 
 const today = () => new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
@@ -151,15 +152,15 @@ export async function recordChannelRevenue(shopDomain, { source, medium, revenue
     .catch(() => {});
 }
 
-// First-touch attribution: record a visitor's source on a UTM-tagged visit (never overwrite the
-// first source - later visits only bump the counter). Keyed on GA4 client_id. Low write volume
-// (only fires when UTMs are present). Best-effort.
-export async function recordVisit(shopDomain, clientId, utm) {
-  if (!clientId || !utm) return;
-  const source = utm.utm_source || null;
-  const medium = utm.utm_medium || null;
-  const campaign = utm.utm_campaign || null;
-  if (!source && !medium && !campaign) return;
+// First-touch attribution: record a visitor's source on an attributable visit (never overwrite the
+// first source - later visits only bump the counter). Keyed on the stable visitor key. Attribution comes
+// from UTMs, else from the (external) referrer — so organic search and referral visits count too, not just
+// UTM-tagged ones. A truly direct visit (no UTMs, no external referrer) records nothing. Best-effort.
+export async function recordVisit(shopDomain, clientId, utm, referrer = null) {
+  if (!clientId) return;
+  const ch = visitAttribution(utm, referrer);
+  if (!ch) return;
+  const { source, medium, campaign } = ch;
   await prisma.visitorAttribution
     .upsert({
       where: { shopDomain_clientId: { shopDomain, clientId } },

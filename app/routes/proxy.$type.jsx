@@ -6,6 +6,8 @@ import { json } from "@remix-run/node";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { ingestEvent } from "../lib/ingest.server";
+import { recordVisit } from "../lib/delivery.server";
+import { visitorKey, linkIdentity } from "../lib/identity.server";
 import { checkIngestRate, clientIpFromRequest } from "../lib/ratelimit.server";
 import { effectiveDataLayerConfig } from "../lib/datalayer";
 import { resolveDurableId, readDurableId } from "../lib/durable-id.server";
@@ -41,13 +43,27 @@ export const action = async ({ request, params }) => {
   const { session } = await authenticate.public.appProxy(request);
   const shopDomain = session?.shop;
   if (!shopDomain) return new Response("Unauthorized", { status: 401 });
-  if (params.type !== "track") return new Response("Not found", { status: 404 });
+  if (params.type !== "track" && params.type !== "visit") return new Response("Not found", { status: 404 });
 
   const clientIp = clientIpFromRequest(request);
   // Abuse guard (same limiter as /pixel/track). This path is app-proxy-signed, so it's lower risk, but
   // a compromised/looping embed shouldn't be able to flood a shop's server-side sends either.
   const rl = checkIngestRate(shopDomain, clientIp);
   if (!rl.ok) return new Response("Too Many Requests", { status: 429, headers: { "Retry-After": String(rl.retryAfter) } });
+
+  // POST /apps/<proxy>/visit: lightweight first-touch + identity capture, fired by the embed on load. It
+  // deliberately does NOT fan out to GA4/Meta (that would double-count page views against the on-site tag)
+  // and skips the Live-events buffer/idempotency claim — it only writes VisitorAttribution + VisitorIdentity,
+  // which is what populates the Attribution page's top-of-funnel. The durable id is read server-side.
+  if (params.type === "visit") {
+    const body = await request.json().catch(() => null);
+    const durableId = readDurableId(request);
+    const clientId = body?.clientId || null;
+    const vkey = visitorKey({ durableId, clientId });
+    await recordVisit(shopDomain, vkey, body?.utm, body?.referrer).catch(() => {});
+    await linkIdentity(shopDomain, { durableId, clientId, customerKey: null }).catch(() => {});
+    return new Response(null, { status: 204 });
+  }
 
   const body = await request.json().catch(() => null);
   // Durable id: this is a first-party same-origin request, so the pxp_id cookie rides along. Read it

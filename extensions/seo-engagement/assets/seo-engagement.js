@@ -35,10 +35,74 @@
             document.cookie = "pxp_id=" + encodeURIComponent(d.id) + "; Path=/; Max-Age=34560000; SameSite=Lax; Secure";
           }
         })
-        .catch(function () {});
+        // Fire the visit beacon AFTER the id is ensured, so the pxp_id cookie rides along on the /visit
+        // request (the server reads it there to stitch identity). Runs even if /id failed — we still link
+        // whatever _ga id exists. Guarded once-per-session inside sendVisit.
+        .then(sendVisit)
+        .catch(sendVisit);
     }
   } catch (e) {
     /* best-effort — without the id we simply fall back to _ga */
+  }
+
+  // First-touch capture. The Attribution page's top-of-funnel (visitors, first-touch sources, journeys)
+  // is fed by this: a lightweight /visit beacon carrying the visit's UTMs and EXTERNAL referrer plus the
+  // GA client id. The server derives first-touch from it (UTMs, else referrer → organic/social/referral)
+  // and links durableId ↔ clientId. It does NOT fan out to GA4, so it can't double-count page views.
+  function utmFromSearch() {
+    try {
+      var q = new URLSearchParams(location.search);
+      var u = {};
+      ["source", "medium", "campaign", "term", "content"].forEach(function (k) {
+        var v = q.get("utm_" + k);
+        if (v) u["utm_" + k] = v;
+      });
+      return Object.keys(u).length ? u : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Only an EXTERNAL referrer is a new source — internal navigation (same host) would look like a
+  // self-referral and pollute attribution, so drop it here rather than on the server (which only knows the
+  // myshopify domain, not a custom storefront domain).
+  function externalReferrer() {
+    try {
+      if (!document.referrer) return null;
+      var r = new URL(document.referrer);
+      return r.host && r.host !== location.host ? document.referrer : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function sendVisit() {
+    try {
+      if (!analyticsAllowed() || !window.fetch) return;
+      // Once per session: first-touch is preserved server-side regardless, and this avoids a write on
+      // every pageview. If consent isn't granted yet we return WITHOUT marking done, so a later
+      // visitorConsentCollected retry still fires.
+      try {
+        if (window.sessionStorage && sessionStorage.getItem("pxp_visit")) return;
+      } catch (e) {
+        /* private mode — just send */
+      }
+      fetch(base + "/visit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: gaClientId(), utm: utmFromSearch(), referrer: externalReferrer() }),
+        credentials: "same-origin",
+        keepalive: true
+      })
+        .then(function () {
+          try {
+            if (window.sessionStorage) sessionStorage.setItem("pxp_visit", "1");
+          } catch (e) {
+            /* ignore */
+          }
+        })
+        .catch(function () {});
+    } catch (e) {
+      /* never throw on the storefront */
+    }
   }
 
   function privacy() {
@@ -128,6 +192,8 @@
   try {
     setTimeout(syncCartIds, 3000);
     document.addEventListener("visitorConsentCollected", syncCartIds);
+    // Consent may land after load; retry the visit beacon too (once-per-session guarded).
+    document.addEventListener("visitorConsentCollected", sendVisit);
   } catch (e) {
     /* best-effort */
   }

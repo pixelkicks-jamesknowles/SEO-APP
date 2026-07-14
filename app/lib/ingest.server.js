@@ -74,7 +74,7 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   // links (durableId ↔ clientId ↔ customer) so a conversion can be tied back across sessions/devices.
   const vkey = visitorKey(event);
   const customerKey = eventCustomerKey(event);
-  await recordVisit(shopDomain, vkey, event.utm);
+  await recordVisit(shopDomain, vkey, event.utm, event.referrer);
   await linkIdentity(shopDomain, { durableId: event.durableId, clientId: event.clientId, customerKey });
   if (event.name === "checkout_completed") {
     // First-touch: prefer this device's own recorded source; if it looks direct (no first-touch on this
