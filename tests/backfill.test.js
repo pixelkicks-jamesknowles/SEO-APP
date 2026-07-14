@@ -1,4 +1,4 @@
-import { channelFromJourney, orderIsSubscription, foldOrders, orderCustomerKey, numericGid, mergeUnattributed, UNATTRIBUTED } from "../app/lib/backfill.js";
+import { channelFromJourney, orderIsSubscription, foldOrders, orderCustomerKey, numericGid, mergeUnattributed, isMigratedSource, UNATTRIBUTED } from "../app/lib/backfill.js";
 
 const journey = (firstVisit) => ({ firstVisit });
 const order = (over = {}) => ({
@@ -147,11 +147,11 @@ describe("(unattributed) breakdown", () => {
   });
 
   test("merges across pages/ticks and widens the date span", () => {
-    const a = { orders: 2, revenue: 10, subscriptionOrders: 1, subscriptionRevenue: 5, knownCustomerNoJourney: 2, guestNoJourney: 0, oldest: "2026-06-05", newest: "2026-06-10" };
-    const b = { orders: 3, revenue: 20, subscriptionOrders: 2, subscriptionRevenue: 15, knownCustomerNoJourney: 1, guestNoJourney: 2, oldest: "2026-05-01", newest: "2026-07-01" };
+    const a = { orders: 2, revenue: 10, subscriptionOrders: 1, subscriptionRevenue: 5, knownCustomerNoJourney: 2, guestNoJourney: 0, migratedOrders: 1, oldest: "2026-06-05", newest: "2026-06-10" };
+    const b = { orders: 3, revenue: 20, subscriptionOrders: 2, subscriptionRevenue: 15, knownCustomerNoJourney: 1, guestNoJourney: 2, migratedOrders: 2, oldest: "2026-05-01", newest: "2026-07-01" };
     expect(mergeUnattributed(a, b)).toEqual({
       orders: 5, revenue: 30, subscriptionOrders: 3, subscriptionRevenue: 20,
-      knownCustomerNoJourney: 3, guestNoJourney: 2, oldest: "2026-05-01", newest: "2026-07-01",
+      knownCustomerNoJourney: 3, guestNoJourney: 2, migratedOrders: 3, oldest: "2026-05-01", newest: "2026-07-01",
     });
   });
 });
@@ -212,5 +212,81 @@ describe("two windows: learn first-touch from all history, count revenue only in
     const { rows, unattributed } = foldOrders([old], new Map(), { revenueSince: REVENUE_SINCE });
     expect(rows).toHaveLength(0);
     expect(unattributed.orders).toBe(0);
+  });
+});
+
+describe("isMigratedSource", () => {
+  test("flags known store-migration/import tools", () => {
+    expect(isMigratedSource("Matrixify App")).toBe(true);
+    expect(isMigratedSource("Transporter")).toBe(true);
+    expect(isMigratedSource("LitExtension")).toBe(true);
+  });
+  test("does not flag native storefront sources", () => {
+    expect(isMigratedSource("Online Store")).toBe(false);
+    expect(isMigratedSource("web")).toBe(false);
+    expect(isMigratedSource("pos")).toBe(false);
+    expect(isMigratedSource(null)).toBe(false);
+    expect(isMigratedSource("")).toBe(false);
+  });
+});
+
+describe("foldOrders: per-order unattributed export", () => {
+  const IN_WINDOW = { revenueSince: "2026-06-01" };
+
+  test("captures each unattributed order with its source, reason and migrated flag", () => {
+    // A migrated-in renewal (Matrixify import, no journey) and a guest one-off with no journey.
+    const imported = order({
+      id: "gid://shopify/Order/900",
+      name: "#IMP900",
+      createdAt: "2026-07-01T10:00:00Z",
+      customer: { id: "gid://shopify/Customer/50" },
+      source: "Matrixify App",
+      customerJourneySummary: null,
+      lineItems: sub,
+      totalPrice: 123.5,
+    });
+    const guest = order({
+      id: "gid://shopify/Order/901",
+      name: "#GST901",
+      createdAt: "2026-07-02T10:00:00Z",
+      customer: null,
+      source: "Online Store",
+      customerJourneySummary: null,
+      lineItems: [],
+      totalPrice: 40,
+    });
+
+    const { unattributed, unattributedOrders } = foldOrders([imported, guest], new Map(), IN_WINDOW);
+
+    expect(unattributedOrders).toEqual([
+      { orderId: "900", name: "#IMP900", date: "2026-07-01", revenue: 123.5, isSubscription: true, source: "Matrixify App", migrated: true, reason: "known_customer_no_journey", customerKey: "50" },
+      { orderId: "901", name: "#GST901", date: "2026-07-02", revenue: 40, isSubscription: false, source: "Online Store", migrated: false, reason: "guest_no_journey", customerKey: null },
+    ]);
+    expect(unattributed.migratedOrders).toBe(1);
+    expect(unattributed.orders).toBe(2);
+  });
+
+  test("does not list attributed orders, and windows out pre-window orders", () => {
+    const attributed = order({
+      id: "gid://shopify/Order/902",
+      createdAt: "2026-07-01T10:00:00Z",
+      source: "Online Store",
+      customerJourneySummary: journey({ utmParameters: { source: "google", medium: "cpc" } }),
+    });
+    const oldUnattributed = order({
+      id: "gid://shopify/Order/903",
+      createdAt: "2026-01-01T10:00:00Z", // before revenueSince
+      customer: { id: "gid://shopify/Customer/51" },
+      source: "Matrixify App",
+      customerJourneySummary: null,
+    });
+    const { unattributedOrders } = foldOrders([oldUnattributed, attributed], new Map(), IN_WINDOW);
+    expect(unattributedOrders).toEqual([]); // attributed one isn't listed; old one is out of window
+  });
+
+  test("migratedOrders merges across pages", () => {
+    const a = { ...mergeUnattributed(null, null), migratedOrders: 3 };
+    const b = { ...mergeUnattributed(null, null), migratedOrders: 4 };
+    expect(mergeUnattributed(a, b).migratedOrders).toBe(7);
   });
 });

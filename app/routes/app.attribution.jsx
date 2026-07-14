@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { useLoaderData, useRevalidator, useFetcher, Await } from "@remix-run/react";
 import { defer } from "@remix-run/node";
 import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, List, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
@@ -197,6 +197,9 @@ function UnattributedBreakdown({ backfill }) {
     );
   }
   const pctSub = b.orders ? Math.round((b.subscriptionOrders / b.orders) * 100) : 0;
+  const migratedOrders = b.migratedOrders || 0;
+  const lost = Math.max(b.orders - migratedOrders, 0);
+  const pctMigrated = b.orders ? Math.round((migratedOrders / b.orders) * 100) : 0;
   return (
     <Banner tone="warning" title={`${b.orders.toLocaleString()} orders (${fmtMoney(b.revenue)}) couldn't be attributed — and they are NOT organic`}>
       <BlockStack gap="200">
@@ -218,6 +221,14 @@ function UnattributedBreakdown({ backfill }) {
             we found but which had no journey; <b>{b.guestNoJourney.toLocaleString()}</b> had no customer at
             all (guest / POS / draft / imported).
           </List.Item>
+          {typeof b.migratedOrders === "number" && (
+            <List.Item>
+              <b>{b.migratedOrders.toLocaleString()}</b> ({pctMigrated}%) were <b>imported by a migration tool</b>{" "}
+              (e.g. Matrixify) — these were acquired on your previous platform and never had a Shopify journey,
+              so they can never be attributed. The other <b>{lost.toLocaleString()}</b> were placed on the
+              store. This is the split between &ldquo;back-catalogue&rdquo; and genuinely lost tracking.
+            </List.Item>
+          )}
           {b.oldest && b.newest && (
             <List.Item>
               Spanning <b>{b.oldest}</b> to <b>{b.newest}</b>.
@@ -229,8 +240,43 @@ function UnattributedBreakdown({ backfill }) {
           &ldquo;There aren&apos;t any conversion details available for this order&rdquo;, that is Shopify
           itself telling you it has no journey — so no tool, this one included, can attribute it.
         </Text>
+        <InlineStack>
+          <DownloadUnattributed />
+        </InlineStack>
       </BlockStack>
     </Banner>
+  );
+}
+
+// Downloads the (unattributed) orders CSV. Uses fetch + Blob rather than a plain <a href> because in the
+// embedded iframe App Bridge patches window.fetch to attach the session token — a raw navigation would hit
+// the authenticated resource route without it and bounce to the auth screen.
+function DownloadUnattributed() {
+  const [loading, setLoading] = useState(false);
+  const onClick = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/app/attribution/unattributed.csv");
+      if (!res.ok) throw new Error(`export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `unattributed-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Non-fatal: the banner still shows the aggregate; the button just doesn't produce a file.
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <Button onClick={onClick} loading={loading} variant="plain">
+      Download these orders (CSV)
+    </Button>
   );
 }
 

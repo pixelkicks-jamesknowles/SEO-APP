@@ -42,7 +42,10 @@ const ORDERS_QUERY = `#graphql
       pageInfo { hasNextPage endCursor }
       nodes {
         id
+        name
         createdAt
+        sourceName
+        app { name }
         currentTotalPriceSet { shopMoney { amount } }
         customer { id }
         customerJourneySummary {
@@ -62,7 +65,11 @@ const ORDERS_QUERY = `#graphql
 function toOrder(node) {
   return {
     id: node?.id,
+    name: node?.name || null,
     createdAt: node?.createdAt,
+    // The human-readable origin, matching Shopify's admin "Source" column: the creating app's name
+    // ("Matrixify App" for an import, "Online Store" for web) falls back to the raw sourceName.
+    source: node?.app?.name || node?.sourceName || null,
     totalPrice: Number(node?.currentTotalPriceSet?.shopMoney?.amount) || 0,
     customer: node?.customer ? { id: node.customer.id } : null,
     customerJourneySummary: node?.customerJourneySummary || null,
@@ -107,10 +114,34 @@ async function clearWindow(shopDomain, sinceDate) {
   await prisma.channelRevenueDaily
     .deleteMany({ where: { shopDomain, date: { gte: sinceDate, lt: todayUtc() } } })
     .catch(() => {});
+  // The per-order (unattributed) list is rebuilt from scratch too, or a re-run would show stale/duplicate
+  // orders. Upsert-by-orderId would dedupe within a run, but only deleting the window matches clearWindow's
+  // contract that a fresh start starts fresh.
+  await prisma.unattributedOrder
+    .deleteMany({ where: { shopDomain, date: { gte: sinceDate, lt: todayUtc() } } })
+    .catch(() => {});
 }
 
 /** Persist a page's aggregates (increment) + the first-touch we learned (never overwrite an existing one). */
-async function persist(shopDomain, rows, learned) {
+async function persist(shopDomain, rows, learned, unattributedOrders = []) {
+  // The individual (unattributed) orders — upsert by orderId so a re-processed page (lease expiry, retry)
+  // can't duplicate them, unlike the increment-based aggregate rows.
+  for (const o of unattributedOrders) {
+    if (!o.orderId) continue;
+    const data = {
+      name: o.name,
+      date: o.date,
+      revenue: o.revenue,
+      isSubscription: o.isSubscription,
+      source: o.source,
+      migrated: o.migrated,
+      reason: o.reason,
+      customerKey: o.customerKey,
+    };
+    await prisma.unattributedOrder
+      .upsert({ where: { shopDomain_orderId: { shopDomain, orderId: o.orderId } }, create: { shopDomain, orderId: o.orderId, ...data }, update: data })
+      .catch(() => {});
+  }
   for (const r of rows) {
     await prisma.channelRevenueDaily
       .upsert({
@@ -230,8 +261,8 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
 
       const orders = (conn.nodes || []).map(toOrder);
       // revenueSince gates REVENUE only — first touch is still learned from every order we scan.
-      const { rows, learned, unattributed: pageUnattributed } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
-      await persist(shopDomain, rows, learned);
+      const { rows, learned, unattributed: pageUnattributed, unattributedOrders } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
+      await persist(shopDomain, rows, learned, unattributedOrders);
       unattributed = mergeUnattributed(unattributed, pageUnattributed);
 
       processed += orders.length;

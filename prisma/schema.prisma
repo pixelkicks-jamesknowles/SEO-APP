@@ -312,6 +312,28 @@ model BackfillJob {
   updatedAt       DateTime  @updatedAt
 }
 
+// The individual orders that landed in the (unattributed) bucket during the backfill, so the report can
+// LIST and EXPORT them rather than only show an aggregate — and, critically, split "migrated in from
+// another platform" (imported orders that never had a Shopify journey; expected, permanent) from genuinely
+// lost tracking. Rebuilt each run: cleared on a fresh start alongside ChannelRevenueDaily, windowed to
+// sinceDate. Keyed on the numeric orderId so a re-run upserts rather than duplicates.
+model UnattributedOrder {
+  shopDomain     String
+  orderId        String // numeric Shopify order id
+  name           String? // #NATS0283210 etc
+  date           String // YYYY-MM-DD
+  revenue        Float    @default(0)
+  isSubscription Boolean  @default(false)
+  source         String? // admin "Source" (creating app name, e.g. "Matrixify App" / "Online Store")
+  migrated       Boolean  @default(false) // source looks like a store-migration/import tool
+  reason         String // known_customer_no_journey | guest_no_journey
+  customerKey    String?
+  updatedAt      DateTime @updatedAt
+
+  @@id([shopDomain, orderId])
+  @@index([shopDomain, date])
+}
+
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
 // order id). Purged on a TTL by the existing cron.audit job.
 model ProcessedWebhook {

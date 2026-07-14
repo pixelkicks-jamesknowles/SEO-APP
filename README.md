@@ -67,6 +67,13 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
     renewal they've paid since lands in `(unattributed)`. On Naturaw that was **79%** of the unattributed
     revenue. So old orders teach first touch; they contribute no revenue row (`foldOrders(..., {
     revenueSince })`).
+  - **Per-order drill-down + CSV export** (`UnattributedOrder` model, `foldOrders` returns
+    `unattributedOrders`). The `(unattributed)` bucket is captured order-by-order, not just as a total, and
+    downloadable as CSV from the Attribution page (`/app/attribution/unattributed.csv`). Each row carries the
+    admin **Source** and a `migrated` flag (`isMigratedSource` matches Matrixify/Transporter/etc.), so the
+    report splits **imported back-catalogue** — subscribers won on a previous platform, whose orders never
+    had a Shopify journey and are permanently unattributable — from **genuinely lost** tracking. On Naturaw
+    most of the bucket is the former.
 - **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
   drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
   (`app/lib/alerting.server.js`).

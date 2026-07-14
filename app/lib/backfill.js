@@ -16,6 +16,17 @@
 
 export const UNATTRIBUTED = "(unattributed)";
 
+// Data-migration tools create orders in bulk with no customer journey — the acquiring visit happened on the
+// PREVIOUS platform, which Shopify never saw. Such an order being unattributed is expected and permanent, so
+// we flag it separately from a genuinely lost order (one placed on the store that somehow carries no
+// journey). Lets the report say "most of the bucket is your imported back-catalogue, not broken tracking".
+const IMPORT_SOURCES = /matrixify|transporter|litextension|cart2cart|next-cart|import/i;
+
+/** True if the order looks like it was created by a store-migration/import tool (from its Source). */
+export function isMigratedSource(source) {
+  return !!source && IMPORT_SOURCES.test(source);
+}
+
 /** Referrer host → a coarse source, so a journey with a referrer but no UTMs still lands somewhere real. */
 function hostOf(url) {
   try {
@@ -109,6 +120,9 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   // unknowns are organic (or direct) — the two most flattering guesses — and there'd be nothing to stop
   // them. These counters say plainly WHY we don't know.
   const unattributed = emptyUnattributed();
+  // The individual orders in that bucket, so the report can list/export them and split migrated-in from
+  // genuinely lost. Windowed exactly like the counters (only orders >= revenueSince land here).
+  const unattributedOrders = [];
 
   for (const order of orders) {
     const date = dayOf(order?.createdAt);
@@ -153,6 +167,21 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
       else unattributed.guestNoJourney += 1;
       if (!unattributed.oldest || date < unattributed.oldest) unattributed.oldest = date;
       if (!unattributed.newest || date > unattributed.newest) unattributed.newest = date;
+
+      const migrated = isMigratedSource(order?.source);
+      if (migrated) unattributed.migratedOrders += 1;
+      unattributedOrders.push({
+        orderId: numericGid(order?.id),
+        name: order?.name || null,
+        date,
+        revenue: round2(revenue),
+        isSubscription: isSub,
+        source: order?.source || null,
+        migrated,
+        // Why we can't attribute it — the two are meaningfully different to whoever reads the export.
+        reason: key ? "known_customer_no_journey" : "guest_no_journey",
+        customerKey: key,
+      });
     }
 
     const rk = `${date}|${source}|${medium}`;
@@ -173,7 +202,7 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   }));
   unattributed.revenue = round2(unattributed.revenue);
   unattributed.subscriptionRevenue = round2(unattributed.subscriptionRevenue);
-  return { rows: out, firstTouch, learned, unattributed };
+  return { rows: out, firstTouch, learned, unattributed, unattributedOrders };
 }
 
 export function emptyUnattributed() {
@@ -187,6 +216,9 @@ export function emptyUnattributed() {
     knownCustomerNoJourney: 0,
     // No customer on the order at all (guest / POS / draft) and no journey either.
     guestNoJourney: 0,
+    // Subset created by a store-migration tool — expected to be unattributable (acquired on the old
+    // platform). Splitting this out lets the report distinguish "imported back-catalogue" from "lost".
+    migratedOrders: 0,
     oldest: null,
     newest: null,
   };
@@ -205,6 +237,7 @@ export function mergeUnattributed(a, b) {
     subscriptionRevenue: round2(x.subscriptionRevenue + y.subscriptionRevenue),
     knownCustomerNoJourney: x.knownCustomerNoJourney + y.knownCustomerNoJourney,
     guestNoJourney: x.guestNoJourney + y.guestNoJourney,
+    migratedOrders: x.migratedOrders + y.migratedOrders,
     oldest: minDate(x.oldest, y.oldest),
     newest: maxDate(x.newest, y.newest),
   };
