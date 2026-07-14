@@ -5,7 +5,11 @@ import prisma from "../db.server";
 import { normalizeParams } from "./currency";
 
 const FX_BASE = "USD";
-const FX_ENDPOINT = process.env.FX_RATES_URL || `https://api.exchangerate.host/latest?base=${FX_BASE}`;
+// Keyless, USD-based daily rates (~160 currencies, includes USD:1). Was api.exchangerate.host, which moved
+// behind a required access_key and now returns {success:false, error:missing_access_key} with NO `rates`
+// field — so the refresh failed every tick ("no rates in response"). open.er-api.com is the free, no-key
+// replacement returning the same {rates:{...}} shape. Override with FX_RATES_URL if ever needed.
+const FX_ENDPOINT = process.env.FX_RATES_URL || `https://open.er-api.com/v6/latest/${FX_BASE}`;
 const today = () => new Date().toISOString().slice(0, 10);
 // Don't normalize on a stale snapshot: if the daily refresh has been failing, an FX rate that's days old
 // silently skews every reported conversion value. Past this many days we treat rates as unavailable and
@@ -19,9 +23,14 @@ export async function refreshFxRates() {
   if (existing) return { refreshed: false, reason: "already have today" };
   try {
     const res = await fetch(FX_ENDPOINT);
+    if (!res.ok) return { refreshed: false, reason: `http ${res.status}` };
     const json = await res.json().catch(() => ({}));
     const rates = json?.rates;
-    if (!rates || typeof rates !== "object") return { refreshed: false, reason: "no rates in response" };
+    // A valid map has a numeric rate for at least one real currency — guards against an error-shaped body
+    // that happens to carry an empty/rate-less `rates` object.
+    if (!rates || typeof rates !== "object" || !Number.isFinite(Number(rates.EUR ?? rates.GBP ?? rates.USD))) {
+      return { refreshed: false, reason: "no rates in response" };
+    }
     rates[FX_BASE] = 1;
     await prisma.fxRate.upsert({
       where: { base_date: { base: FX_BASE, date } },
