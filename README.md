@@ -23,6 +23,13 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 - **Identity stitching** — a graph links the durable id ↔ GA4 client id ↔ customer, so a conversion
   inherits its visitor's original first-touch across sessions/devices instead of looking direct
   (`app/lib/identity.server.js`).
+- **Session stitching (GA4 channel)** — the SEO-engagement embed writes the shopper's real GA4 `client_id`
+  (`_ga`) **and `session_id`** (`_ga_<container>`) into cart attributes, which arrive on the order as note
+  attributes. `orders/paid` + the reconcile backfill then send the server-side purchase with that **same
+  pair**, so GA4 joins the conversion to the shopper's actual browser session and it inherits that
+  session's traffic source. Without a `session_id` GA4 opens a new, source-less session and the purchase
+  lands in **Unassigned** — which is why webhook-driven (e.g. subscription) conversions lose the channel.
+  A recurring renewal has no browser session, so it carries the customer's client id but no session id.
 - **Purchase reconciliation** — `orders/paid` records every paid order; a delayed cron pass backfills the
   GA4/Meta purchase for any order the storefront pixel never delivered (ad blockers, ITP, sandbox
   failures), deduped so it can only fill a gap — pushing purchase capture toward 100%

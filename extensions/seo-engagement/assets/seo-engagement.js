@@ -51,6 +51,60 @@
     var m = document.cookie.match(/_ga=GA\d\.\d\.([\d.]+)/);
     return m ? m[1] : null;
   }
+  // GA4 session id, from the per-property `_ga_<CONTAINER>` cookie ("GS1.1.<sessionId>.<n>...").
+  // A correctly-configured store runs one GA4 property, so the first match is the right one.
+  function gaSessionId() {
+    var m = document.cookie.match(/_ga_[A-Z0-9]+=GS\d\.\d\.(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  // Carry the visitor's REAL GA4 client_id + session_id onto the cart, so they arrive on the order as
+  // note attributes. orders/paid then sends the server-side purchase with the SAME pair, letting GA4 join
+  // it to this browser session and inherit its traffic source. Without them a webhook conversion opens a
+  // fresh, source-less session and lands in "Unassigned" — losing the channel.
+  // Analytics-consent gated, once per session (and again if the session rolls), best-effort.
+  function syncCartIds() {
+    try {
+      if (!analyticsAllowed() || !window.fetch) return;
+      var cid = gaClientId();
+      var sid = gaSessionId();
+      if (!cid) return; // the session id is only meaningful paired with its own client id
+      var stamp = cid + "|" + (sid || "");
+      try {
+        if (window.sessionStorage && sessionStorage.getItem("pxp_cart_ids") === stamp) return;
+      } catch (e) {
+        /* private mode — just re-send */
+      }
+      var attrs = { ga_client_id: cid };
+      if (sid) attrs.ga_session_id = sid;
+      fetch("/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attributes: attrs }),
+        credentials: "same-origin",
+        keepalive: true
+      })
+        .then(function () {
+          try {
+            if (window.sessionStorage) sessionStorage.setItem("pxp_cart_ids", stamp);
+          } catch (e) {
+            /* ignore */
+          }
+        })
+        .catch(function () {});
+    } catch (e) {
+      /* never throw on the storefront */
+    }
+  }
+  // gtag may not have written _ga/_ga_* yet on a first hit, and consent may land later — so try now,
+  // once shortly after, and again when the shopper's consent is collected.
+  syncCartIds();
+  try {
+    setTimeout(syncCartIds, 3000);
+    document.addEventListener("visitorConsentCollected", syncCartIds);
+  } catch (e) {
+    /* best-effort */
+  }
   function scrollPct() {
     var h = document.documentElement;
     var scrollable = h.scrollHeight - h.clientHeight;

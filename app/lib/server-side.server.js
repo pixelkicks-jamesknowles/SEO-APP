@@ -1091,7 +1091,7 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
-export async function sendGa4Event(settings, { name, params = {}, clientId } = {}, { consent } = {}) {
+export async function sendGa4Event(settings, { name, params = {}, clientId, sessionId } = {}, { consent } = {}) {
   if (!settings?.serverSide || !settings.ga4Id || !name) return { sent: false };
   const keys = readServerSideKeys(settings);
   if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
@@ -1099,7 +1099,11 @@ export async function sendGa4Event(settings, { name, params = {}, clientId } = {
   // consent-declined server-side conversions are modeled rather than dropped. engagement_time_msec is
   // added (GA4 MP best practice) so these server-side conversions register as engaged activity.
   const resolvedClientId = clientId || stableClientId(params.transaction_id);
-  const event = { name, params: { engagement_time_msec: 1, ...params } };
+  // session_id joins this server-side conversion to the shopper's REAL browser session, so GA4 gives it
+  // that session's traffic source. Without it GA4 opens a new, source-less session and the purchase
+  // reports as "Unassigned". Only ever sent paired with its own client_id (see subscription-cron).
+  const withSession = sessionId && !params.session_id ? { session_id: String(sessionId), ...params } : params;
+  const event = { name, params: { engagement_time_msec: 1, ...withSession } };
   const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, resolvedClientId, event, { consent });
   // `job` mirrors a buildJobs "ga4" job so a failed webhook send can be queued for retry (outbox)
   // and re-sent byte-identically by deliverOne.

@@ -108,6 +108,14 @@ describe("buildSubscriptionEvent", () => {
     expect(beef.discount).toBe(0.15); // 2.40/16
   });
 
+  // session_id is what lets the server-side conversion join the shopper's real GA4 session and inherit
+  // its traffic source — without it GA4 opens a source-less session and the purchase is "Unassigned".
+  test("carries clientId + sessionId through to the built event", () => {
+    const ev = buildSubscriptionEvent(order, { clientId: "1234567890.1700000000", sessionId: "1783409603" });
+    expect(ev.clientId).toBe("1234567890.1700000000");
+    expect(ev.sessionId).toBe("1783409603");
+  });
+
   test("one-time-only order → subscription false, interval 0, empty items, zero value", () => {
     const { params } = buildSubscriptionEvent({ id: 1, currency: "GBP", current_total_price: "5.00", line_items: [{ sku: "X", price: "5.00", quantity: 1 }] }, {});
     expect(params.subscription).toBe(0);

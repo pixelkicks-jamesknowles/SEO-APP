@@ -421,6 +421,32 @@ const SECTIONS = [
     ),
   },
   {
+    id: "channel",
+    title: "Why purchases must not show as “Unassigned”",
+    summary: "How server-side conversions keep their GA4 channel.",
+    body: (
+      <BlockStack gap="200">
+        <Text as="p">
+          GA4 works out a conversion&apos;s <b>channel</b> from the session it belongs to. A server-side
+          purchase therefore has to carry the shopper&apos;s <b>real GA4 client_id and session_id</b>; if it
+          doesn&apos;t, GA4 opens a brand-new session with no traffic source and the purchase reports as{" "}
+          <b>Unassigned</b>.
+        </Text>
+        <Text as="p">
+          The <b>Pixelify SEO engagement</b> app embed handles this: it reads the shopper&apos;s GA4 cookies
+          and writes them onto the cart, so they arrive on the order. The purchase we send from{" "}
+          <code>orders/paid</code> (and any reconciliation backfill) then reuses that same pair, and GA4
+          attaches the conversion to the real session, keeping the channel.
+        </Text>
+        <Text as="p" tone="subdued">
+          So the embed <b>must be enabled</b> in the theme, or webhook-driven conversions (subscription
+          orders especially) will lose their channel. Note a recurring renewal has no browser session at all,
+          so it can&apos;t inherit one — that&apos;s a GA4 limitation, not a gap in the app.
+        </Text>
+      </BlockStack>
+    ),
+  },
+  {
     id: "worker",
     title: "Background worker status",
     summary: "How you know the scheduled worker that retries and reconciles is alive.",

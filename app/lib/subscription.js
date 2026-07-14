@@ -98,7 +98,7 @@ const attach = (params, attribution) => {
  *  items = subscription lines, value = their line-item subtotal (net of line discounts, no order-level
  *  tax/shipping). The regular `purchase` event (buildOrderPurchaseEvent) carries the whole order.
  *  attribution (optional) carries the first-order source so recurring orders keep the original one. */
-export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, attribution, intervals } = {}) {
+export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, sessionId, attribution, intervals } = {}) {
   const subItems = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals)).filter((i) => i.item_subscription);
   const params = {
     transaction_id: String(order?.id ?? ""),
@@ -114,13 +114,13 @@ export function buildSubscriptionEvent(order, { eventName = "subscription_purcha
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
   attach(params, attribution);
-  return { name: eventName, params, clientId };
+  return { name: eventName, params, clientId, sessionId };
 }
 
 /** Build the regular GA4 `purchase` event for a subscription order (fired server-side from
  *  orders/paid so it doesn't depend on the pixel/consent). Carries the WHOLE order — all line items,
  *  full value, tax + shipping — matching a normal purchase. transaction_id = order id. */
-export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDays = 28, clientId, attribution, intervals } = {}) {
+export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDays = 28, clientId, sessionId, attribution, intervals } = {}) {
   const items = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals));
   const params = {
     transaction_id: String(order?.id ?? ""),
@@ -133,5 +133,5 @@ export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDa
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
   attach(params, attribution);
-  return { name: eventName, params, clientId };
+  return { name: eventName, params, clientId, sessionId };
 }

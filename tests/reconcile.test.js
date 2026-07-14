@@ -61,6 +61,33 @@ describe("orderToTrackingEvent", () => {
     expect(ev.data.checkout.lineItems[0].variant.sku).toBe("AM-9");
     expect(ev.email).toBe("buyer@example.com");
   });
+
+  // The engagement embed writes the shopper's real GA4 ids onto the cart; they arrive here as note
+  // attributes. Reusing them lets the backfilled purchase join the shopper's real session in GA4 (so it
+  // inherits the channel) instead of opening a source-less one and reporting as "Unassigned".
+  test("carries the captured GA4 client_id + session_id from the order's note attributes", () => {
+    const ev = orderToTrackingEvent({
+      ...ORDER,
+      note_attributes: [
+        { name: "ga_client_id", value: "1234567890.1700000000" },
+        { name: "ga_session_id", value: "1783409603" },
+      ],
+    });
+    expect(ev.clientId).toBe("1234567890.1700000000");
+    expect(ev.sessionId).toBe("1783409603");
+  });
+
+  test("a session_id is never sent without its own client_id (they must be one matched pair)", () => {
+    const ev = orderToTrackingEvent({ ...ORDER, note_attributes: [{ name: "ga_session_id", value: "1783409603" }] });
+    expect(ev.clientId).toBeNull(); // buildJobs falls back to a stable synthetic id
+    expect(ev.sessionId).toBeUndefined();
+  });
+
+  test("no captured ids → clientId null (stable fallback), no session_id", () => {
+    const ev = orderToTrackingEvent(ORDER);
+    expect(ev.clientId).toBeNull();
+    expect(ev.sessionId).toBeUndefined();
+  });
 });
 
 describe("recordPendingPurchase", () => {

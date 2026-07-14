@@ -81,7 +81,13 @@ async function processOne(shopDomain, order, settings) {
 
   // First-touch attribution: the first order for a customer sets the client_id + source; recurring orders
   // inherit it (so they don't look like fresh direct traffic in GA4).
-  const cookieClientId = (cfg.clientIdMode === "cookie" && noteAttr(order, "ga_client_id")) || null;
+  // The shopper's REAL GA4 ids, captured onto the cart by the engagement embed and carried onto the order
+  // as note attributes. Always preferred when present: sending the same client_id + session_id GA4 saw in
+  // the browser lets it join this conversion to that session and inherit its traffic source. Without them
+  // GA4 opens a fresh, source-less session and the purchase reports as "Unassigned" (clientIdMode is now
+  // only the last-resort fallback selector — the captured pair always wins).
+  const cookieClientId = noteAttr(order, "ga_client_id") || null;
+  const cookieSessionId = noteAttr(order, "ga_session_id") || null;
   const key = customerKey(order);
   let attribution = null;
   if (key) {
@@ -106,9 +112,14 @@ async function processOne(shopDomain, order, settings) {
     }
   }
 
-  const clientId = attribution?.clientId || cookieClientId || syntheticClientId(order?.id);
+  // The captured pair wins: client_id and session_id MUST come from the same session, so we only send a
+  // session_id alongside the client_id it belongs to. Falling back to the stored first-touch clientId (a
+  // recurring renewal, which has no browser session) means no session_id — GA4 still ties it to the right
+  // user, but a renewal has no session to inherit a channel from.
+  const clientId = cookieClientId || attribution?.clientId || syntheticClientId(order?.id);
+  const sessionId = cookieClientId ? cookieSessionId : null;
   const attr = attribution ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign } : null;
-  const opts = { monthDays, clientId, attribution: attr, intervals };
+  const opts = { monthDays, clientId, sessionId, attribution: attr, intervals };
   // Two events per subscription order: the scoped subscription_purchase (subscription lines only) and the
   // regular purchase (whole order). Both server-side so they fire without the pixel/consent.
   const subEvent = buildSubscriptionEvent(order, { eventName: cfg.eventName || "subscription_purchase", ...opts });

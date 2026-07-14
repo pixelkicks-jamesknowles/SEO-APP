@@ -19,6 +19,7 @@ import { buildJobs, deliverOne, numericId } from "./server-side.server";
 import { recordDeliveries, bumpDaily, recordCapture, recordCaptureFromResults, RECONCILED_DESTINATIONS } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { fxHooks } from "./fx.server";
+import { noteAttr } from "./subscription";
 import { googleAdsHook } from "./google-ads.server";
 import { cogsEnabled, resolveOrderCost } from "./cogs.server";
 import { encryptSecret, decryptSecret } from "./secrets.server";
@@ -77,6 +78,12 @@ const mapAddr = (a) =>
  */
 export function orderToTrackingEvent(order) {
   const oid = numericId(order?.id) || String(order?.id ?? "");
+  // The shopper's real GA4 ids, captured onto the cart by the engagement embed → order note attributes.
+  // Reusing them here means a backfilled purchase joins the SAME browser session GA4 already saw, so it
+  // inherits that session's traffic source instead of opening a source-less one ("Unassigned").
+  // Only paired: a session_id is meaningless without the client_id it belongs to.
+  const gaClientId = noteAttr(order, "ga_client_id") || null;
+  const gaSessionId = gaClientId ? noteAttr(order, "ga_session_id") || undefined : undefined;
   const lineItems = (order?.line_items || []).map((l) => ({
     quantity: l.quantity,
     title: l.title,
@@ -92,7 +99,8 @@ export function orderToTrackingEvent(order) {
     name: "checkout_completed",
     id: `order:${oid}`,
     timestamp: order?.created_at || undefined,
-    clientId: null, // filled with a stable id by buildJobs (stableClientId of event.id)
+    clientId: gaClientId, // null → buildJobs fills a stable id (stableClientId of event.id)
+    sessionId: gaSessionId,
     // Marketing consent for the backfill: the storefront pixel gates PII destinations (Meta/Google
     // Ads/Reddit/…) on the shopper's Customer Privacy marketing consent, but this webhook path can't see
     // that banner state — so we honour the order's own marketing signal (`buyer_accepts_marketing`).
