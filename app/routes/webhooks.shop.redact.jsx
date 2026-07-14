@@ -8,7 +8,8 @@ import prisma from "../db.server";
 export const action = async ({ request }) => {
   const { shop, topic } = await authenticate.webhook(request);
   console.log(`Received ${topic} for ${shop} — purging shop data`);
-  // Every model keyed on `shopDomain` (Session is keyed on `shop`).
+  // Every model keyed on `shopDomain` (Session is keyed on `shop`). CronHeartbeat is intentionally
+  // excluded — it's a single global (`_global`) worker-liveness row, not shop-scoped or personal.
   const byShopDomain = [
     prisma.trackingSettings,
     prisma.activityLog,
@@ -18,11 +19,20 @@ export const action = async ({ request }) => {
     prisma.trackingDaily,
     prisma.matchQualityDaily,
     prisma.pendingPurchase,
+    prisma.pendingSubscription,
     prisma.purchaseCapture,
     prisma.processedWebhook,
     prisma.customerAttribution,
+    prisma.customerLifetime,
     prisma.visitorAttribution,
+    prisma.visitorIdentity,
+    prisma.channelRevenueDaily,
+    prisma.unattributedOrder,
+    prisma.conversionPath,
+    prisma.backfillJob,
+    prisma.connectionCheck,
     prisma.alertDismissal,
+    prisma.alertNotification,
     prisma.googleToken,
     prisma.shop,
   ];

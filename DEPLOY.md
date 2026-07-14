@@ -173,7 +173,10 @@ history now visible.
 ## Step 6 — Per-client setup (in the app)
 For each installed store:
 1. **Tracking**: enter GA4 / Meta / GTM IDs, tick events, turn on **Server-side delivery** (+ Consent
-   mode, Bot filtering; optionally Subscription / Refund tracking).
+   mode, Bot filtering; optionally Subscription / Refund tracking). If the store **also runs Google's
+   "Google & YouTube" app** (or another on-page GA4 tag), turn on **Companion mode** so this app sends GA4
+   conversions only and its page views etc. aren't double-counted. The GA4 measurement ID must be the
+   **same data stream** that on-page tag uses.
 2. **Settings**: add the GA4 MP secret, Meta CAPI token, and sGTM URL if used.
 3. Enable the **Pixelify SEO engagement** app embed in the store's Theme editor → App embeds (for
    scroll / engaged-content events).
@@ -192,11 +195,17 @@ delivery retry outbox (re-sends failed GA4/Meta/GTM/Google-Ads events with backo
 purchases (backfills any order the storefront pixel never captured), finishes any subscription order
 whose immediate delivery didn't complete (see note below), refreshes the daily FX snapshot, purges
 stale rows, and pushes tracking-health alerts.
-1. Set `CRON_SECRET` on the app service (random string).
-2. Add a **Railway cron service** (or any external scheduler) that runs every ~5 minutes:
-   `curl -fsS -H "x-cron-secret: $CRON_SECRET" https://<your-app>/cron/tick`
-3. Confirm: hitting it returns a JSON summary
-   (`{ ok, outbox, reconciled, subscriptions, fx, purged, alerts }`). Without the header it 403s.
+1. Set `CRON_SECRET` on the app service (a random string, e.g. `openssl rand -base64 48`).
+2. Add a **Railway cron service** in the same project (schedule `*/5 * * * *`), deployed from the same repo,
+   with **Start Command** `npm run cron:tick` and **Restart Policy = Never**. That runs the
+   version-controlled `scripts/cron-tick.mjs` (one authenticated GET to `/cron/tick`, 95s timeout, clean
+   exit code). Give the cron service the same `CRON_SECRET`. *(Don't use a raw `curl` start command — the
+   app image is `node:22-slim` and has no curl. `curl -H "x-cron-secret: $CRON_SECRET" .../cron/tick` is
+   still fine for a manual test or an external scheduler that has curl.)*
+3. Confirm: a tick returns a JSON summary
+   (`{ ok, outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill }`). Without the
+   header it 403s. `connections` = the periodic GA4 connection check; `backfill` = attribution backfill
+   progress.
 
 **Subscription delivery is immediate, not cron-gated.** A paid subscription order is delivered to GA4
 server-side within seconds — right after the `orders/paid` webhook ACKs (the webhook records the order,

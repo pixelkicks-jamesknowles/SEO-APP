@@ -18,9 +18,14 @@ the merchant's own conversion/analytics events to the merchant's own GA4, Meta a
   before transmission** to Meta (we never send raw email/phone/name/address).
 - The diagnostics buffer (50 most recent events) has email/phone/address/IP/cookies **redacted before
   storage**; the attribution record keys on a **hashed** email, never the raw address.
-- We **do not build a customer database**. Storage is limited to: per-store settings; capped
-  diagnostics (events + delivery logs); and minimal pseudonymous attribution (GA4 client_id + UTM
-  source/medium/campaign).
+- We store **no raw customer PII** and **no marketing profiles**. Storage is limited to per-store
+  settings; capped diagnostics (events + delivery logs); and **pseudonymous attribution/analytics data**
+  keyed on a GA4 client_id, a customer id, or a **hashed** email:
+  - first-touch source/medium/campaign and the touch path (GA4 client_id);
+  - per-customer **aggregate** lifetime revenue + order count, for LTV/retention-by-channel (customer id / hashed email);
+  - per-conversion order value + the touch path that led to it (order id).
+  This is aggregate marketing attribution for the merchant's own reporting, not a customer profile store,
+  and every row is purged on a customer-redaction or shop-redaction request (see below).
 - Data is sent **only** to destinations the merchant explicitly configures with their own
   credentials. No data is shared with us for our own purposes, sold, or used for our advertising.
 - **Consent-aware:** honours the Shopify Customer Privacy API; marketing destinations receive nothing
@@ -29,5 +34,7 @@ the merchant's own conversion/analytics events to the merchant's own GA4, Meta a
 - **GDPR webhooks implemented:** customers/redact, customers/data_request, shop/redact.
 
 ## Retention & deletion
-Diagnostics buffers self-prune (50 events / 300 logs per store). No long-term PII retention. Data is
-removed on app uninstall or on a data-deletion request.
+Diagnostics buffers self-prune (50 events / 300 logs per store). No long-term PII retention. On a
+**customer-redaction** request we purge that customer's attribution, lifetime, conversion-path and
+order-linked rows (by customer id, hashed email, and the orders in the request); on **shop redaction** /
+uninstall we delete every shop-scoped table.

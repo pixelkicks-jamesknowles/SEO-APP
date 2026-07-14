@@ -72,6 +72,23 @@ describe("customers/redact", () => {
     await customersRedact(req);
     expect(prisma.visitorAttribution.deleteMany).not.toHaveBeenCalled();
   });
+
+  test("purges the customer-keyed lifetime + order-keyed path/unattributed rows", async () => {
+    authenticate.webhook.mockResolvedValue({
+      shop: SHOP,
+      topic: "customers/redact",
+      payload: { customer: { id: 123, email: "a@b.com" }, orders_to_redact: [111, 222] },
+    });
+    await customersRedact(req);
+    // Per-customer lifetime is keyed like CustomerAttribution (id + hashed email).
+    const ltWhere = prisma.customerLifetime.deleteMany.mock.calls[0][0].where;
+    expect(ltWhere.customerKey.in).toEqual(["123", "e:" + sha256Hex("a@b.com")]);
+    // Order-keyed conversion paths for the redacted orders.
+    expect(prisma.conversionPath.deleteMany).toHaveBeenCalledWith({ where: { shopDomain: SHOP, orderId: { in: ["111", "222"] } } });
+    // UnattributedOrder purged by either order id OR customer key.
+    const uaWhere = prisma.unattributedOrder.deleteMany.mock.calls[0][0].where;
+    expect(uaWhere.OR).toEqual([{ orderId: { in: ["111", "222"] } }, { customerKey: { in: ["123", "e:" + sha256Hex("a@b.com")] } }]);
+  });
 });
 
 describe("shop/redact", () => {
@@ -90,10 +107,22 @@ describe("shop/redact", () => {
       "deliveryLog",
       "deliveryOutbox",
       "trackingDaily",
+      "matchQualityDaily",
+      "pendingPurchase",
+      "pendingSubscription",
+      "purchaseCapture",
       "processedWebhook",
       "customerAttribution",
+      "customerLifetime",
       "visitorAttribution",
+      "visitorIdentity",
+      "channelRevenueDaily",
+      "unattributedOrder",
+      "conversionPath",
+      "backfillJob",
+      "connectionCheck",
       "alertDismissal",
+      "alertNotification",
       "googleToken",
       "shop",
     ];

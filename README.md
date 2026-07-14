@@ -91,8 +91,29 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   `subscription` / `subscription_interval` (per-order + per-line) and the actual discounted amount,
   delivered server-side **within seconds** of the order (the webhook records + kicks off delivery so it
   never blocks Shopify's 5s timeout; the cron pass is a durable backstop). `app/lib/subscription.js`
-  (pure builders) + `app/lib/subscription-cron.server.js` (record + immediate/backstop delivery); spec:
-  [seo-subscription-tracking-v1](../../docs/specs/seo-subscription-tracking-v1.md).
+  (pure builders) + `app/lib/subscription-cron.server.js` (record + immediate/backstop delivery).
+- **Companion mode** — when the store also runs Google's "Google & YouTube" app (or another on-page GA4
+  tag), turn this on to trim OUR GA4/sGTM sends to conversions only, so page views etc. aren't
+  double-counted. Purchases still send (GA4 dedupes by `transaction_id`); Meta and the webhook-driven
+  subscription path are unaffected (`companionMode`, gated in `buildJobs`).
+- **First-touch visit capture** — the SEO-engagement embed fires a lightweight `/visit` beacon on load
+  (once/session, consent-gated) carrying UTMs + external referrer + GA client id; the server derives
+  first-touch (UTMs, else referrer → organic/social/referral) and records `VisitorAttribution` +
+  `VisitorIdentity`. It does NOT fan out, so it can't double-count page views. This is what populates the
+  Attribution page's top-of-funnel (`proxy.$type.jsx` `visit`, `recordVisit`, `visitAttribution`).
+- **Multi-touch attribution** — last/first/linear/position-based/time-decay models over each converting
+  visitor's real journey (capped touch path on `VisitorAttribution`, snapshotted per conversion to
+  `ConversionPath`); pure engine `app/lib/multi-touch.js`, model selector on the Attribution page.
+  Forward-looking (paths recorded from install onward).
+- **LTV & retention by acquiring channel** — each customer's lifetime revenue (from the backfill's
+  full-history scan, in `CustomerLifetime`) grouped by first-touch channel, with average LTV, average
+  orders, repeat rate and active rate (`ltvByChannel`). Populated by the backfill.
+- **Data-quality score + GA4-gap** — the Accuracy page shows a composite 0-100 tracking-health score
+  (A-F) and totals the revenue this app makes visible that GA4 alone would miss (server-side recoveries +
+  subscription renewals GA4 reports as Unassigned). `app/lib/health.js` (`dataQualityScore`).
+- **Continuous connection verification** — the cron periodically validates the GA4 connection (debug
+  endpoint, no ingestion) and raises a critical health alert if it starts failing, so a rotated/wrong
+  secret can't silently break tracking (`app/lib/connection-check.server.js`, `ConnectionCheck`).
 
 ## Structure
 ```

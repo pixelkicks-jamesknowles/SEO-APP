@@ -4,11 +4,21 @@ Remaining tracking features for Pixel Kicks Tracking, scoped against the current
 can be picked up later. Prioritised for an agency running **B2B + DTC across many industries**. This
 doc tracks only work that is **not built yet**.
 
-> **Already shipped** (removed from this list): value-based conversions P1 (store-level margin %, via
-> `valueMode`/`marginPct` + `withValueMode`); multi-touch attribution (first- + last-touch + touch
-> count in `VisitorAttribution`, surfaced on the Attribution page); multi-currency normalization
-> (`fx.server.js`); subscription, refund/cancellation and post-purchase lifecycle tracking; durable
-> retry (`DeliveryOutbox`); bot filtering; and Google Ads Enhanced Conversions.
+> **Already shipped** (removed from this list): value-based conversions P1+P2 (store-level margin % **and**
+> per-variant COGS, via `valueMode`/`marginPct`/`cogs` + `withValueMode` + `cogs.server.js`); **custom &
+> lead events** (`window.pxp.track` in the embed → `fanOutServerSide`, item #1 below — registry/UI is the
+> only residual); **multi-touch attribution models** (last/first/linear/position-based/time-decay over the
+> full touch path — `multi-touch.js`, `ConversionPath`; the cross-cutting "full touch-list journey" residual
+> is now built); **first-touch visit capture** (`/visit` beacon → `recordVisit`/`visitAttribution`);
+> **LTV/retention by acquiring channel** (`CustomerLifetime` + `ltvByChannel`); multi-currency normalization
+> (`fx.server.js`); subscription, refund/cancellation and post-purchase lifecycle tracking; durable retry
+> (`DeliveryOutbox`); bot filtering; Google Ads Enhanced Conversions; **companion mode**; and the whole
+> **trust/QA layer** (data-quality score, GA4-gap, continuous GA4 connection verification —
+> `health.js`/`connection-check.server.js`).
+>
+> **Bigger strategic direction not yet in this doc** (agreed 2026-07-14, for an agency-grade tool): a
+> cross-client control plane (health board / config templates / white-label) and warehouse/Looker export.
+> See conversation notes; specs TBD.
 
 ## Current architecture (reference)
 - **Capture:** Web Pixel (`extensions/tracking-pixel/src/index.js`) subscribes to the 8 standard
@@ -45,7 +55,12 @@ doc tracks only work that is **not built yet**.
 
 ---
 
-## 1. Custom & lead/form events
+## 1. Custom & lead/form events  — ⚠️ CORE SHIPPED
+**Status.** The capture + delivery path is **built**: `window.pxp.track(name, params)` in the embed beacons
+a custom event that `fanOutServerSide` routes to every configured destination (consent-gated). **Residual
+only:** the `TrackingSettings.customEvents` registry + a "Custom events" card UI to map `key → GA4/Meta
+name + default value` and expose it in the event matrix. The rest of this section is that residual.
+
 **Summary.** Let the storefront fire arbitrary events (quote/RFQ, trade-account request, configurator,
 consultation, sample request, finance application) → GA4 (`generate_lead`/custom) + Meta (`Lead`/custom).
 Removes the "only the 8 DTC events" ceiling.
@@ -100,14 +115,14 @@ convention). Add to:
 
 ---
 
-## 3. Value-based conversions — accurate COGS + LTV
-**Shipped already (P1):** store-level margin % → `value = round(revenue × marginPct, 2)`, via the
-`valueMode`/`marginPct` settings and `withValueMode`. The remaining phases raise accuracy:
+## 3. Value-based conversions — accurate COGS + LTV  — ⚠️ MOSTLY SHIPPED
+**Shipped:** P1 (store-level margin %) **and** P2 (per-variant COGS via Shopify "Cost per item",
+`valueMode: "cogs"` + `cogs.server.js`). **LTV** is also now computed and reported per acquiring channel
+(`CustomerLifetime` + `ltvByChannel`, from the backfill).
 
-- **P2 (M):** per-line **COGS** via Admin API (`read_inventory`, InventoryItem `unit_cost`) →
-  accurate margin = revenue − Σ(cost·qty).
-- **P3 (L):** **LTV** — needs historical orders per customer (`read_all_orders`); send predicted/actual
-  LTV as value on first purchase.
+- **Only residual (P3, L):** send **LTV as the conversion `value`** on first purchase (predicted/actual),
+  so ad platforms bid on lifetime value — distinct from the LTV *reporting* that already ships. Extend
+  `withValueMode` with an `ltv` mode.
 
 **Server-side.** Extend `withValueMode` with a `cogs`/`ltv` mode; keep raw revenue as a `revenue` custom
 param for reference. Opt-in only.
@@ -159,6 +174,5 @@ marketing consent required; hashed PII only; honour redaction webhooks.
   re-consent + a Protected Customer Data / review pass for the public app.
 - **Multi-store/agency**: consider a per-store config template/preset so these can be rolled out across
   many client stores quickly.
-- **Not-yet-built residual from shipped work**: the optional full **touch-list journey** (capped
-  `{ts, source, medium, campaign}[]` on `VisitorAttribution`) — the current model keeps first/last/count
-  but not the ordered list.
+- **Full touch-list journey**: ✅ now built — the capped touch path lives on `VisitorAttribution.touches`
+  and is snapshotted per conversion to `ConversionPath`, powering the multi-touch models (`multi-touch.js`).

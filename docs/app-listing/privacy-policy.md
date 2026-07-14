@@ -49,9 +49,13 @@ signals are sent so analytics platforms can model conversions appropriately.
 We do **not store customer PII at rest**. Customer identifiers (email, phone, name, address, IP) are
 used only in transit to deliver events, and are hashed (SHA-256) before being sent to Meta. The
 diagnostics buffer of recent events (capped at 50 per store) has these identifiers **redacted** before
-storage, and the attribution record keys on a **hashed** email, never the raw address. We retain only
-per-store settings, capped diagnostics (events + delivery logs), and minimal pseudonymous attribution
-(GA4 client_id + source/medium/campaign). On uninstall or merchant request, data is deleted.
+storage, and any attribution record keys on a customer id or a **hashed** email, never the raw address.
+Beyond per-store settings and capped diagnostics, we retain **pseudonymous marketing-attribution data**
+for the merchant's own reporting: first-touch source/medium/campaign and touch paths (keyed on a GA4
+client_id), per-customer **aggregate** lifetime revenue and order counts, and per-conversion order value
+plus the touch path that led to it. This is aggregate attribution, not a customer profile. On uninstall
+or a redaction request, this data is deleted — a customer-redaction request purges that customer's rows;
+shop redaction deletes every shop-scoped table.
 
 ## GDPR / data subject requests
 We support Shopify's mandatory compliance webhooks: customer data request, customer redaction, and
