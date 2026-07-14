@@ -191,7 +191,6 @@ export const action = async ({ request }) => {
     subscriptionConfig: JSON.stringify({
       eventName: form.get("sub_eventName") || "subscription_purchase",
       monthDays: Number(form.get("sub_monthDays")) || 28,
-      clientIdMode: form.get("sub_clientIdMode") || "synthetic",
       respectConsent: true,
     }),
   };
@@ -293,7 +292,6 @@ export default function Tracking() {
   const [subCfg, setSubCfg] = useState({
     eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
     monthDays: String(data.subscriptionConfig.monthDays ?? 28),
-    clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
   });
   const setSub = (k) => (v) => setSubCfg((s) => ({ ...s, [k]: v }));
   const [ids, setIds] = useState({
@@ -366,7 +364,6 @@ export default function Tracking() {
     setSubCfg({
       eventName: data.subscriptionConfig.eventName ?? "subscription_purchase",
       monthDays: String(data.subscriptionConfig.monthDays ?? 28),
-      clientIdMode: data.subscriptionConfig.clientIdMode ?? "synthetic",
     });
     setIds({ gtmId: data.gtmId, ga4Id: data.ga4Id, metaPixelId: data.metaPixelId, tiktokPixelId: data.tiktokPixelId, pinterestId: data.pinterestId, snapPixelId: data.snapPixelId, redditPixelId: data.redditPixelId, linkedinConversionId: data.linkedinConversionId, bingUetId: data.bingUetId });
   };
@@ -731,17 +728,15 @@ export default function Tracking() {
                   <FormLayout.Group>
                     <TextField label="Event name" name="sub_eventName" autoComplete="off" value={subCfg.eventName} onChange={setSub("eventName")} helpText="Must not be 'purchase' (avoids colliding with the native GA4 purchase)." />
                     <TextField label="Days per month" type="number" name="sub_monthDays" autoComplete="off" value={subCfg.monthDays} onChange={setSub("monthDays")} helpText="How 'monthly' plans map to days (client default 28)." />
-                    <Select
-                      label="Client ID"
-                      name="sub_clientIdMode"
-                      options={[
-                        { label: "Synthetic (join on transaction_id)", value: "synthetic" },
-                        { label: "Cookie (ga_client_id from checkout)", value: "cookie" },
-                      ]}
-                      value={subCfg.clientIdMode}
-                      onChange={setSub("clientIdMode")}
-                    />
                   </FormLayout.Group>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    <b>Client ID:</b> server-side conversions reuse the shopper&apos;s real GA4 client ID and
+                    session ID, captured by the <b>Pixelify SEO engagement</b> app embed, so GA4 attaches the
+                    purchase to their actual session and keeps the acquisition channel. Enable that embed in
+                    the theme, or conversions fall back to a synthetic ID and report as <b>Unassigned</b>.
+                    (A recurring renewal has no browser session, so it carries the customer&apos;s ID but no
+                    session — GA4 can&apos;t give it a channel.)
+                  </Text>
                 </FormLayout>
               ) : null}
 

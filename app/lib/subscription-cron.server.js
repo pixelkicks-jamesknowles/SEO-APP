@@ -84,8 +84,8 @@ async function processOne(shopDomain, order, settings) {
   // The shopper's REAL GA4 ids, captured onto the cart by the engagement embed and carried onto the order
   // as note attributes. Always preferred when present: sending the same client_id + session_id GA4 saw in
   // the browser lets it join this conversion to that session and inherit its traffic source. Without them
-  // GA4 opens a fresh, source-less session and the purchase reports as "Unassigned" (clientIdMode is now
-  // only the last-resort fallback selector — the captured pair always wins).
+  // GA4 opens a fresh, source-less session and the purchase reports as "Unassigned". The captured pair
+  // always wins; the synthetic id is only a last resort (there is no clientIdMode switch any more).
   const cookieClientId = noteAttr(order, "ga_client_id") || null;
   const cookieSessionId = noteAttr(order, "ga_session_id") || null;
   const key = customerKey(order);
