@@ -1,3 +1,4 @@
+import { ga4TimestampMicros, GA4_MAX_BACKDATE_MS } from "../app/lib/server-side.server.js";
 import {
   tiktokEventFor,
   pinterestEventFor,
@@ -508,5 +509,36 @@ describe("deliverOne routing", () => {
     expect(await deliverOne({}, { destination: "snapchat", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "reddit", event: {} })).toMatchObject({ ok: false });
     expect(await deliverOne({}, { destination: "bing", event: {} })).toMatchObject({ ok: false });
+  });
+});
+
+// GA4 joins a Measurement Protocol hit to an existing session — and so inherits that session's traffic
+// source (Session source / channel group) — only with client_id + session_id + the hit's REAL time.
+// Without timestamp_micros GA4 stamps at receipt time, so a late-delivered purchase (reconcile backfill,
+// outbox retry) misses the session and reports as Unassigned / (not set).
+describe("ga4TimestampMicros", () => {
+  const NOW = Date.parse("2026-07-14T12:00:00Z");
+  const isoAgo = (ms) => new Date(NOW - ms).toISOString();
+
+  test("converts the event time to microseconds", () => {
+    const t = Date.parse("2026-07-14T11:59:00Z");
+    expect(ga4TimestampMicros("2026-07-14T11:59:00Z", NOW)).toBe(String(t * 1000));
+  });
+
+  test("accepts a backdated hit inside GA4's 72h window", () => {
+    expect(ga4TimestampMicros(isoAgo(GA4_MAX_BACKDATE_MS - 60_000), NOW)).not.toBeNull();
+  });
+
+  test("omits the timestamp beyond 72h — GA4 would DROP the event, and a landed-but-unattributed conversion beats a lost one", () => {
+    expect(ga4TimestampMicros(isoAgo(GA4_MAX_BACKDATE_MS + 60_000), NOW)).toBeNull();
+  });
+
+  test("omits a future timestamp (clock skew) and lets GA4 stamp it", () => {
+    expect(ga4TimestampMicros(new Date(NOW + 10 * 60_000).toISOString(), NOW)).toBeNull();
+  });
+
+  test("missing / unparseable timestamp → null", () => {
+    expect(ga4TimestampMicros(undefined, NOW)).toBeNull();
+    expect(ga4TimestampMicros("not-a-date", NOW)).toBeNull();
   });
 });

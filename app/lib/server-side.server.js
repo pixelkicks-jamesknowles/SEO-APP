@@ -750,10 +750,29 @@ export function withValueMode(target, valueMode, marginPct, cost) {
   return target;
 }
 
-async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, consent } = {}) {
+// GA4 joins a Measurement Protocol hit to an existing browser session — and thus inherits that session's
+// traffic source (Session source / channel group) — only when it gets client_id + session_id + the hit's
+// REAL time. Without timestamp_micros GA4 stamps the event at receipt time, so anything that arrives after
+// the session ended (a reconcile backfill, an outbox retry hours later) misses the session, starts a fresh
+// source-less one, and reports as "Unassigned" / "(not set)". Every other destination already sends the
+// true event time; GA4 was the only one that didn't.
+//
+// GA4 accepts backdating up to 72h and DROPS anything older, so past that we omit the timestamp rather
+// than lose the conversion entirely (it lands, just unattributed). Pure — unit-tested.
+export const GA4_MAX_BACKDATE_MS = 72 * 60 * 60 * 1000;
+export function ga4TimestampMicros(ts, now = Date.now()) {
+  const t = ts ? Date.parse(ts) : NaN;
+  if (Number.isNaN(t)) return null;
+  if (t > now + 60_000) return null; // future / clock skew → let GA4 stamp it
+  if (now - t > GA4_MAX_BACKDATE_MS) return null; // older than GA4's window → it would drop the event
+  return String(t * 1000);
+}
+
+async function sendGa4(measurementId, apiSecret, clientId, event, { endpoint, consent, timestampMicros } = {}) {
   const base = endpoint || "https://www.google-analytics.com";
   const url = `${base.replace(/\/$/, "")}/mp/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`;
   const body = { client_id: clientId, events: [event] };
+  if (timestampMicros) body.timestamp_micros = timestampMicros;
   const consentBlock = ga4Consent(consent);
   if (consentBlock) body.consent = consentBlock;
   return postJson(url, body);
@@ -863,9 +882,11 @@ export async function validateMetaEvent(settings, { testEventCode } = {}) {
 
 // Server-side GTM: GTM-XXXX is a *web* container the strict pixel sandbox cannot load (no gtag.js),
 // so the only server-side route is a sGTM container URL with a GA4 client — we POST the GA4 MP hit to it.
-async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, event, consent) {
+async function sendGtmServer(serverUrl, measurementId, apiSecret, clientId, event, consent, timestampMicros) {
   const url = `${serverUrl.replace(/\/$/, "")}/g/collect?measurement_id=${encodeURIComponent(measurementId)}&api_secret=${encodeURIComponent(apiSecret)}`;
   const body = { client_id: clientId, events: [event] };
+  // Same session-join requirement as the direct GA4 path — sGTM forwards this on to GA4.
+  if (timestampMicros) body.timestamp_micros = timestampMicros;
   const consentBlock = ga4Consent(consent);
   if (consentBlock) body.consent = consentBlock;
   return postJson(url, body);
@@ -898,11 +919,13 @@ export function checkoutHasSubscription(event) {
  */
 export async function deliverOne(settings, job) {
   const keys = readServerSideKeys(settings);
-  const { destination, event, clientId, consent } = job || {};
+  // timestampMicros rides on the JOB (not the event), so an outbox retry hours later still reports the
+  // ORIGINAL event time and can still join the right session.
+  const { destination, event, clientId, consent, timestampMicros } = job || {};
   switch (destination) {
     case "ga4":
       if (!settings?.ga4Id || !keys.ga4ApiSecret) return { ok: false, detail: "GA4 not configured" };
-      return sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, event, { consent });
+      return sendGa4(settings.ga4Id, keys.ga4ApiSecret, clientId, event, { consent, timestampMicros });
     case "meta":
       if (!settings?.metaPixelId || !keys.metaCapiToken) return { ok: false, detail: "Meta not configured" };
       return sendMeta(settings.metaPixelId, keys.metaCapiToken, event);
@@ -932,7 +955,7 @@ export async function deliverOne(settings, job) {
       const mid = keys.gtmMeasurementId || settings?.ga4Id;
       const secret = keys.gtmApiSecret || keys.ga4ApiSecret;
       if (!mid || !secret) return { ok: false, detail: "sGTM measurement id/secret missing" };
-      return sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, event, consent);
+      return sendGtmServer(keys.gtmServerUrl, mid, secret, clientId, event, consent, timestampMicros);
     }
     case "google_ads": {
       // Dynamically imported so this module stays prisma-free (google-ads.server reads the DB token).
@@ -964,6 +987,9 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   }
 
   const clientId = event.clientId || stableClientId(event.id || event.context?.document?.location?.href);
+  // The event's REAL time, so a GA4/sGTM hit delivered later (reconcile backfill, outbox retry) still
+  // joins the session it actually belongs to instead of starting a source-less one.
+  const timestampMicros = ga4TimestampMicros(event.timestamp);
   const consent = event.consent; // { analytics, marketing } | undefined (treated as granted)
   // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
@@ -991,7 +1017,7 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // the line-item shape.
   const suppressGa4Purchase = isPurchaseConv && !!settings.subscriptionTracking && checkoutHasSubscription(event);
   if (wants("ga4") && settings.ga4Id && keys.ga4ApiSecret && !suppressGa4Purchase) {
-    jobs.push({ destination: "ga4", eventName: name, event: ga4Event, clientId, consent });
+    jobs.push({ destination: "ga4", eventName: name, event: ga4Event, clientId, consent, timestampMicros });
   }
   if (marketingOk && wants("meta") && settings.metaPixelId && keys.metaCapiToken) {
     const metaEvent = metaEventFor(name, event);
@@ -1001,7 +1027,7 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   }
   // GTM server-side: needs the sGTM container URL + a measurement id/secret to deliver the GA4 hit.
   if (wants("gtm") && settings.gtmId && keys.gtmServerUrl && (keys.gtmMeasurementId || settings.ga4Id)) {
-    jobs.push({ destination: "gtm", eventName: name, event: ga4Event, clientId, consent });
+    jobs.push({ destination: "gtm", eventName: name, event: ga4Event, clientId, consent, timestampMicros });
   }
   // TikTok Events API: carries hashed PII, so it's marketing-consent-gated like Meta. Needs the pixel
   // code (settings.tiktokPixelId) + an access token in serverSideKeys.
@@ -1091,7 +1117,7 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
-export async function sendGa4Event(settings, { name, params = {}, clientId, sessionId } = {}, { consent } = {}) {
+export async function sendGa4Event(settings, { name, params = {}, clientId, sessionId, timestampMicros } = {}, { consent } = {}) {
   if (!settings?.serverSide || !settings.ga4Id || !name) return { sent: false };
   const keys = readServerSideKeys(settings);
   if (!keys.ga4ApiSecret) return { sent: false, detail: "no GA4 secret" };
@@ -1104,8 +1130,9 @@ export async function sendGa4Event(settings, { name, params = {}, clientId, sess
   // reports as "Unassigned". Only ever sent paired with its own client_id (see subscription-cron).
   const withSession = sessionId && !params.session_id ? { session_id: String(sessionId), ...params } : params;
   const event = { name, params: { engagement_time_msec: 1, ...withSession } };
-  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, resolvedClientId, event, { consent });
+  const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, resolvedClientId, event, { consent, timestampMicros });
   // `job` mirrors a buildJobs "ga4" job so a failed webhook send can be queued for retry (outbox)
-  // and re-sent byte-identically by deliverOne.
-  return { sent: r.ok, detail: r.detail, job: { destination: "ga4", eventName: name, event, clientId: resolvedClientId, consent } };
+  // and re-sent byte-identically by deliverOne — carrying timestampMicros so the retry still reports the
+  // ORIGINAL event time and can still join the shopper's session.
+  return { sent: r.ok, detail: r.detail, job: { destination: "ga4", eventName: name, event, clientId: resolvedClientId, consent, timestampMicros } };
 }

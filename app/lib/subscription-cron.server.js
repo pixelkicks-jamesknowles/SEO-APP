@@ -10,7 +10,7 @@ import prisma from "../db.server";
 import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "./subscription";
 import { fetchOrderSubscriptions } from "./subscription.server";
 import { parseUtms, customerKey } from "./attribution";
-import { sendGa4Event, withValueMode } from "./server-side.server";
+import { sendGa4Event, withValueMode, ga4TimestampMicros } from "./server-side.server";
 import { recordDeliveries } from "./delivery.server";
 import { enqueue } from "./outbox.server";
 import { normalizeForShop } from "./fx.server";
@@ -118,8 +118,12 @@ async function processOne(shopDomain, order, settings) {
   // user, but a renewal has no session to inherit a channel from.
   const clientId = cookieClientId || attribution?.clientId || syntheticClientId(order?.id);
   const sessionId = cookieClientId ? cookieSessionId : null;
+  // The order's REAL time. GA4 needs client_id + session_id + timestamp_micros to join the hit to the
+  // shopper's session (and inherit its channel); without the timestamp it stamps at receipt time, which
+  // for anything delivered after the session ended lands in a fresh, source-less session ("Unassigned").
+  const timestampMicros = ga4TimestampMicros(order?.created_at);
   const attr = attribution ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign } : null;
-  const opts = { monthDays, clientId, sessionId, attribution: attr, intervals };
+  const opts = { monthDays, clientId, sessionId, timestampMicros, attribution: attr, intervals };
   // Two events per subscription order: the scoped subscription_purchase (subscription lines only) and the
   // regular purchase (whole order). Both server-side so they fire without the pixel/consent.
   const subEvent = buildSubscriptionEvent(order, { eventName: cfg.eventName || "subscription_purchase", ...opts });
