@@ -5,6 +5,64 @@
 
 const labelOf = (source, medium) => `${source || "(direct)"} / ${medium || "(none)"}`;
 
+// GA4-style default channel grouping, applied to OUR source/medium data. GA4 doesn't let you send a channel
+// group — it derives one by classifying source/medium into buckets (Organic Search, Paid Social, Email, …).
+// We reproduce that classification here so the report can roll up by channel group like GA4 does, with two
+// deliberate differences: (1) it also covers subscription renewals, which GA4 can never classify (no
+// session); (2) our "(unattributed)" stays its own honest bucket rather than being folded into Direct.
+// It mirrors GA4's rules and evaluation order closely, but is an approximation — edge cases may differ.
+const SEARCH_SOURCES = new Set(["google", "bing", "yahoo", "duckduckgo", "ecosia", "baidu", "yandex", "ask", "aol", "brave", "startpage"]);
+const SOCIAL_SOURCES = new Set(["facebook", "fb", "facebook_feed", "facebook_mobile_feed", "instagram", "instagram_feed", "instagram_stories", "ig", "twitter", "x", "t.co", "tiktok", "pinterest", "linkedin", "reddit", "snapchat", "youtube", "whatsapp", "threads"]);
+const EMAIL_SOURCES = new Set(["email", "klaviyo", "metorik", "mailchimp", "sendgrid", "omnisend", "dotdigital", "drip"]);
+const isPaidMedium = (m) => /^(.*cp.*|ppc|retargeting|paid.*|display)$/.test(m);
+
+/** Classify a source/medium into a GA4-style default channel group. */
+export function channelGroupOf(source, medium) {
+  const s = String(source || "").toLowerCase();
+  const m = String(medium || "").toLowerCase();
+  if (s === "(unattributed)") return "(unattributed)"; // kept honest — not folded into Direct/Referral
+  // Shopify labels its own direct classification "direct" (we tag it medium "referral"); treat it as Direct.
+  if (/^\(?direct\)?$/.test(s) && ["", "(none)", "(not set)", "referral"].includes(m)) return "Direct";
+  const search = SEARCH_SOURCES.has(s);
+  const social = SOCIAL_SOURCES.has(s);
+  const paid = isPaidMedium(m);
+  if (paid && search) return "Paid Search";
+  if (paid && social) return "Paid Social";
+  if (paid) return "Paid Other";
+  if (m === "email" || EMAIL_SOURCES.has(s)) return "Email";
+  if (social || /^(social|social-network|social-media|sm)$/.test(m)) return "Organic Social";
+  if (search || m === "organic") return "Organic Search";
+  if (/^(referral|app|link)$/.test(m)) return "Referral";
+  return "Unassigned";
+}
+
+/** Roll ChannelRevenueDaily rows up by GA4-style channel group (subscription split kept), sorted by revenue. */
+export function byChannelGroup(rows = []) {
+  const map = new Map();
+  let totalRevenue = 0;
+  for (const r of rows) {
+    const group = channelGroupOf(r.source, r.medium);
+    const agg = map.get(group) || { group, orders: 0, revenue: 0, subscriptionOrders: 0, subscriptionRevenue: 0 };
+    agg.orders += Number(r.orders) || 0;
+    agg.revenue += Number(r.revenue) || 0;
+    agg.subscriptionOrders += Number(r.subscriptionOrders) || 0;
+    agg.subscriptionRevenue += Number(r.subscriptionRevenue) || 0;
+    map.set(group, agg);
+    totalRevenue += Number(r.revenue) || 0;
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  return [...map.values()]
+    .map((a) => ({
+      ...a,
+      revenue: round(a.revenue),
+      subscriptionRevenue: round(a.subscriptionRevenue),
+      oneOffRevenue: round(a.revenue - a.subscriptionRevenue),
+      aov: a.orders ? round(a.revenue / a.orders) : 0,
+      share: totalRevenue > 0 ? Math.round((a.revenue / totalRevenue) * 100) : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
 /** Group visitor rows by first-touch source/medium. Returns rows sorted by visitor count desc. */
 export function byFirstTouch(rows = []) {
   const map = new Map();

@@ -1,4 +1,4 @@
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue } from "../app/lib/attribution-report.js";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, channelGroupOf, byChannelGroup } from "../app/lib/attribution-report.js";
 
 const visitors = [
   { source: "google", medium: "cpc", visits: 3, lastSource: "google" },
@@ -102,5 +102,52 @@ describe("byChannelRevenue — subscription split", () => {
     expect(r.totalRevenue).toBe(100);
     expect(r.totalSubscriptionRevenue).toBe(0);
     expect(r.channels[0].oneOffRevenue).toBe(100);
+  });
+});
+
+describe("channelGroupOf (GA4-style default channel grouping)", () => {
+  test.each([
+    // [source, medium, expected]  — the actual source/medium shapes this store produces
+    ["direct", "referral", "Direct"], // Shopify's own "direct" classification, tagged referral by us
+    ["(direct)", "(none)", "Direct"],
+    ["google", "referral", "Organic Search"], // search source, no paid medium
+    ["google", "cpc", "Paid Search"],
+    ["google", "organic", "Organic Search"],
+    ["Bing", "referral", "Organic Search"], // case-insensitive
+    ["facebook", "referral", "Organic Social"],
+    ["facebook", "paid_social", "Paid Social"],
+    ["Facebook_Mobile_Feed", "paid", "Paid Social"],
+    ["Instagram_Feed", "paid", "Paid Social"],
+    ["Klaviyo", "email", "Email"],
+    ["metorik", "email", "Email"],
+    ["https://shopify.com/", "referral", "Referral"],
+    ["https://trade.naturaw.co.uk/", "referral", "Referral"],
+    ["(unattributed)", "(none)", "(unattributed)"], // stays its own honest bucket
+    ["some-random-thing", "weird_medium", "Unassigned"],
+  ])("%s / %s → %s", (source, medium, expected) => {
+    expect(channelGroupOf(source, medium)).toBe(expected);
+  });
+});
+
+describe("byChannelGroup", () => {
+  test("rolls source/medium rows up into channel groups with subscription split, sorted by revenue", () => {
+    const groups = byChannelGroup([
+      { source: "google", medium: "referral", orders: 10, revenue: 1000, subscriptionOrders: 4, subscriptionRevenue: 400 },
+      { source: "bing", medium: "referral", orders: 2, revenue: 200, subscriptionOrders: 0, subscriptionRevenue: 0 },
+      { source: "klaviyo", medium: "email", orders: 5, revenue: 300, subscriptionOrders: 5, subscriptionRevenue: 300 },
+      { source: "(unattributed)", medium: "(none)", orders: 3, revenue: 500, subscriptionOrders: 3, subscriptionRevenue: 500 },
+    ]);
+    // google + bing collapse into one Organic Search row.
+    const organic = groups.find((g) => g.group === "Organic Search");
+    expect(organic).toMatchObject({ orders: 12, revenue: 1200, subscriptionRevenue: 400, oneOffRevenue: 800 });
+    // (unattributed) is NOT folded into a real channel.
+    expect(groups.find((g) => g.group === "(unattributed)")).toMatchObject({ revenue: 500 });
+    // Sorted by revenue desc; shares are whole percents of the £2000 total.
+    expect(groups[0].group).toBe("Organic Search");
+    expect(organic.share).toBe(60);
+  });
+
+  test("empty input → empty array", () => {
+    expect(byChannelGroup([])).toEqual([]);
   });
 });

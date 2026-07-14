@@ -5,7 +5,7 @@ import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Butt
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue } from "../lib/attribution-report";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup } from "../lib/attribution-report";
 import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
 
@@ -44,6 +44,7 @@ async function buildReport(shopDomain) {
     identityStats(shopDomain),
   ]);
   const revenue = byChannelRevenue(channelRows);
+  const channelGroups = byChannelGroup(channelRows);
   return {
     totalVisitors: visitors.length,
     capped: visitors.length >= SCAN_CAP || customers.length >= SCAN_CAP,
@@ -54,6 +55,7 @@ async function buildReport(shopDomain) {
     shifted: firstVsLastShift(visitors),
     subSources: bySubscriptionSource(customers).slice(0, 15),
     channels: revenue.channels.slice(0, 15),
+    channelGroups,
     channelTotalRevenue: revenue.totalRevenue,
     channelTotalOrders: revenue.totalOrders,
     channelSubscriptionRevenue: revenue.totalSubscriptionRevenue,
@@ -329,7 +331,7 @@ function BackfillCard({ backfill }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -358,6 +360,33 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
               <Stat title="Identified" value={identity.identified.toLocaleString()} sub={`of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`} />
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
             </InlineStack>
+
+            {channelGroups.length > 0 && (
+              <Card>
+                <BlockStack gap="300">
+                  <SectionHeading
+                    title="Revenue by channel group"
+                    description="The same revenue rolled up into GA4-style default channel groups (Organic Search, Paid Social, Email, Direct, …). GA4 derives this from the session's source/medium, so it can never produce it for a subscription renewal (no session) — here it covers renewals too. Classification mirrors GA4's rules closely but is an approximation."
+                  />
+                  <Divider />
+                  <Table
+                    caption="Revenue grouped by GA4-style default channel group, with orders, subscription and one-off revenue, AOV and share"
+                    head={["Channel group", "Orders", "Revenue", "Subscription", "One-off", "AOV", "Share"]}
+                    rows={channelGroups.map((r) => (
+                      <tr key={r.group} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
+                        <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.group}</Text></th>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.orders.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.revenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.subscriptionRevenue > 0 ? undefined : "subdued"}>{fmtMoney(r.subscriptionRevenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.oneOffRevenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.aov)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
+                      </tr>
+                    ))}
+                  />
+                </BlockStack>
+              </Card>
+            )}
 
             {channels.length > 0 && (
               <Card>
