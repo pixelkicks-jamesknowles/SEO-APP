@@ -7,14 +7,38 @@
   var base = (cfg.base || "/apps/pixelify-seo").replace(/\/$/, "");
   var endpoint = base + "/track";
 
-  // Durable first-party id: ping the app proxy so it sets (or refreshes) the ITP-proof pxp_id cookie.
-  // Server-set from this same-origin proxy, so it survives Safari's 7-day script-cookie cap where _ga
-  // doesn't. The pixel then reads the same cookie, and the /track proxy reads it server-side — so both
-  // paths carry ONE stable id across sessions. Fire-and-forget; failure just means we fall back to _ga.
+  // Durable first-party id (pxp_id). The app proxy mints one (or echoes the one we send back) and also
+  // returns a Set-Cookie — but Shopify's App Proxy does NOT reliably pass Set-Cookie through to the
+  // browser, so we cannot depend on it: we persist the id returned in the JSON body ourselves.
+  //
+  //   * If the server's Set-Cookie DOES land, that cookie wins and is genuinely ITP-proof (server-set
+  //     cookies aren't capped by Safari's 7-day script-cookie rule) — we never overwrite it.
+  //   * If it doesn't (the normal App Proxy case), this JS cookie carries the id instead. It IS subject
+  //     to the 7-day cap on Safari, but a 7-day stable id beats no id at all, and on Chrome/Firefox it
+  //     lasts the full 400 days.
+  //
+  // Either way the id is stable: once persisted we send it back, and the server echoes the same one.
+  // The pixel reads this cookie, and /track reads it server-side, so both paths carry ONE id.
+  function readPxpId() {
+    var m = document.cookie.match(/(?:^|;\s*)pxp_id=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
   try {
-    if (window.fetch) fetch(base + "/id", { credentials: "same-origin", keepalive: true }).catch(function () {});
+    if (window.fetch) {
+      fetch(base + "/id", { credentials: "same-origin", keepalive: true })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (d) {
+          // Only write if the server's own Set-Cookie didn't land — never clobber the ITP-proof one.
+          if (d && d.id && !readPxpId()) {
+            document.cookie = "pxp_id=" + encodeURIComponent(d.id) + "; Path=/; Max-Age=34560000; SameSite=Lax; Secure";
+          }
+        })
+        .catch(function () {});
+    }
   } catch (e) {
-    /* best-effort */
+    /* best-effort — without the id we simply fall back to _ga */
   }
 
   function privacy() {
