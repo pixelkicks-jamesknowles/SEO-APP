@@ -44,8 +44,14 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
 - **Value-based optimisation** — send **margin** (flat %) or **true profit (COGS)** as the conversion
   `value` instead of raw revenue, so ad platforms bid on profit. COGS reads each variant's Shopify
   "Cost per item" server-side (`app/lib/cogs.server.js`); raw revenue is kept as a `revenue` param.
-- **Revenue by channel** — order revenue attributed to its first-touch source/medium, on the Attribution
-  page (`byChannelRevenue` in `app/lib/attribution-report.js`).
+- **Revenue by channel (incl. subscription renewals — the number GA4 can't give you)** — every paid
+  order's revenue attributed to the source/medium that first acquired the customer, driven from the
+  **`orders/paid` webhook** (Shopify's source of truth), so it includes **recurring renewals**. This is the
+  key thing: a renewal never fires a storefront checkout, so it has **no browser session** — GA4 therefore
+  has no session to take a channel from and reports it as **Unassigned forever**. The app replays the
+  customer's **first-touch** source onto each renewal, and splits `subscriptionRevenue` out per channel, so
+  you can actually see which channels drive subscription revenue. On the Attribution page
+  (`byChannelRevenue` in `app/lib/attribution-report.js`, recorded in `webhooks.orders.paid.jsx`).
 - **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
   drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
   (`app/lib/alerting.server.js`).

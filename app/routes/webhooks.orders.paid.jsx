@@ -11,9 +11,37 @@
 // and the outbox retrying any failed send.
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { bumpDaily } from "../lib/delivery.server";
+import { bumpDaily, recordChannelRevenue } from "../lib/delivery.server";
 import { recordPendingPurchase } from "../lib/reconcile.server";
 import { recordPendingSubscription, processSubscriptionNow } from "../lib/subscription-cron.server";
+import { customerKey, parseUtms } from "../lib/attribution";
+import { orderHasSubscription } from "../lib/subscription";
+
+/**
+ * Attribute a paid order's revenue to the channel that ACQUIRED the customer.
+ *
+ * First-touch, in priority order:
+ *   1. CustomerAttribution — the source captured on this customer's FIRST order. A recurring renewal has
+ *      no browser session and no UTMs of its own, so replaying the first-touch source is the only way it
+ *      can carry a channel at all. This is the whole point.
+ *   2. This order's own UTMs (a first-time buyer we haven't seen before).
+ *   3. (direct)/(none).
+ */
+async function recordOrderRevenue(shop, order) {
+  const key = customerKey(order);
+  const first = key
+    ? await prisma.customerAttribution.findUnique({ where: { shopDomain_customerKey: { shopDomain: shop, customerKey: key } } }).catch(() => null)
+    : null;
+  const utms = parseUtms(order);
+  await recordChannelRevenue(shop, {
+    source: first?.source || utms.source,
+    medium: first?.medium || utms.medium,
+    // Raw order revenue (not the margin/COGS-adjusted conversion value) — this report answers
+    // "which channel drove sales", so it must be the real money.
+    revenue: Number(order?.current_total_price ?? order?.total_price ?? 0),
+    isSubscription: orderHasSubscription(order),
+  });
+}
 
 export const action = async ({ request }) => {
   const { shop, payload, webhookId } = await authenticate.webhook(request);
@@ -33,6 +61,14 @@ export const action = async ({ request }) => {
     // Count every paid order (Shopify's source of truth) for the Accuracy match-rate, regardless of
     // whether subscription tracking is on.
     await bumpDaily(shop, { ordersPaid: 1 });
+
+    // Revenue-by-channel for the Attribution report. Done HERE, not on the pixel path, because orders/paid
+    // is the only thing that sees recurring subscription renewals — they never fire a storefront checkout,
+    // so the pixel never saw them and their revenue was absent from the report entirely. The renewal
+    // inherits the customer's FIRST-TOUCH source (the channel that acquired the subscriber), which is
+    // precisely the number GA4 cannot produce: with no browser session there's no session to take a
+    // channel from, so GA4 reports it as Unassigned forever. Guarded by the idempotency gate above.
+    await recordOrderRevenue(shop, payload).catch(() => {});
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
 

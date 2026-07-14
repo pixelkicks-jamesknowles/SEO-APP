@@ -1,6 +1,6 @@
 import prisma from "../db.server";
-import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys, extractCommerce } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordChannelRevenue } from "./delivery.server";
+import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
@@ -87,14 +87,11 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     // buildJobs sends profit as the conversion value. Purchases are low-volume, so the extra Admin fetch
     // is off the page-view hot path; best-effort (null cost → withValueMode falls back to revenue).
     if (cogsEnabled(settings)) event.orderCost = await resolveOrderCost(shopDomain, event);
-    // Revenue-by-channel report: attribute this order's RAW revenue (not the margin/COGS-adjusted value)
-    // to its acquisition channel — first-touch source/medium, else this visit's own UTMs, else direct.
-    const ft = event.firstTouch;
-    await recordChannelRevenue(shopDomain, {
-      source: ft?.source || event.utm?.utm_source,
-      medium: ft?.medium || event.utm?.utm_medium,
-      revenue: extractCommerce("checkout_completed", event.data).value,
-    });
+    // NOTE: revenue-by-channel is NOT recorded here any more. It's driven from the orders/paid webhook
+    // (Shopify's source of truth), because that is the only path that sees recurring subscription
+    // renewals — they never fire a storefront checkout, so this pixel path silently excluded them and the
+    // Attribution report was missing subscription revenue entirely. Recording it in both places would
+    // double-count, so orders/paid owns it. See webhooks.orders.paid.jsx → recordOrderRevenue.
   }
 
   // Delivery hooks: currency normalization (fx) + extra destinations (Google Ads Enhanced Conversions).

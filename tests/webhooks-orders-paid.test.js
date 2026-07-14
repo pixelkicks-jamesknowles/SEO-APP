@@ -120,3 +120,39 @@ describe("orders/paid — fast record + immediate-kick handler", () => {
     expect(processSubscriptionNow).not.toHaveBeenCalled();
   });
 });
+
+// Revenue-by-channel is driven from HERE (not the pixel), because orders/paid is the only path that sees
+// recurring subscription renewals — they never fire a storefront checkout. A renewal has no browser
+// session, so GA4 can only ever report it as Unassigned; replaying the customer's first-touch source is
+// the only way that revenue gets a channel at all.
+describe("orders/paid → revenue by channel", () => {
+  test("a RENEWAL inherits the channel that originally acquired the customer, and is flagged as subscription", async () => {
+    prisma.customerAttribution.findUnique.mockResolvedValue({ source: "google", medium: "cpc" });
+    await deliver({
+      id: 5001,
+      currency: "USD",
+      current_total_price: "42.00",
+      customer: { id: 77 },
+      // A renewal: a selling-plan line, and no UTMs of its own (there was no browser visit).
+      line_items: [{ sku: "SUB", price: "42.00", quantity: 1, selling_plan_allocation: { selling_plan: { name: "Monthly" } } }],
+    }, "wh-rev-1");
+    expect(prisma.channelRevenueDaily.upsert).toHaveBeenCalledTimes(1);
+    const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+    expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "google", medium: "cpc" });
+    expect(call.create).toMatchObject({ orders: 1, revenue: 42, subscriptionOrders: 1, subscriptionRevenue: 42 });
+  });
+
+  test("a one-off order records revenue but no subscription split", async () => {
+    prisma.customerAttribution.findUnique.mockResolvedValue({ source: "klaviyo", medium: "email" });
+    await deliver({ id: 5002, currency: "USD", current_total_price: "20.00", customer: { id: 78 }, line_items: [{ sku: "OTP", price: "20.00", quantity: 1 }] }, "wh-rev-2");
+    const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+    expect(call.create).toMatchObject({ orders: 1, revenue: 20, subscriptionOrders: 0, subscriptionRevenue: 0 });
+  });
+
+  test("an unknown customer falls back to the order's own UTMs, then (direct)", async () => {
+    prisma.customerAttribution.findUnique.mockResolvedValue(null);
+    await deliver({ id: 5003, currency: "USD", current_total_price: "10.00", line_items: [{ sku: "X", price: "10.00", quantity: 1 }] }, "wh-rev-3");
+    const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+    expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "(direct)", medium: "(none)" });
+  });
+});

@@ -421,6 +421,34 @@ const SECTIONS = [
     ),
   },
   {
+    id: "subrevenue",
+    title: "Subscription revenue by channel (what GA4 can’t tell you)",
+    summary: "Renewals have no session, so GA4 can never give them a channel. This app can.",
+    body: (
+      <BlockStack gap="200">
+        <Text as="p">
+          A recurring renewal never fires a storefront checkout, so there is <b>no browser session</b>
+          behind it. GA4 works out a channel from the session a purchase belongs to — with no session,
+          there is nothing to take a channel from, so GA4 reports every renewal as{" "}
+          <b>Unassigned</b>. That is a limit of GA4&apos;s session model, not a tracking fault, and no
+          amount of pixel work will change it.
+        </Text>
+        <Text as="p">
+          This app answers it a different way. Every paid order is attributed to the source/medium that{" "}
+          <b>first acquired that customer</b>, and that first-touch channel is replayed onto each renewal.
+          The <Link to="/app/attribution">Attribution</Link> page splits it out, so you can see how much
+          <b> subscription revenue</b> each channel actually drives — the number you cannot get from GA4.
+        </Text>
+        <Text as="p" tone="subdued">
+          So: use GA4 for one-off orders placed in a live session, and use Attribution here for subscription
+          revenue. If the SEO team wants renewal source inside GA4 itself, the only option is to register
+          the <code>source</code>/<code>medium</code> event parameters as <b>event-scoped</b> custom
+          dimensions — GA4&apos;s session-scoped &ldquo;Session source&rdquo; will never populate for them.
+        </Text>
+      </BlockStack>
+    ),
+  },
+  {
     id: "channel",
     title: "Why purchases must not show as “Unassigned”",
     summary: "How server-side conversions keep their GA4 channel.",

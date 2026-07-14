@@ -259,13 +259,20 @@ model VisitorIdentity {
 // the Attribution page — turning first-touch counts into first-touch REVENUE (which channels actually
 // drive sales, not just visits). Source/medium default to "(direct)"/"(none)" so every order lands in a row.
 model ChannelRevenueDaily {
-  shopDomain String
-  date       String // YYYY-MM-DD (UTC)
-  source     String
-  medium     String
-  orders     Int      @default(0)
-  revenue    Float    @default(0)
-  updatedAt  DateTime @updatedAt
+  shopDomain          String
+  date                String // YYYY-MM-DD (UTC)
+  source              String
+  medium              String
+  orders              Int      @default(0)
+  revenue             Float    @default(0)
+  // Subscription split. Recurring renewals never fire a storefront checkout, so GA4 structurally cannot
+  // give them a channel (no browser session to inherit a source from) — but WE can: the customer's
+  // first-touch source is replayed onto every renewal. This is the answer to "which channel actually
+  // drove our subscription revenue", and it's the number GA4 will only ever report as Unassigned.
+  // One-off revenue = revenue - subscriptionRevenue.
+  subscriptionOrders  Int      @default(0)
+  subscriptionRevenue Float    @default(0)
+  updatedAt           DateTime @updatedAt
 
   @@id([shopDomain, date, source, medium])
   @@index([shopDomain, date])

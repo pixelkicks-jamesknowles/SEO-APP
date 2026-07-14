@@ -42,6 +42,8 @@ async function buildReport(shopDomain) {
     channels: revenue.channels.slice(0, 15),
     channelTotalRevenue: revenue.totalRevenue,
     channelTotalOrders: revenue.totalOrders,
+    channelSubscriptionRevenue: revenue.totalSubscriptionRevenue,
+    channelSubscriptionOrders: revenue.totalSubscriptionOrders,
     identity,
   };
 }
@@ -143,7 +145,7 @@ export default function Attribution() {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -163,6 +165,11 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
             )}
             <InlineStack gap="400" wrap>
               <Stat title="Attributed revenue" value={fmtMoney(channelTotalRevenue)} sub={`${channelTotalOrders.toLocaleString()} orders, last 90 days`} />
+              <Stat
+                title="Subscription revenue attributed"
+                value={fmtMoney(channelSubscriptionRevenue)}
+                sub={`${channelSubscriptionOrders.toLocaleString()} renewals — GA4 reports these as Unassigned`}
+              />
               <Stat title="Tracked visitors" value={totalVisitors.toLocaleString()} sub="With a known first-touch source" />
               <Stat title="Identified" value={identity.identified.toLocaleString()} sub={`of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`} />
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
@@ -171,16 +178,31 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
             {channels.length > 0 && (
               <Card>
                 <BlockStack gap="300">
-                  <SectionHeading title="Revenue by channel" description="Order revenue attributed to the source/medium that first acquired the visitor (first-touch), over the last 90 days. From pixel-captured purchases with a known channel." />
+                  <SectionHeading
+                    title="Revenue by channel"
+                    description="Every paid order's revenue attributed to the source/medium that first acquired the customer (first-touch), over the last 90 days — from the orders/paid webhook, so it includes recurring subscription renewals."
+                  />
+                  {channelSubscriptionRevenue > 0 && (
+                    <Banner tone="info" title={`${fmtMoney(channelSubscriptionRevenue)} of subscription revenue is attributed here — GA4 cannot attribute it`}>
+                      <p>
+                        A recurring renewal has no browser session, so GA4 has no session to take a channel
+                        from and reports it as <b>Unassigned</b> forever. This report replays the channel that
+                        originally <b>acquired the subscriber</b> onto each renewal, so you can see which
+                        channels actually drive your subscription revenue.
+                      </p>
+                    </Banner>
+                  )}
                   <Divider />
                   <Table
-                    caption="Channels grouped by first-touch source and medium, with orders, revenue, AOV and revenue share"
-                    head={["Source / Medium", "Orders", "Revenue", "AOV", "Share"]}
+                    caption="Channels grouped by first-touch source and medium, with orders, revenue split into subscription and one-off, AOV and revenue share"
+                    head={["Source / Medium", "Orders", "Revenue", "Subscription", "One-off", "AOV", "Share"]}
                     rows={channels.map((r) => (
                       <tr key={`${r.source}/${r.medium}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
                         <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.orders.toLocaleString()}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.revenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.subscriptionRevenue > 0 ? undefined : "subdued"}>{fmtMoney(r.subscriptionRevenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.oneOffRevenue)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.aov)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
                       </tr>

@@ -57,11 +57,50 @@ describe("byChannelRevenue", () => {
     ]);
     expect(totalOrders).toBe(4);
     expect(totalRevenue).toBe(350);
-    expect(channels[0]).toEqual({ source: "google", medium: "cpc", orders: 3, revenue: 300, aov: 100, share: 86 });
-    expect(channels[1]).toEqual({ source: "(direct)", medium: "(none)", orders: 1, revenue: 50, aov: 50, share: 14 });
+    // Rows with no subscription columns (all revenue is one-off) still reconcile.
+    expect(channels[0]).toEqual({ source: "google", medium: "cpc", orders: 3, revenue: 300, aov: 100, share: 86, subscriptionOrders: 0, subscriptionRevenue: 0, oneOffRevenue: 300 });
+    expect(channels[1]).toEqual({ source: "(direct)", medium: "(none)", orders: 1, revenue: 50, aov: 50, share: 14, subscriptionOrders: 0, subscriptionRevenue: 0, oneOffRevenue: 50 });
   });
 
   test("empty input → zero totals, no channels", () => {
-    expect(byChannelRevenue([])).toEqual({ channels: [], totalRevenue: 0, totalOrders: 0 });
+    expect(byChannelRevenue([])).toEqual({ channels: [], totalRevenue: 0, totalOrders: 0, totalSubscriptionRevenue: 0, totalSubscriptionOrders: 0 });
+  });
+});
+
+// Recurring renewals carry the customer's first-touch source, so this report answers "which channel drove
+// our subscription revenue" — the question GA4 structurally cannot answer (a renewal has no browser
+// session, so GA4 can only ever report it as Unassigned).
+describe("byChannelRevenue — subscription split", () => {
+  const rows = [
+    { source: "google", medium: "cpc", orders: 4, revenue: 400, subscriptionOrders: 3, subscriptionRevenue: 300 },
+    { source: "google", medium: "cpc", orders: 1, revenue: 100, subscriptionOrders: 1, subscriptionRevenue: 100 },
+    { source: "klaviyo", medium: "email", orders: 2, revenue: 50, subscriptionOrders: 0, subscriptionRevenue: 0 },
+  ];
+
+  test("aggregates subscription revenue per channel, and one-off reconciles to the total", () => {
+    const { channels } = byChannelRevenue(rows);
+    const google = channels.find((c) => c.source === "google");
+    expect(google.revenue).toBe(500);
+    expect(google.subscriptionRevenue).toBe(400);
+    expect(google.oneOffRevenue).toBe(100); // 500 - 400
+    expect(google.subscriptionOrders).toBe(4);
+
+    const email = channels.find((c) => c.source === "klaviyo");
+    expect(email.subscriptionRevenue).toBe(0);
+    expect(email.oneOffRevenue).toBe(50);
+  });
+
+  test("returns subscription grand totals", () => {
+    const r = byChannelRevenue(rows);
+    expect(r.totalRevenue).toBe(550);
+    expect(r.totalSubscriptionRevenue).toBe(400);
+    expect(r.totalSubscriptionOrders).toBe(4);
+  });
+
+  test("legacy rows without the split columns still total correctly (no NaN)", () => {
+    const r = byChannelRevenue([{ source: "google", medium: "cpc", orders: 1, revenue: 100 }]);
+    expect(r.totalRevenue).toBe(100);
+    expect(r.totalSubscriptionRevenue).toBe(0);
+    expect(r.channels[0].oneOffRevenue).toBe(100);
   });
 });

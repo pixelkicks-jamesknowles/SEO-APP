@@ -67,17 +67,19 @@ test("happy path: a real event is buffered and fanned out to GA4", async () => {
   expect(prisma.deliveryOutbox.create).not.toHaveBeenCalled(); // nothing failed → nothing queued
 });
 
-test("a purchase bumps revenue-by-channel from its first-touch source (raw order value)", async () => {
+// Revenue-by-channel MOVED to the orders/paid webhook, which is the only path that sees recurring
+// subscription renewals (they never fire a storefront checkout, so this pixel path silently excluded them
+// and the Attribution report was missing subscription revenue entirely). Recording it in both places would
+// double-count every one-off order, so ingest must NOT touch it. See tests/webhooks-orders-paid.test.js.
+test("a purchase does NOT bump revenue-by-channel here — orders/paid owns it (no double-count)", async () => {
   prisma.visitorAttribution.findUnique.mockResolvedValue({ source: "google", medium: "cpc", visits: 2 });
   await ingestEvent(
     SHOP,
     { event: { name: "checkout_completed", clientId: "1.1", userAgent: "Mozilla/5.0 Chrome/120", data: { checkout: { currencyCode: "USD", totalPrice: { amount: 250, currencyCode: "USD" }, order: { id: "9001" }, lineItems: [] } } } },
     undefined,
   );
-  expect(prisma.channelRevenueDaily.upsert).toHaveBeenCalledTimes(1);
-  const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
-  expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "google", medium: "cpc" });
-  expect(call.create).toMatchObject({ orders: 1, revenue: 250 });
+  expect(prisma.channelRevenueDaily.upsert).not.toHaveBeenCalled();
+  expect(gaCalls()).toHaveLength(1); // the purchase itself still delivers
 });
 
 test("durable id stands in as the GA4 client_id when no _ga/_shopify_y id is present", async () => {

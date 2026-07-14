@@ -107,19 +107,46 @@ export async function recordDeliveries(shopDomain, results, { countPurchases = t
   });
 }
 
-// Revenue-by-channel: attribute one order's revenue to its acquisition channel (first-touch
-// source/medium, else "(direct)"/"(none)") for the Attribution report. Bumped once per pixel-captured
-// checkout_completed (ingest dedups the event), so it never double-counts. Best-effort.
-export async function recordChannelRevenue(shopDomain, { source, medium, revenue } = {}) {
+/**
+ * Revenue-by-channel: attribute one paid order's revenue to its acquisition channel (first-touch
+ * source/medium, else "(direct)"/"(none)") for the Attribution report.
+ *
+ * Driven from the **orders/paid webhook** — Shopify's source of truth, and the ONLY path that sees
+ * recurring subscription renewals. Renewals never fire a storefront checkout, so the pixel/ingest path
+ * never saw them and their revenue was missing from this report entirely. A renewal inherits the
+ * customer's FIRST-TOUCH source, which is the honest answer to "which channel acquired this subscriber"
+ * — and the number GA4 structurally cannot produce (a renewal has no browser session to take a channel
+ * from, so GA4 can only ever report it as Unassigned).
+ *
+ * `isSubscription` splits the row so the report can show subscription vs one-off revenue per channel.
+ * Idempotent via the orders/paid ProcessedWebhook gate (one call per order). Best-effort.
+ */
+export async function recordChannelRevenue(shopDomain, { source, medium, revenue, isSubscription = false } = {}) {
   const rev = Number(revenue) || 0;
   const date = today();
   const src = source || "(direct)";
   const med = medium || "(none)";
+  const subOrders = isSubscription ? 1 : 0;
+  const subRevenue = isSubscription ? rev : 0;
   await prisma.channelRevenueDaily
     .upsert({
       where: { shopDomain_date_source_medium: { shopDomain, date, source: src, medium: med } },
-      create: { shopDomain, date, source: src, medium: med, orders: 1, revenue: rev },
-      update: { orders: { increment: 1 }, revenue: { increment: rev } },
+      create: {
+        shopDomain,
+        date,
+        source: src,
+        medium: med,
+        orders: 1,
+        revenue: rev,
+        subscriptionOrders: subOrders,
+        subscriptionRevenue: subRevenue,
+      },
+      update: {
+        orders: { increment: 1 },
+        revenue: { increment: rev },
+        subscriptionOrders: { increment: subOrders },
+        subscriptionRevenue: { increment: subRevenue },
+      },
     })
     .catch(() => {});
 }

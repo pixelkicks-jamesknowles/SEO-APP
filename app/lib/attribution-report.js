@@ -48,31 +48,57 @@ export function firstVsLastShift(rows = []) {
 }
 
 /** Group per-day channel revenue rows (ChannelRevenueDaily) by source/medium into totals + AOV, sorted
- *  by revenue desc. Turns first-touch counts into first-touch REVENUE. Also returns the grand total. */
+ *  by revenue desc. Turns first-touch counts into first-touch REVENUE. Also returns the grand total.
+ *
+ *  Splits SUBSCRIPTION revenue out per channel. Recurring renewals carry the customer's first-touch
+ *  source, so this answers "which channel actually drove our subscription revenue" — the question GA4
+ *  structurally cannot answer (a renewal has no browser session, so GA4 reports it as Unassigned). */
 export function byChannelRevenue(rows = []) {
   const map = new Map();
   let totalRevenue = 0;
   let totalOrders = 0;
+  let totalSubscriptionRevenue = 0;
+  let totalSubscriptionOrders = 0;
   for (const r of rows) {
     const key = labelOf(r.source, r.medium);
-    const agg = map.get(key) || { source: r.source || "(direct)", medium: r.medium || "(none)", orders: 0, revenue: 0 };
+    const agg = map.get(key) || {
+      source: r.source || "(direct)",
+      medium: r.medium || "(none)",
+      orders: 0,
+      revenue: 0,
+      subscriptionOrders: 0,
+      subscriptionRevenue: 0,
+    };
     agg.orders += Number(r.orders) || 0;
     agg.revenue += Number(r.revenue) || 0;
+    agg.subscriptionOrders += Number(r.subscriptionOrders) || 0;
+    agg.subscriptionRevenue += Number(r.subscriptionRevenue) || 0;
     map.set(key, agg);
     totalOrders += Number(r.orders) || 0;
     totalRevenue += Number(r.revenue) || 0;
+    totalSubscriptionOrders += Number(r.subscriptionOrders) || 0;
+    totalSubscriptionRevenue += Number(r.subscriptionRevenue) || 0;
   }
   const round = (n) => Math.round(n * 100) / 100;
   const channels = [...map.values()]
     .map((a) => ({
       ...a,
       revenue: round(a.revenue),
+      subscriptionRevenue: round(a.subscriptionRevenue),
+      // One-off (non-subscription) revenue, so the two always reconcile to the total.
+      oneOffRevenue: round(a.revenue - a.subscriptionRevenue),
       aov: a.orders ? round(a.revenue / a.orders) : 0,
       // Share of total attributed revenue — the headline "which channels drive sales" number.
       share: totalRevenue > 0 ? Math.round((a.revenue / totalRevenue) * 100) : 0,
     }))
     .sort((a, b) => b.revenue - a.revenue);
-  return { channels, totalRevenue: round(totalRevenue), totalOrders };
+  return {
+    channels,
+    totalRevenue: round(totalRevenue),
+    totalOrders,
+    totalSubscriptionRevenue: round(totalSubscriptionRevenue),
+    totalSubscriptionOrders,
+  };
 }
 
 /** Group subscription first-order attribution (CustomerAttribution) by source/medium, sorted desc. */
