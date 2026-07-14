@@ -37,7 +37,7 @@ Set these in **Service → Variables**:
 | `DATABASE_URL` | Reference the Postgres plugin: `${{Postgres.DATABASE_URL}}` |
 | `SHOPIFY_API_KEY` | The app's client ID — `708d7107539ef297a6230ea9b0716a2a` (the `client_id` in `shopify.app.toml`) |
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
-| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence; omitting it silently breaks `subscription_interval`. `read_all_orders` powers the attribution backfill — see Step 5b) |
+| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence; omitting it silently breaks `subscription_interval`. Do **not** add `read_all_orders` until Shopify approves it — see Step 5b) |
 | `SHOPIFY_APP_URL` | The app's public host — currently the custom domain `https://tracking.pixelkicks.co.uk` (must match `application_url` in `shopify.app.toml`) |
 | `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Required in production: the app now fails to boot without it** (missing or malformed), so a silent fallback can't orphan credentials. **Set this before storing any server-side keys.** Once set, don't change it or stored credentials must be re-entered. |
 | `ALLOW_INSECURE_ENCRYPTION_FALLBACK` | *(optional escape hatch)* Set to `true` only for a deployment already bootstrapped on the `SHOPIFY_API_SECRET`-derived key: it downgrades the boot failure above to a warning so a redeploy isn't bricked while you migrate to a real `APP_ENCRYPTION_KEY`. Leave unset on new installs. |
@@ -140,15 +140,26 @@ Unassigned forever.
 *acquiring* order — the one carrying the UTMs / customer journey — is usually far older. Without
 `read_all_orders`, those customers can't have their channel recovered and show as **(unattributed)**.
 
-1. Partner/dev dashboard → your app → **API access** → request **`read_all_orders`**, with a justification
-   (e.g. *"Rebuild historical marketing attribution: credit subscription renewal revenue to the channel that
-   originally acquired the customer. Read-only; no order data leaves the merchant's own analytics."*).
-2. Shopify reviews it. Until it's granted the scope simply isn't given, and the backfill **degrades
-   gracefully** to the 60-day window — nothing breaks.
-3. Once approved, `shopify.app.toml` already lists it, so the next `npm run deploy` picks it up.
+> ⚠️ **Order matters — you cannot declare the scope before it's approved.** Putting `read_all_orders` in
+> `shopify.app.toml` while it's unapproved makes `shopify app deploy` fail outright with:
+> `Version couldn't be created. app_access — Validation errors: scopes: read_all_orders`.
+> So the scope is **deliberately not listed** in the toml today.
 
-> ⚠️ **Scope change = merchant re-consent.** Adding `read_all_orders` to the scope string means every
-> installed store must re-approve the app on the next deploy. Expect that, and tell the client first.
+Do it in this order:
+
+1. **Request it.** Dev dashboard → your app → **API access** → request **`read_all_orders`**, with a
+   justification, e.g.:
+   > *"Rebuild historical marketing attribution: credit subscription renewal revenue to the channel that
+   > originally acquired the customer. A renewal has no browser session so analytics tools cannot attribute
+   > it; we replay the customer's first-touch source from their acquiring order. Read-only; order data is
+   > only aggregated into the merchant's own reporting."*
+2. **Wait for Shopify to approve.** Until then, do nothing else — the backfill already **degrades gracefully**
+   to the 60-day window, so the feature works, just with shallower history.
+3. **Once approved**, add `read_all_orders` to the `scopes` string in `shopify.app.toml` **and** to the
+   `SCOPES` env var on Railway, then `npm run deploy`.
+
+> ⚠️ **That deploy triggers merchant re-consent.** Changing the scope string means every installed store
+> must re-approve the app. Tell the client before you deploy.
 
 ## Step 6 — Per-client setup (in the app)
 For each installed store:

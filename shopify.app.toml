@@ -21,15 +21,18 @@ automatically_update_urls_on_dev = true
 #   read_products        — read the SellingPlan deliveryPolicy (subscription cadence → subscription_interval);
 #                          the order's LineItemSellingPlan is under read_orders, but the SellingPlan object
 #                          itself is products-domain, so resolveIntervalDays needs read_products.
-#   read_all_orders      — revenue-by-channel BACKFILL. read_orders only exposes the LAST 60 DAYS, but an
-#                          established subscriber's ACQUIRING order (the one carrying the customer journey /
-#                          UTMs) is often years old — so without this we can never recover which channel
-#                          actually won them, and their renewal revenue reports as "(unattributed)" forever.
-#                          ⚠️ Shopify must APPROVE this scope (Partner Dashboard → API access → request it,
-#                          with a justification). Until approved it is simply not granted and the backfill
-#                          degrades gracefully to the 60-day window.
+#
+# read_all_orders — NOT listed, deliberately. The attribution backfill would love it (read_orders only
+#   exposes the LAST 60 DAYS, and an established subscriber's ACQUIRING order — the one carrying the
+#   customer journey / UTMs — is usually far older, so without it those customers can't have their channel
+#   recovered and show as "(unattributed)"). BUT Shopify REJECTS the app version if you declare a scope it
+#   hasn't approved:  "Version couldn't be created. app_access — scopes: read_all_orders".
+#   Correct order: request it (dev dashboard → API access) and WAIT FOR APPROVAL, then add it here and
+#   redeploy. Until then the backfill degrades gracefully to the 60-day window — nothing breaks.
+#   See DEPLOY.md Step 5b.
+#
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products"
+scopes = "write_pixels,read_customer_events,read_orders,read_fulfillments,read_products"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
