@@ -120,6 +120,9 @@ async function clearWindow(shopDomain, sinceDate) {
   await prisma.unattributedOrder
     .deleteMany({ where: { shopDomain, date: { gte: sinceDate, lt: todayUtc() } } })
     .catch(() => {});
+  // Lifetime is all-history (not window-bounded), so a fresh run resets ALL of it and recomputes from the
+  // full scan — that's what keeps the increments idempotent across re-runs.
+  await prisma.customerLifetime.deleteMany({ where: { shopDomain } }).catch(() => {});
 }
 
 /**
@@ -128,7 +131,18 @@ async function clearWindow(shopDomain, sinceDate) {
  * advance (see the caller). Errors PROPAGATE — a failed write must roll the page back, not be swallowed,
  * or the increments could land without the cursor moving and double-count on retry.
  */
-async function persist(db, shopDomain, rows, learned, unattributedOrders = []) {
+async function persist(db, shopDomain, rows, learned, unattributedOrders = [], lifetimeUpdates = []) {
+  // Per-customer lifetime (for LTV / retention by channel). Increment — safe because the page commits
+  // atomically with the cursor, and a fresh backfill resets these rows (clearWindow). Backfill is
+  // oldest-first, so `create` captures the true firstOrderAt; lastOrderAt is bumped to each page's max.
+  for (const l of lifetimeUpdates) {
+    if (!l.customerKey) continue;
+    await db.customerLifetime.upsert({
+      where: { shopDomain_customerKey: { shopDomain, customerKey: l.customerKey } },
+      create: { shopDomain, customerKey: l.customerKey, revenue: l.revenueDelta, orders: l.orderDelta, firstOrderAt: l.firstOrderAt, lastOrderAt: l.lastOrderAt },
+      update: { revenue: { increment: l.revenueDelta }, orders: { increment: l.orderDelta }, lastOrderAt: l.lastOrderAt },
+    });
+  }
   // The individual (unattributed) orders — upsert by orderId so a re-processed page (lease expiry, retry)
   // can't duplicate them, unlike the increment-based aggregate rows.
   for (const o of unattributedOrders) {
@@ -260,7 +274,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
 
       const orders = (conn.nodes || []).map(toOrder);
       // revenueSince gates REVENUE only — first touch is still learned from every order we scan.
-      const { rows, learned, unattributed: pageUnattributed, unattributedOrders } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
+      const { rows, learned, unattributed: pageUnattributed, unattributedOrders, lifetimeUpdates } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
 
       // Next-page state, held in locals until the write commits — so a failure leaves cursor/processed at
       // their last committed values and the page simply re-runs next tick.
@@ -275,7 +289,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       try {
         await prisma.$transaction(
           async (tx) => {
-            await persist(tx, shopDomain, rows, learned, unattributedOrders);
+            await persist(tx, shopDomain, rows, learned, unattributedOrders, lifetimeUpdates);
             await tx.backfillJob.updateMany({
               where: { shopDomain, leaseToken: token },
               data: { cursor: nextCursor, ordersProcessed: nextProcessed, breakdown: JSON.stringify(nextBreakdown) },

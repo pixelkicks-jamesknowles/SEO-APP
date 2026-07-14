@@ -318,6 +318,25 @@ model BackfillJob {
   updatedAt       DateTime  @updatedAt
 }
 
+// Per-customer LIFETIME totals, populated by the backfill (which scans full history) and joined to
+// CustomerAttribution at report time for LTV / retention by acquiring channel. Kept separate from
+// CustomerAttribution so it doesn't pollute that table's first-touch semantics (unattributed customers get
+// a lifetime row but no attribution row). Increment-safe: each page's writes commit atomically with the
+// cursor, and a fresh backfill resets these rows, so a re-run recomputes from scratch. Backfill-owned (the
+// live path doesn't touch it), so "LTV as of the last backfill".
+model CustomerLifetime {
+  shopDomain   String
+  customerKey  String
+  revenue      Float    @default(0)
+  orders       Int      @default(0)
+  firstOrderAt String? // YYYY-MM-DD, earliest order seen (backfill is oldest-first, so set on create)
+  lastOrderAt  String? // YYYY-MM-DD, latest order seen
+  updatedAt    DateTime @updatedAt
+
+  @@id([shopDomain, customerKey])
+  @@index([shopDomain])
+}
+
 // The individual orders that landed in the (unattributed) bucket during the backfill, so the report can
 // LIST and EXPORT them rather than only show an aggregate — and, critically, split "migrated in from
 // another platform" (imported orders that never had a Shopify journey; expected, permanent) from genuinely

@@ -1,4 +1,4 @@
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, channelGroupOf, byChannelGroup, visitAttribution } from "../app/lib/attribution-report.js";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, channelGroupOf, byChannelGroup, visitAttribution, ltvByChannel } from "../app/lib/attribution-report.js";
 
 const visitors = [
   { source: "google", medium: "cpc", visits: 3, lastSource: "google" },
@@ -174,5 +174,35 @@ describe("visitAttribution (storefront first-touch: UTMs, else referrer)", () =>
     expect(visitAttribution(null, null)).toBeNull();
     expect(visitAttribution({}, "")).toBeNull();
     expect(visitAttribution(null, "not a url")).toBeNull();
+  });
+});
+
+describe("ltvByChannel", () => {
+  const customers = [
+    { customerKey: "1", source: "google", medium: "cpc" },
+    { customerKey: "2", source: "google", medium: "cpc" },
+    // customer 3 has lifetime but no attribution row → (unattributed)
+  ];
+  const lifetimes = [
+    { customerKey: "1", revenue: 300, orders: 4, lastOrderAt: "2026-07-10" },
+    { customerKey: "2", revenue: 100, orders: 1, lastOrderAt: "2026-01-01" },
+    { customerKey: "3", revenue: 500, orders: 6, lastOrderAt: "2026-07-12" },
+  ];
+
+  test("computes LTV, repeat and active rates by channel, and buckets unattributed", () => {
+    const rows = ltvByChannel(customers, lifetimes, { activeWithinDays: 60, asOf: "2026-07-14" });
+    const google = rows.find((r) => r.source === "google");
+    expect(google).toMatchObject({ customers: 2, revenue: 400, ltv: 200, avgOrders: 2.5, repeatRate: 50, activeRate: 50 });
+    const un = rows.find((r) => r.source === "(unattributed)");
+    expect(un).toMatchObject({ customers: 1, ltv: 500, repeatRate: 100, activeRate: 100 });
+  });
+
+  test("sorted by LTV descending", () => {
+    const rows = ltvByChannel(customers, lifetimes, { asOf: "2026-07-14" });
+    expect(rows[0].source).toBe("(unattributed)"); // 500 > 200
+  });
+
+  test("empty input → empty array", () => {
+    expect(ltvByChannel([], [])).toEqual([]);
   });
 });

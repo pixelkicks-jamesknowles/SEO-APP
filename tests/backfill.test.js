@@ -290,3 +290,26 @@ describe("foldOrders: per-order unattributed export", () => {
     expect(mergeUnattributed(a, b).migratedOrders).toBe(7);
   });
 });
+
+describe("foldOrders: per-customer lifetime (for LTV)", () => {
+  test("aggregates a customer's orders across a page, counting ALL orders (not just the revenue window)", () => {
+    const c = { id: "gid://shopify/Customer/9" };
+    const { lifetimeUpdates } = foldOrders(
+      [
+        order({ id: "o1", createdAt: "2024-01-01T10:00:00Z", customer: c, totalPrice: 30 }), // before window
+        order({ id: "o2", createdAt: "2026-07-01T10:00:00Z", customer: c, totalPrice: 40 }), // in window
+        order({ id: "o3", createdAt: "2026-07-05T10:00:00Z", customer: c, totalPrice: 50 }),
+      ],
+      new Map(),
+      { revenueSince: "2026-06-01" },
+    );
+    expect(lifetimeUpdates).toEqual([
+      { customerKey: "9", revenueDelta: 120, orderDelta: 3, firstOrderAt: "2024-01-01", lastOrderAt: "2026-07-05" },
+    ]);
+  });
+
+  test("guests (no customer) get no lifetime row", () => {
+    const { lifetimeUpdates } = foldOrders([order({ customer: null, totalPrice: 10 })], new Map(), {});
+    expect(lifetimeUpdates).toEqual([]);
+  });
+});

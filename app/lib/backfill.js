@@ -123,12 +123,26 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   // The individual orders in that bucket, so the report can list/export them and split migrated-in from
   // genuinely lost. Windowed exactly like the counters (only orders >= revenueSince land here).
   const unattributedOrders = [];
+  // Per-customer lifetime deltas for THIS page — counts EVERY scanned order (all history), NOT just the
+  // revenue window, because LTV is a lifetime figure. Aggregated per customer so the caller does one write.
+  const lifetime = new Map();
 
   for (const order of orders) {
     const date = dayOf(order?.createdAt);
     if (!date) continue;
 
     const key = orderCustomerKey(order);
+
+    // Lifetime accumulation happens for every scanned order, before the revenue-window gate below.
+    if (key) {
+      const lt = lifetime.get(key) || { revenueDelta: 0, orderDelta: 0, firstOrderAt: date, lastOrderAt: date };
+      lt.revenueDelta = round2(lt.revenueDelta + (Number(order?.totalPrice) || 0));
+      lt.orderDelta += 1;
+      if (date < lt.firstOrderAt) lt.firstOrderAt = date;
+      if (date > lt.lastOrderAt) lt.lastOrderAt = date;
+      lifetime.set(key, lt);
+    }
+
     // The channel this order can see for itself (a renewal sees nothing).
     const own = channelFromJourney(order?.customerJourneySummary);
 
@@ -202,7 +216,8 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   }));
   unattributed.revenue = round2(unattributed.revenue);
   unattributed.subscriptionRevenue = round2(unattributed.subscriptionRevenue);
-  return { rows: out, firstTouch, learned, unattributed, unattributedOrders };
+  const lifetimeUpdates = [...lifetime.entries()].map(([customerKey, v]) => ({ customerKey, ...v }));
+  return { rows: out, firstTouch, learned, unattributed, unattributedOrders, lifetimeUpdates };
 }
 
 export function emptyUnattributed() {

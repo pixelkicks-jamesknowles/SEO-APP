@@ -192,6 +192,45 @@ export function byChannelRevenue(rows = []) {
   };
 }
 
+/**
+ * Lifetime value + retention by ACQUIRING channel. Joins per-customer lifetime totals (CustomerLifetime,
+ * from the backfill) to their first-touch channel (CustomerAttribution). Customers with lifetime but no
+ * attribution row fall into "(unattributed)" — kept honest, not folded into a real channel.
+ *
+ * Per channel: customers, total + average lifetime revenue (LTV), average orders, repeat rate (>1 order)
+ * and active rate (ordered within `activeWithinDays`). Sorted by LTV desc. Pure.
+ */
+export function ltvByChannel(customers = [], lifetimes = [], { activeWithinDays = 60, asOf = null } = {}) {
+  const attrByKey = new Map(customers.map((c) => [c.customerKey, c]));
+  const now = asOf ? new Date(asOf) : new Date();
+  const activeSince = new Date(now.getTime() - activeWithinDays * 86400000).toISOString().slice(0, 10);
+  const map = new Map();
+  for (const lt of lifetimes) {
+    const c = attrByKey.get(lt.customerKey);
+    const source = c?.source || "(unattributed)";
+    const medium = c?.medium || "(none)";
+    const key = `${source} / ${medium}`;
+    const agg = map.get(key) || { source, medium, customers: 0, revenue: 0, orders: 0, repeat: 0, active: 0 };
+    agg.customers += 1;
+    agg.revenue += Number(lt.revenue) || 0;
+    agg.orders += Number(lt.orders) || 0;
+    if ((Number(lt.orders) || 0) > 1) agg.repeat += 1;
+    if (lt.lastOrderAt && lt.lastOrderAt >= activeSince) agg.active += 1;
+    map.set(key, agg);
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  return [...map.values()]
+    .map((a) => ({
+      ...a,
+      revenue: round(a.revenue),
+      ltv: a.customers ? round(a.revenue / a.customers) : 0,
+      avgOrders: a.customers ? round(a.orders / a.customers) : 0,
+      repeatRate: a.customers ? Math.round((a.repeat / a.customers) * 100) : 0,
+      activeRate: a.customers ? Math.round((a.active / a.customers) * 100) : 0,
+    }))
+    .sort((a, b) => b.ltv - a.ltv);
+}
+
 /** Group subscription first-order attribution (CustomerAttribution) by source/medium, sorted desc. */
 export function bySubscriptionSource(rows = []) {
   const map = new Map();

@@ -5,7 +5,7 @@ import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Butt
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup } from "../lib/attribution-report";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel } from "../lib/attribution-report";
 import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
 
@@ -37,14 +37,17 @@ async function buildReport(shopDomain) {
   // aggregate as if it were the whole history.
   const SCAN_CAP = 5000;
   const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [visitors, customers, channelRows, identity] = await Promise.all([
+  const [visitors, customers, channelRows, identity, lifetimes] = await Promise.all([
     prisma.visitorAttribution.findMany({ where: { shopDomain }, orderBy: { lastSeen: "desc" }, take: SCAN_CAP }),
     prisma.customerAttribution.findMany({ where: { shopDomain }, orderBy: { updatedAt: "desc" }, take: SCAN_CAP }),
     prisma.channelRevenueDaily.findMany({ where: { shopDomain, date: { gte: since90 } } }).catch(() => []),
     identityStats(shopDomain),
+    // Per-customer lifetime (backfill-populated) → LTV / retention by acquiring channel.
+    prisma.customerLifetime.findMany({ where: { shopDomain }, take: SCAN_CAP }).catch(() => []),
   ]);
   const revenue = byChannelRevenue(channelRows);
   const channelGroups = byChannelGroup(channelRows);
+  const ltv = ltvByChannel(customers, lifetimes).slice(0, 15);
   return {
     totalVisitors: visitors.length,
     capped: visitors.length >= SCAN_CAP || customers.length >= SCAN_CAP,
@@ -56,6 +59,7 @@ async function buildReport(shopDomain) {
     subSources: bySubscriptionSource(customers).slice(0, 15),
     channels: revenue.channels.slice(0, 15),
     channelGroups,
+    ltv,
     channelTotalRevenue: revenue.totalRevenue,
     channelTotalOrders: revenue.totalOrders,
     channelSubscriptionRevenue: revenue.totalSubscriptionRevenue,
@@ -331,7 +335,7 @@ function BackfillCard({ backfill }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -381,6 +385,33 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.oneOffRevenue)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.aov)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
+                      </tr>
+                    ))}
+                  />
+                </BlockStack>
+              </Card>
+            )}
+
+            {ltv.length > 0 && (
+              <Card>
+                <BlockStack gap="300">
+                  <SectionHeading
+                    title="Lifetime value by acquiring channel"
+                    description="Each customer's TOTAL lifetime revenue (all their orders, from the backfill's full-history scan) grouped by the channel that first acquired them — the metric that tells you where to spend acquisition budget, not just which channel drove one order. Repeat = customers with more than one order; Active = ordered in the last 60 days. Reflects the last backfill."
+                  />
+                  <Divider />
+                  <Table
+                    caption="Customers, average lifetime value, average orders, repeat rate and active rate by acquiring channel"
+                    head={["Source / Medium", "Customers", "Avg LTV", "Total LTV", "Avg orders", "Repeat", "Active"]}
+                    rows={ltv.map((r) => (
+                      <tr key={`${r.source}/${r.medium}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
+                        <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.customers.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.ltv)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.revenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.avgOrders}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.repeatRate}%</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.activeRate}%</Text></td>
                       </tr>
                     ))}
                   />
