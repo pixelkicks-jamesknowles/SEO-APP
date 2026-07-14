@@ -75,6 +75,18 @@ export function evaluateHealth(metrics = {}) {
       body: "Server-side delivery may be off, the pixel may not be firing at checkout, or the GA4 secret may be wrong. Open Accuracy and Settings to check.",
     });
   }
+  // Critical: a scheduled connection check is failing → the destination is rejecting our sends outright
+  // (wrong secret, measurement id on the wrong data stream). This is the silent-breakage class the check
+  // exists to catch, so it ranks with the other criticals.
+  for (const f of m.connectionFailures || []) {
+    const dest = String(f.destination || "destination").toUpperCase();
+    alerts.push({
+      kind: `connection_${f.destination}`,
+      severity: "critical",
+      title: `${dest} connection check is failing`,
+      body: `A scheduled test event to ${dest} was rejected: ${f.detail || "unknown error"}. Check the measurement ID and API secret on Settings — they must belong to the same data stream. Nothing is reaching ${dest} until this is fixed.`,
+    });
+  }
   // Warning: capture rate below target (usually consent declines or the pixel missing some checkouts).
   if (captureRate != null && captureRate < CAPTURE_MIN) {
     alerts.push({

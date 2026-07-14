@@ -18,6 +18,7 @@ import { reconcilePending } from "../lib/reconcile.server";
 import { processPendingSubscriptions } from "../lib/subscription-cron.server";
 import { refreshFxRates } from "../lib/fx.server";
 import { runAlerts } from "../lib/alerting.server";
+import { runConnectionChecks } from "../lib/connection-check.server";
 import { recordTick } from "../lib/heartbeat.server";
 import { processBackfill } from "../lib/backfill.server";
 
@@ -64,7 +65,7 @@ async function tick() {
   // ticks (the cron fires frequently) rather than risking a double-send.
   const startedAt = Date.now();
   try {
-    const [outbox, reconciled, subscriptions, fx, purged, alerts, backfill] = await Promise.all([
+    const [outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill] = await Promise.all([
       drainOutbox({ limit: 40 }),
       reconcilePending({ graceMinutes: 20, limit: 8 }),
       // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
@@ -72,6 +73,9 @@ async function tick() {
       processPendingSubscriptions({ limit: 6 }),
       refreshFxRates(),
       purge(),
+      // Scheduled GA4 connection verification (throttled to every ~6h/shop, so most ticks are a no-op). A
+      // failure is stored and surfaces as a health alert on the next runAlerts pass. Best-effort.
+      runConnectionChecks().catch(() => ({ checked: 0, failing: 0 })),
       // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
       // an alerting failure must never wedge the outbox/reconcile work above.
       runAlerts().catch(() => ({ shops: 0, notified: 0 })),
@@ -79,9 +83,9 @@ async function tick() {
       // resumable, so a long history drains over many ticks. Best-effort — it must never wedge delivery.
       processBackfill().catch((e) => ({ ran: 0, error: String(e?.message || e).slice(0, 120) })),
     ]);
-    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts, backfill };
+    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill };
     // Stamp the heartbeat so the app can tell the worker is alive (dashboard tile + cron_stale alert).
-    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, alerts, backfill } });
+    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill } });
     return result;
   } catch (e) {
     // Record the failed run too (the worker is up, just erroring) so it shows as "last run errored" rather

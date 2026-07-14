@@ -340,6 +340,20 @@ model UnattributedOrder {
   @@index([shopDomain, date])
 }
 
+// Latest result of the scheduled connection check per destination. The cron periodically sends a GA4
+// validation hit (the debug endpoint validates the measurement id + API secret WITHOUT ingesting, so it's
+// safe to run on a schedule — Meta's validator injects a live event, so Meta stays on-demand). A failing
+// row is surfaced by computeHealth as a health alert, flowing through the in-app banners and the webhook.
+model ConnectionCheck {
+  shopDomain  String
+  destination String // ga4 (Meta/others verified on-demand only)
+  ok          Boolean
+  detail      String? // rejection reason when !ok
+  checkedAt   DateTime @default(now())
+
+  @@id([shopDomain, destination])
+}
+
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
 // order id). Purged on a TTL by the existing cron.audit job.
 model ProcessedWebhook {

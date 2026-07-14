@@ -104,3 +104,21 @@ describe("dataQualityScore", () => {
     expect(h.quality).toEqual({ score: 100, grade: "A", label: "Excellent" });
   });
 });
+
+describe("connection-check alerts", () => {
+  test("a failing scheduled connection check becomes a critical alert", () => {
+    const h = evaluateHealth({
+      ordersPaid30: 10, purchasesDelivered30: 10, eventsSent30: 10, eventsFailed30: 0,
+      connectionFailures: [{ destination: "ga4", detail: "No GA4 Measurement Protocol secret saved." }],
+    });
+    const a = h.alerts.find((x) => x.kind === "connection_ga4");
+    expect(a).toBeTruthy();
+    expect(a.severity).toBe("critical");
+    expect(a.body).toContain("No GA4 Measurement Protocol secret saved.");
+  });
+
+  test("no connection failures → no connection alert", () => {
+    const h = evaluateHealth({ ordersPaid30: 10, purchasesDelivered30: 10, eventsSent30: 10, eventsFailed30: 0 });
+    expect(h.alerts.some((x) => x.kind?.startsWith("connection_"))).toBe(false);
+  });
+});
