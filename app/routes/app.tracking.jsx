@@ -117,6 +117,7 @@ export const loader = async ({ request }) => {
     pixelDebug: t?.pixelDebug ?? false,
     refundTracking: t?.refundTracking ?? false,
     botFiltering: t?.botFiltering ?? true,
+    companionMode: t?.companionMode ?? false,
     valueMode: t?.valueMode ?? "revenue",
     marginPct: t?.marginPct ?? 0,
     reportingCurrency: t?.reportingCurrency ?? "",
@@ -181,6 +182,7 @@ export const action = async ({ request }) => {
     pixelDebug: form.get("pixelDebug") === "on",
     refundTracking: form.get("refundTracking") === "on",
     botFiltering: form.get("botFiltering") === "on",
+    companionMode: form.get("companionMode") === "on",
     serverSide: form.get("serverSide") === "on",
     valueMode,
     marginPct,
@@ -283,6 +285,7 @@ export default function Tracking() {
   const [serverSide, setServerSide] = useState(data.serverSide);
   const [refundTracking, setRefundTracking] = useState(data.refundTracking);
   const [botFiltering, setBotFiltering] = useState(data.botFiltering);
+  const [companionMode, setCompanionMode] = useState(data.companionMode);
   const [valueMode, setValueMode] = useState(data.valueMode);
   const [marginPct, setMarginPct] = useState(String(data.marginPct ?? 0));
   const [fxOn, setFxOn] = useState(data.fxMode === "on");
@@ -327,7 +330,7 @@ export default function Tracking() {
   const submit = useSubmit();
   const formRef = useRef(null);
   const snapshotOf = () =>
-    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, valueMode, marginPct, fxOn, reportingCurrency, lifecycleTracking, subTracking, subCfg, ids });
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, companionMode, valueMode, marginPct, fxOn, reportingCurrency, lifecycleTracking, subTracking, subCfg, ids });
   const snapshot = snapshotOf();
   const baseline = useRef(snapshot);
   const dirty = snapshot !== baseline.current;
@@ -355,6 +358,7 @@ export default function Tracking() {
     setServerSide(data.serverSide);
     setRefundTracking(data.refundTracking);
     setBotFiltering(data.botFiltering);
+    setCompanionMode(data.companionMode);
     setValueMode(data.valueMode);
     setMarginPct(String(data.marginPct ?? 0));
     setFxOn(data.fxMode === "on");
@@ -624,6 +628,13 @@ export default function Tracking() {
                 helpText="Stops crawler/headless traffic (often 20-30% of hits) from reaching ad platforms as fake conversions. Recommended on."
                 checked={botFiltering}
                 onChange={setBotFiltering}
+              />
+              <input type="hidden" name="companionMode" value={companionMode ? "on" : ""} />
+              <Checkbox
+                label="Companion mode - this store also runs Google's “Google & YouTube” app"
+                helpText="Turn on if another GA4 tag (the Google & YouTube app) already sends page views, product views and add-to-carts. We then send GA4 conversions only (purchase + subscription), so those page-level events aren't double-counted. Purchases dedupe by transaction_id; Meta and other destinations are unaffected."
+                checked={companionMode}
+                onChange={setCompanionMode}
               />
               <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
               <Checkbox

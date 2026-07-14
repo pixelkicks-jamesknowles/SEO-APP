@@ -78,6 +78,12 @@ model TrackingSettings {
   refundTracking       Boolean  @default(false)
   // Drop known bot / headless traffic before server-side delivery (default on).
   botFiltering         Boolean  @default(true)
+  // Companion mode: the store ALSO runs Google's "Google & YouTube" app (or another GA4 tag) that already
+  // sends page_view/view_item/add_to_cart etc. When on, we trim OUR GA4 + sGTM sends to conversions only
+  // (purchase), so those non-conversion events aren't double-counted. Purchases dedupe by transaction_id,
+  // and the orders/paid subscription path is unaffected (the G&Y app can't see renewals). Meta/other
+  // destinations are untouched. Off by default.
+  companionMode        Boolean  @default(false)
   // Value-based optimisation: send margin (revenue × marginPct) as the conversion `value` instead of
   // raw revenue, so ad platforms optimise for profit. Opt-in; raw revenue kept as a `revenue` param.
   valueMode            String   @default("revenue") // "revenue" | "margin"

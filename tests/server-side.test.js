@@ -356,3 +356,30 @@ describe("fanOutServerSide", () => {
     expect(urls.some((u) => u.startsWith("https://sgtm.example.com/g/collect"))).toBe(true);
   });
 });
+
+describe("companion mode (store also runs the Google & YouTube app)", () => {
+  const base = { serverSide: true, ga4Id: "G-1", eventMatrix: matrixAll, serverSideKeys: JSON.stringify({ ga4ApiSecret: "s" }) };
+  const pageEvent = { name: "page_viewed", id: "pv1", timestamp: "2026-06-26T10:00:00.000Z", context: { document: { location: { href: "https://shop.example.com/" } } } };
+  const ga4Called = () => global.fetch.mock.calls.some((c) => c[0].includes("google-analytics.com/mp/collect"));
+
+  test("suppresses a non-conversion GA4 event (the G&Y app already sends it)", async () => {
+    await fanOutServerSide({ ...base, companionMode: true }, pageEvent);
+    expect(ga4Called()).toBe(false);
+  });
+
+  test("still sends the GA4 purchase (dedupes against the G&Y app by transaction_id)", async () => {
+    await fanOutServerSide({ ...base, companionMode: true }, checkoutEvent);
+    expect(ga4Called()).toBe(true);
+  });
+
+  test("still sends custom/lead events (the G&Y app can't produce those)", async () => {
+    const lead = { name: "generate_lead", custom: true, id: "l1", timestamp: "2026-06-26T10:00:00.000Z", context: { document: { location: { href: "https://shop.example.com/" } } } };
+    await fanOutServerSide({ ...base, companionMode: true }, lead);
+    expect(ga4Called()).toBe(true);
+  });
+
+  test("control: with companion mode OFF the page view sends to GA4 as normal", async () => {
+    await fanOutServerSide({ ...base, companionMode: false }, pageEvent);
+    expect(ga4Called()).toBe(true);
+  });
+});

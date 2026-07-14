@@ -994,9 +994,16 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // Meta carries hashed PII, so it needs marketing consent. GA4/sGTM always send (consent-flagged) so
   // Google can model the no-consent gap (Consent Mode v2). Unknown consent → treated as granted.
   const marketingOk = !consent || consent.marketing;
+  // Companion mode: the store also runs the Google & YouTube app (or another GA4 tag) that already sends
+  // the non-conversion events (page_view/view_item/add_to_cart/scroll/…). To avoid double-counting those in
+  // GA4, we trim OUR GA4 + sGTM sends to CONVERSIONS only. Purchases still send (GA4 dedupes them by
+  // transaction_id, so overlap with the G&Y app is safe) and custom/lead events still send (the G&Y app
+  // can't produce those). Meta and the other destinations are untouched. sGTM is included because it
+  // forwards to the same GA4 property.
+  const companionSuppressed = (p) => settings.companionMode && (p === "ga4" || p === "gtm") && name !== "checkout_completed";
   // force (test sends) and custom/lead events (window.pxp.track) bypass the per-event matrix — they go
   // to every configured destination (still credential- and consent-gated).
-  const wants = (p) => force || event?.custom || platformWants(matrix, p, name);
+  const wants = (p) => (force ? true : event?.custom ? true : !companionSuppressed(p) && platformWants(matrix, p, name));
 
   // Build the GA4 event once; apply value-based optimisation (margin/COGS profit) to the purchase
   // conversion. event.orderCost (resolved from Shopify's per-variant cost on the ingest/reconcile path)
