@@ -51,10 +51,12 @@
     var m = document.cookie.match(/_ga=GA\d\.\d\.([\d.]+)/);
     return m ? m[1] : null;
   }
-  // GA4 session id, from the per-property `_ga_<CONTAINER>` cookie ("GS1.1.<sessionId>.<n>...").
-  // A correctly-configured store runs one GA4 property, so the first match is the right one.
+  // GA4 session id, from the per-property `_ga_<CONTAINER>` cookie. Two formats in the wild:
+  //   GS1.1.<sessionId>.<n>...           (older)
+  //   GS2.1.s<sessionId>$o9$g1$t...      (current — note the `s` prefix and $-delimiters)
+  // Accept both. A correctly-configured store runs one GA4 property, so the first match is the right one.
   function gaSessionId() {
-    var m = document.cookie.match(/_ga_[A-Z0-9]+=GS\d\.\d\.(\d+)/);
+    var m = document.cookie.match(/_ga_[A-Z0-9]+=GS\d\.\d\.s?(\d+)/);
     return m ? m[1] : null;
   }
 
