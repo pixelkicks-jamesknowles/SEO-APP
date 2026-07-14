@@ -70,20 +70,36 @@ function toOrder(node) {
   };
 }
 
+// How far back to SCAN, to learn each customer's acquiring channel. Much deeper than the revenue window on
+// purpose: a subscriber acquired 2 years ago still renews today, and their acquiring order is the ONLY one
+// that ever carried a customer journey. 3 years covers essentially any live subscription cohort. Requires
+// read_all_orders (past 60 days); without it Shopify just returns less and the job still completes.
+const HISTORY_DAYS = 1095;
+
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 /** Queue a backfill for a shop (idempotent — a running job is left alone). */
-export async function requestBackfill(shopDomain, { days = 90 } = {}) {
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+export async function requestBackfill(shopDomain, { days = 90, historyDays = HISTORY_DAYS } = {}) {
+  const since = daysAgo(days); // revenue window (what the report shows)
+  const historySince = daysAgo(Math.max(historyDays, days)); // scan window (to learn first touch)
   const existing = await prisma.backfillJob.findUnique({ where: { shopDomain } }).catch(() => null);
   if (existing?.status === "running") return { queued: false, detail: "already running" };
+  const fresh = {
+    status: "running",
+    sinceDate: since,
+    historySince,
+    cursor: null,
+    ordersProcessed: 0,
+    // breakdown reset too — a re-run must not accumulate on top of the previous run's counters.
+    breakdown: "{}",
+    detail: null,
+    startedAt: new Date(),
+    finishedAt: null,
+  };
   await prisma.backfillJob
-    .upsert({
-      where: { shopDomain },
-      // breakdown reset too — a re-run must not accumulate on top of the previous run's counters.
-      create: { shopDomain, status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, breakdown: "{}", startedAt: new Date() },
-      update: { status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, breakdown: "{}", detail: null, startedAt: new Date(), finishedAt: null },
-    })
+    .upsert({ where: { shopDomain }, create: { shopDomain, ...fresh }, update: fresh })
     .catch(() => {});
-  return { queued: true, since };
+  return { queued: true, since, historySince };
 }
 
 /** Clear the window we're about to rebuild, so a re-run can't double-count. Days < today only. */
@@ -179,9 +195,13 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       if (c.source) firstTouch.set(c.customerKey, { source: c.source, medium: c.medium, campaign: c.campaign });
     }
 
-    // `financial_status:paid` mirrors the orders/paid webhook, so backfilled history and live data count
-    // the same orders. Bounded to days < today: the live path owns today.
-    const query = `created_at:>=${job.sinceDate} created_at:<${todayUtc()} financial_status:paid`;
+    // Scan from historySince (deep — to LEARN each customer's acquiring channel), not from sinceDate.
+    // foldOrders only aggregates REVENUE from sinceDate onward, so the extra history teaches us first-touch
+    // without inflating the report with orders outside the window it covers.
+    // `financial_status:paid` mirrors the orders/paid webhook, so backfilled history and live data count the
+    // same orders. Bounded to days < today: the live path owns today.
+    const scanFrom = job.historySince || job.sinceDate;
+    const query = `created_at:>=${scanFrom} created_at:<${todayUtc()} financial_status:paid`;
 
     let hasNext = true;
     let pagesRun = 0;
@@ -209,7 +229,8 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       }
 
       const orders = (conn.nodes || []).map(toOrder);
-      const { rows, learned, unattributed: pageUnattributed } = foldOrders(orders, firstTouch);
+      // revenueSince gates REVENUE only — first touch is still learned from every order we scan.
+      const { rows, learned, unattributed: pageUnattributed } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
       await persist(shopDomain, rows, learned);
       unattributed = mergeUnattributed(unattributed, pageUnattributed);
 

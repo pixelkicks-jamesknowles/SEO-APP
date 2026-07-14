@@ -91,7 +91,18 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
  *
  * Returns { rows, firstTouch, learned } — rows keyed by date+source+medium, ready to increment.
  */
-export function foldOrders(orders = [], firstTouch = new Map()) {
+/**
+ * `revenueSince` (YYYY-MM-DD) splits the two windows this backfill deliberately keeps separate:
+ *
+ *   • FIRST TOUCH is learned from the ENTIRE order history. An established subscriber's *acquiring* order —
+ *     the only one that ever carried a customer journey — is often a year or more old. If we only look at
+ *     the reporting window we never see it, never learn their channel, and every renewal they've paid since
+ *     falls into (unattributed). That was 79% of Naturaw's unattributed revenue.
+ *   • REVENUE is only aggregated for dates >= revenueSince, because that's the window the report shows.
+ *
+ * So an old order can teach us a customer's channel while contributing no revenue row of its own.
+ */
+export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince = null } = {}) {
   const rows = new Map();
   const learned = [];
   // Diagnostic for the (unattributed) bucket. Without this, someone reading the report WILL assume the
@@ -119,6 +130,10 @@ export function foldOrders(orders = [], firstTouch = new Map()) {
     } else {
       ch = own; // guest checkout: only its own journey is available
     }
+
+    // Older than the reporting window: it has done its job (taught us this customer's first touch above)
+    // and must NOT contribute revenue, or we'd inflate the report with history it doesn't cover.
+    if (revenueSince && date < revenueSince) continue;
 
     const source = ch?.source || UNATTRIBUTED;
     const medium = ch?.medium || "(none)";

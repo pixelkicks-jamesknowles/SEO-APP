@@ -60,6 +60,13 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   Triggered from the Attribution page. **Needs `read_all_orders`** to see past 60 days — see
   [DEPLOY.md Step 5b](DEPLOY.md). Unrecoverable customers are shown as **`(unattributed)`**, never folded
   into `(direct)`.
+  - **Two windows, deliberately different sizes** (`historySince` vs `sinceDate` on `BackfillJob`). It
+    **scans 3 years** of orders but **rebuilds revenue for only 90 days**. An established subscriber's
+    *acquiring* order is the only one that ever carried a customer journey, and it's usually far outside the
+    reporting window — scanning only 90 days means we never see it, never learn their channel, and every
+    renewal they've paid since lands in `(unattributed)`. On Naturaw that was **79%** of the unattributed
+    revenue. So old orders teach first touch; they contribute no revenue row (`foldOrders(..., {
+    revenueSince })`).
 - **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
   drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
   (`app/lib/alerting.server.js`).

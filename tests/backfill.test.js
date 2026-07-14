@@ -155,3 +155,62 @@ describe("(unattributed) breakdown", () => {
     });
   });
 });
+
+// THE unlock. An established subscriber's ACQUIRING order — the only one that ever carried a customer
+// journey — is often a year+ old, outside the 90-day reporting window. Scanning only that window means we
+// never learn their channel, so every renewal they've paid since lands in (unattributed). That was 79% of
+// Naturaw's unattributed revenue. So: LEARN first-touch from all history, but only AGGREGATE revenue from
+// the reporting window.
+describe("two windows: learn first-touch from all history, count revenue only in the window", () => {
+  const REVENUE_SINCE = "2026-04-15";
+
+  test("an OLD acquiring order teaches the channel but adds no revenue; the in-window renewal inherits it", () => {
+    const acquiring = order({
+      id: "old",
+      createdAt: "2024-02-03T10:00:00Z", // two years before the revenue window
+      customer: { id: "gid://shopify/Customer/42" },
+      customerJourneySummary: journey({ utmParameters: { source: "google", medium: "cpc" } }),
+      lineItems: sub,
+      totalPrice: 40,
+    });
+    const renewal = order({
+      id: "new",
+      createdAt: "2026-07-01T10:00:00Z", // inside the window
+      customer: { id: "gid://shopify/Customer/42" },
+      customerJourneySummary: null, // a renewal never has a journey
+      lineItems: sub,
+      totalPrice: 40,
+    });
+
+    const { rows, learned, unattributed } = foldOrders([acquiring, renewal], new Map(), { revenueSince: REVENUE_SINCE });
+
+    // Only the in-window renewal contributes revenue — the 2024 order must NOT inflate the report.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ date: "2026-07-01", revenue: 40, subscriptionRevenue: 40 });
+    // …but it carries the channel the 2024 order taught us. Without the deep scan this would be (unattributed).
+    expect(rows[0].source).toBe("google");
+    expect(rows[0].medium).toBe("cpc");
+    expect(unattributed.orders).toBe(0);
+    // And the first touch is persisted, so FUTURE renewals stay attributed too.
+    expect(learned).toEqual([{ customerKey: "42", source: "google", medium: "cpc", campaign: null, firstOrderId: "old" }]);
+  });
+
+  test("without the deep scan, that same renewal is (unattributed) — this is the bug being fixed", () => {
+    const renewal = order({
+      createdAt: "2026-07-01T10:00:00Z",
+      customer: { id: "gid://shopify/Customer/42" },
+      customerJourneySummary: null,
+      lineItems: sub,
+      totalPrice: 40,
+    });
+    const { rows } = foldOrders([renewal], new Map(), { revenueSince: REVENUE_SINCE });
+    expect(rows[0].source).toBe(UNATTRIBUTED);
+  });
+
+  test("out-of-window orders don't pollute the (unattributed) diagnostic either", () => {
+    const old = order({ createdAt: "2024-05-01T10:00:00Z", customerJourneySummary: null, lineItems: sub, totalPrice: 99 });
+    const { rows, unattributed } = foldOrders([old], new Map(), { revenueSince: REVENUE_SINCE });
+    expect(rows).toHaveLength(0);
+    expect(unattributed.orders).toBe(0);
+  });
+});

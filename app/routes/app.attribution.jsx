@@ -245,7 +245,7 @@ function BackfillCard({ backfill }) {
       <BlockStack gap="300">
         <SectionHeading
           title="Backfill from order history"
-          description="Rebuilds revenue-by-channel from Shopify's own order attribution, and replays each customer's first-touch channel onto their renewals — so subscription revenue is credited to the channel that actually won the subscriber."
+          description="Reads Shopify's own order attribution to learn which channel first acquired each customer, then replays that channel onto their renewals — so subscription revenue is credited to the channel that actually won the subscriber."
         />
         <Divider />
         {errored && <Banner tone="critical" title="Backfill failed">{backfill.detail || "Try again."}</Banner>}
@@ -267,10 +267,17 @@ function BackfillCard({ backfill }) {
           <fetcher.Form method="post">
             <input type="hidden" name="_action" value="backfill" />
             <Button submit loading={running} disabled={running}>
-              {done ? "Run backfill again" : "Backfill last 90 days"}
+              {done ? "Run backfill again" : "Run backfill"}
             </Button>
           </fetcher.Form>
         </InlineStack>
+        {/* The two windows are the whole trick, and they're invisible from the button, so say them out loud:
+            someone will otherwise read "3 years" and expect three years of revenue in the table below. */}
+        <Text as="p" variant="bodySm" tone="subdued">
+          Scans up to 3 years of orders to find each subscriber's acquiring order (the only one that ever
+          carried a customer journey), but only rebuilds the revenue table for the last 90 days. Older orders
+          teach us the channel; they don't add revenue to the report.
+        </Text>
       </BlockStack>
     </Card>
   );

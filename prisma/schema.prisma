@@ -292,7 +292,12 @@ model BackfillJob {
   shopDomain      String    @id
   status          String    @default("idle") // idle | running | done | error
   cursor          String? // Shopify pagination cursor (null = not started / finished)
-  sinceDate       String? // YYYY-MM-DD — the window start this run is rebuilding
+  sinceDate       String? // YYYY-MM-DD — REVENUE window start (what the report rebuilds)
+  // YYYY-MM-DD — HISTORY scan start. Deliberately much older than sinceDate: an established subscriber's
+  // ACQUIRING order (the only one that ever carried a customer journey) is often a year+ old, so scanning
+  // only the revenue window means we never learn their channel and every renewal since lands in
+  // (unattributed). We scan far back to LEARN first-touch, but only aggregate revenue from sinceDate.
+  historySince    String?
   ordersProcessed Int       @default(0)
   // Diagnostic for the (unattributed) bucket (JSON, see backfill.js emptyUnattributed). Without this,
   // whoever reads the report WILL assume the unknowns are organic or direct — the two most flattering
