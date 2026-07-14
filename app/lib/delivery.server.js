@@ -161,13 +161,51 @@ export async function recordVisit(shopDomain, clientId, utm, referrer = null) {
   const ch = visitAttribution(utm, referrer);
   if (!ch) return;
   const { source, medium, campaign } = ch;
+  const existing = await prisma.visitorAttribution
+    .findUnique({ where: { shopDomain_clientId: { shopDomain, clientId } }, select: { touches: true } })
+    .catch(() => null);
+  // Append this visit to the capped touch PATH (latest 25) for multi-touch models. Read-modify-write is
+  // fine: a single visitor's sessions are sequential and the path is advisory.
+  let path = [];
+  try {
+    path = JSON.parse(existing?.touches || "[]");
+  } catch {
+    path = [];
+  }
+  path.push({ source, medium, ts: new Date().toISOString() });
+  const touches = JSON.stringify(path.slice(-25));
   await prisma.visitorAttribution
     .upsert({
       where: { shopDomain_clientId: { shopDomain, clientId } },
-      create: { shopDomain, clientId, source, medium, campaign, lastSource: source, lastMedium: medium, lastCampaign: campaign },
+      create: { shopDomain, clientId, source, medium, campaign, lastSource: source, lastMedium: medium, lastCampaign: campaign, touches },
       // First-touch (source/medium/campaign) is never overwritten; last-touch tracks the newest UTM
       // visit and `visits` counts touches — together they give multi-touch attribution.
-      update: { visits: { increment: 1 }, lastSource: source, lastMedium: medium, lastCampaign: campaign },
+      update: { visits: { increment: 1 }, lastSource: source, lastMedium: medium, lastCampaign: campaign, touches },
+    })
+    .catch(() => {});
+}
+
+/**
+ * Snapshot a converting visitor's touch PATH + order value at checkout → ConversionPath, the input to the
+ * multi-touch models. Idempotent on orderId (create-once, so a replayed checkout event doesn't duplicate).
+ * Best-effort.
+ */
+export async function recordConversionPath(shopDomain, visitorKey, event) {
+  const orderId = numericId(event?.data?.checkout?.order?.id);
+  if (!orderId) return;
+  const value = Number(event?.data?.checkout?.totalPrice?.amount) || 0;
+  let touches = "[]";
+  if (visitorKey) {
+    const row = await prisma.visitorAttribution
+      .findUnique({ where: { shopDomain_clientId: { shopDomain, clientId: visitorKey } }, select: { touches: true } })
+      .catch(() => null);
+    if (row?.touches) touches = row.touches;
+  }
+  await prisma.conversionPath
+    .upsert({
+      where: { shopDomain_orderId: { shopDomain, orderId } },
+      create: { shopDomain, orderId, visitorKey: visitorKey || null, value, touches },
+      update: {}, // create-once
     })
     .catch(() => {});
 }

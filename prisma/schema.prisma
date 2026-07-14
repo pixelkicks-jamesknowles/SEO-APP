@@ -236,6 +236,10 @@ model VisitorAttribution {
   lastMedium   String?
   lastCampaign String?
   visits       Int      @default(1) // UTM-tagged visits = touch count
+  // Capped JSON array (latest ~25) of {source,medium,ts} for the full touch PATH, so multi-touch models
+  // (linear / time-decay / position-based) can distribute credit across the real journey, not just
+  // first/last. Snapshotted onto a conversion (ConversionPath) at checkout.
+  touches      String   @default("[]")
   firstSeen    DateTime @default(now())
   lastSeen     DateTime @updatedAt
 
@@ -316,6 +320,22 @@ model BackfillJob {
   startedAt       DateTime?
   finishedAt      DateTime?
   updatedAt       DateTime  @updatedAt
+}
+
+// A converting visitor's touch PATH + order value, snapshotted at checkout — the input to the multi-touch
+// attribution models (multi-touch.js), which distribute each conversion's value across its touches under a
+// chosen model. Forward-looking: only conversions from after touch-path recording shipped have a path.
+// Keyed on orderId so a replayed checkout event is idempotent.
+model ConversionPath {
+  shopDomain   String
+  orderId      String
+  visitorKey   String?
+  value        Float    @default(0)
+  conversionAt DateTime @default(now())
+  touches      String   @default("[]") // JSON [{source,medium,ts}] oldest→newest, as of conversion time
+
+  @@id([shopDomain, orderId])
+  @@index([shopDomain, conversionAt])
 }
 
 // Per-customer LIFETIME totals, populated by the backfill (which scans full history) and joined to

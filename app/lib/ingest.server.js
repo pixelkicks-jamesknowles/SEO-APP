@@ -1,6 +1,6 @@
 import prisma from "../db.server";
 import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality } from "./delivery.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordConversionPath } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
@@ -87,6 +87,8 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     // buildJobs sends profit as the conversion value. Purchases are low-volume, so the extra Admin fetch
     // is off the page-view hot path; best-effort (null cost → withValueMode falls back to revenue).
     if (cogsEnabled(settings)) event.orderCost = await resolveOrderCost(shopDomain, event);
+    // Snapshot the visitor's touch path + order value for the multi-touch models (best-effort, idempotent).
+    await recordConversionPath(shopDomain, vkey, event).catch(() => {});
     // NOTE: revenue-by-channel is NOT recorded here any more. It's driven from the orders/paid webhook
     // (Shopify's source of truth), because that is the only path that sees recurring subscription
     // renewals — they never fire a storefront checkout, so this pixel path silently excluded them and the

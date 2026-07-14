@@ -1,11 +1,12 @@
 import { Suspense, useState } from "react";
 import { useLoaderData, useRevalidator, useFetcher, Await } from "@remix-run/react";
 import { defer } from "@remix-run/node";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, List, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, List, Select, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel } from "../lib/attribution-report";
+import { creditByModel, MODELS, MODEL_LABELS } from "../lib/multi-touch";
 import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
 
@@ -48,6 +49,23 @@ async function buildReport(shopDomain) {
   const revenue = byChannelRevenue(channelRows);
   const channelGroups = byChannelGroup(channelRows);
   const ltv = ltvByChannel(customers, lifetimes).slice(0, 15);
+
+  // Multi-touch: read converting visitors' touch paths (last 90d) and pre-compute every model server-side,
+  // so the UI can switch models instantly. Results are small (per-channel), so sending all of them is cheap.
+  const since90date = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const convPaths = await prisma.conversionPath.findMany({ where: { shopDomain, conversionAt: { gte: since90date } }, take: SCAN_CAP }).catch(() => []);
+  const paths = convPaths.map((p) => {
+    let touches = [];
+    try {
+      touches = JSON.parse(p.touches || "[]");
+    } catch {
+      touches = [];
+    }
+    return { value: p.value, conversionTs: p.conversionAt, touches };
+  });
+  // Only paths with a recorded journey are meaningful for model comparison.
+  const withPath = paths.filter((p) => p.touches.length > 0);
+  const multiTouch = withPath.length ? Object.fromEntries(MODELS.map((m) => [m, creditByModel(withPath, m)])) : null;
   return {
     totalVisitors: visitors.length,
     capped: visitors.length >= SCAN_CAP || customers.length >= SCAN_CAP,
@@ -60,6 +78,8 @@ async function buildReport(shopDomain) {
     channels: revenue.channels.slice(0, 15),
     channelGroups,
     ltv,
+    multiTouchModels: multiTouch,
+    multiTouchPaths: withPath.length,
     channelTotalRevenue: revenue.totalRevenue,
     channelTotalOrders: revenue.totalOrders,
     channelSubscriptionRevenue: revenue.totalSubscriptionRevenue,
@@ -335,7 +355,46 @@ function BackfillCard({ backfill }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function MultiTouchCard({ multiTouch, paths }) {
+  const [model, setModel] = useState("last_touch");
+  const result = multiTouch?.[model];
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <SectionHeading
+          title="Multi-touch attribution"
+          description="Distribute each conversion's value across the visitor's full journey, under the model you choose — not just the last click. Based on the touch paths of converting visitors (collected from when this shipped; earlier orders have no recorded path)."
+        />
+        <InlineStack gap="300" blockAlign="end" wrap>
+          <div style={{ minWidth: 260 }}>
+            <Select
+              label="Attribution model"
+              options={MODELS.map((m) => ({ label: MODEL_LABELS[m], value: m }))}
+              value={model}
+              onChange={setModel}
+            />
+          </div>
+          <Text as="span" variant="bodySm" tone="subdued">{paths.toLocaleString()} conversion path{paths === 1 ? "" : "s"}</Text>
+        </InlineStack>
+        <Divider />
+        <Table
+          caption="Credited revenue and fractional conversions by channel under the selected multi-touch model"
+          head={["Source / Medium", "Credited revenue", "Credited conversions", "Share"]}
+          rows={(result?.rows || []).map((r) => (
+            <tr key={`${r.source}/${r.medium}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
+              <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
+              <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.credit)}</Text></td>
+              <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.conversions}</Text></td>
+              <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
+            </tr>
+          ))}
+        />
+      </BlockStack>
+    </Card>
+  );
+}
+
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -455,6 +514,8 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                 </BlockStack>
               </Card>
             )}
+
+            {multiTouchModels && <MultiTouchCard multiTouch={multiTouchModels} paths={multiTouchPaths} />}
 
             <Card>
               <BlockStack gap="300">
