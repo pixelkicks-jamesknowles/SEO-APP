@@ -122,8 +122,13 @@ async function clearWindow(shopDomain, sinceDate) {
     .catch(() => {});
 }
 
-/** Persist a page's aggregates (increment) + the first-touch we learned (never overwrite an existing one). */
-async function persist(shopDomain, rows, learned, unattributedOrders = []) {
+/**
+ * Persist a page's aggregates (increment) + first-touch learned (create-only) + the (unattributed) orders.
+ * Runs on `db`, which is a Prisma transaction client so the whole page commits atomically with the cursor
+ * advance (see the caller). Errors PROPAGATE — a failed write must roll the page back, not be swallowed,
+ * or the increments could land without the cursor moving and double-count on retry.
+ */
+async function persist(db, shopDomain, rows, learned, unattributedOrders = []) {
   // The individual (unattributed) orders — upsert by orderId so a re-processed page (lease expiry, retry)
   // can't duplicate them, unlike the increment-based aggregate rows.
   for (const o of unattributedOrders) {
@@ -138,43 +143,37 @@ async function persist(shopDomain, rows, learned, unattributedOrders = []) {
       reason: o.reason,
       customerKey: o.customerKey,
     };
-    await prisma.unattributedOrder
-      .upsert({ where: { shopDomain_orderId: { shopDomain, orderId: o.orderId } }, create: { shopDomain, orderId: o.orderId, ...data }, update: data })
-      .catch(() => {});
+    await db.unattributedOrder.upsert({ where: { shopDomain_orderId: { shopDomain, orderId: o.orderId } }, create: { shopDomain, orderId: o.orderId, ...data }, update: data });
   }
   for (const r of rows) {
-    await prisma.channelRevenueDaily
-      .upsert({
-        where: { shopDomain_date_source_medium: { shopDomain, date: r.date, source: r.source, medium: r.medium } },
-        create: {
-          shopDomain,
-          date: r.date,
-          source: r.source,
-          medium: r.medium,
-          orders: r.orders,
-          revenue: r.revenue,
-          subscriptionOrders: r.subscriptionOrders,
-          subscriptionRevenue: r.subscriptionRevenue,
-        },
-        update: {
-          orders: { increment: r.orders },
-          revenue: { increment: r.revenue },
-          subscriptionOrders: { increment: r.subscriptionOrders },
-          subscriptionRevenue: { increment: r.subscriptionRevenue },
-        },
-      })
-      .catch(() => {});
+    await db.channelRevenueDaily.upsert({
+      where: { shopDomain_date_source_medium: { shopDomain, date: r.date, source: r.source, medium: r.medium } },
+      create: {
+        shopDomain,
+        date: r.date,
+        source: r.source,
+        medium: r.medium,
+        orders: r.orders,
+        revenue: r.revenue,
+        subscriptionOrders: r.subscriptionOrders,
+        subscriptionRevenue: r.subscriptionRevenue,
+      },
+      update: {
+        orders: { increment: r.orders },
+        revenue: { increment: r.revenue },
+        subscriptionOrders: { increment: r.subscriptionOrders },
+        subscriptionRevenue: { increment: r.subscriptionRevenue },
+      },
+    });
   }
   // Seed CustomerAttribution so FUTURE renewals inherit the acquiring channel. `create`-only: never
   // clobber a first touch the live pipeline already captured (it saw the real visit; we're inferring).
   for (const l of learned) {
-    await prisma.customerAttribution
-      .upsert({
-        where: { shopDomain_customerKey: { shopDomain, customerKey: l.customerKey } },
-        create: { shopDomain, customerKey: l.customerKey, source: l.source, medium: l.medium, campaign: l.campaign, firstOrderId: l.firstOrderId },
-        update: {}, // no-op — an existing first touch always wins
-      })
-      .catch(() => {});
+    await db.customerAttribution.upsert({
+      where: { shopDomain_customerKey: { shopDomain, customerKey: l.customerKey } },
+      create: { shopDomain, customerKey: l.customerKey, source: l.source, medium: l.medium, campaign: l.campaign, firstOrderId: l.firstOrderId },
+      update: {}, // no-op — an existing first touch always wins
+    });
   }
 }
 
@@ -262,17 +261,40 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       const orders = (conn.nodes || []).map(toOrder);
       // revenueSince gates REVENUE only — first touch is still learned from every order we scan.
       const { rows, learned, unattributed: pageUnattributed, unattributedOrders } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
-      await persist(shopDomain, rows, learned, unattributedOrders);
-      unattributed = mergeUnattributed(unattributed, pageUnattributed);
 
-      processed += orders.length;
-      cursor = conn.pageInfo?.endCursor || null;
+      // Next-page state, held in locals until the write commits — so a failure leaves cursor/processed at
+      // their last committed values and the page simply re-runs next tick.
+      const nextCursor = conn.pageInfo?.endCursor || null;
+      const nextProcessed = processed + orders.length;
+      const nextBreakdown = mergeUnattributed(unattributed, pageUnattributed);
+
+      // THE hardening: the page's data writes and the cursor advance commit in ONE transaction. Previously
+      // persist() incremented ChannelRevenueDaily and the cursor was saved in a separate write afterwards —
+      // a container death (deploy, OOM) between the two re-ran the page from the old cursor and
+      // double-incremented ~a page of orders. Atomic now: either both land or neither does.
+      try {
+        await prisma.$transaction(
+          async (tx) => {
+            await persist(tx, shopDomain, rows, learned, unattributedOrders);
+            await tx.backfillJob.updateMany({
+              where: { shopDomain, leaseToken: token },
+              data: { cursor: nextCursor, ordersProcessed: nextProcessed, breakdown: JSON.stringify(nextBreakdown) },
+            });
+          },
+          { timeout: 20_000, maxWait: 10_000 },
+        );
+      } catch {
+        // Nothing committed. Stop the loop without advancing; the next tick resumes from the stored cursor.
+        // Better than marking the whole job errored on a transient DB blip.
+        break;
+      }
+
+      // Committed — advance in-memory state to match what's now persisted.
+      cursor = nextCursor;
+      processed = nextProcessed;
+      unattributed = nextBreakdown;
       hasNext = !!conn.pageInfo?.hasNextPage;
       pagesRun += 1;
-
-      await prisma.backfillJob
-        .updateMany({ where: { shopDomain, leaseToken: token }, data: { cursor, ordersProcessed: processed, breakdown: JSON.stringify(unattributed) } })
-        .catch(() => {});
     }
 
     const done = !hasNext;
