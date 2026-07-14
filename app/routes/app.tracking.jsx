@@ -422,7 +422,16 @@ export default function Tracking() {
               <FormLayout>
                 <FormLayout.Group>
                   <TextField label="GTM container ID" name="gtmId" autoComplete="off" value={ids.gtmId} onChange={setId("gtmId")} placeholder="GTM-XXXXXXX" error={idError("gtm", ids.gtmId)} />
-                  <TextField label="GA4 measurement ID" name="ga4Id" autoComplete="off" value={ids.ga4Id} onChange={setId("ga4Id")} placeholder="G-XXXXXXXXXX" error={idError("ga4", ids.ga4Id)} />
+                  <TextField
+                    label="GA4 measurement ID"
+                    name="ga4Id"
+                    autoComplete="off"
+                    value={ids.ga4Id}
+                    onChange={setId("ga4Id")}
+                    placeholder="G-XXXXXXXXXX"
+                    error={idError("ga4", ids.ga4Id)}
+                    helpText="The GA4 data stream we send server-side events to. If you also run the Google & YouTube app (or any on-site GA4 tag), this MUST be the same stream that tag uses — GA4 Admin → Data streams. If they differ, a web order's purchase can't join the on-site session and stays Unassigned. Use “Send test event” on Settings to confirm the ID + secret are accepted."
+                  />
                 </FormLayout.Group>
                 <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} />
                 <FormLayout.Group>
