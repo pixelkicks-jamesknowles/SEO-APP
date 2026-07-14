@@ -294,6 +294,11 @@ model BackfillJob {
   cursor          String? // Shopify pagination cursor (null = not started / finished)
   sinceDate       String? // YYYY-MM-DD — the window start this run is rebuilding
   ordersProcessed Int       @default(0)
+  // Diagnostic for the (unattributed) bucket (JSON, see backfill.js emptyUnattributed). Without this,
+  // whoever reads the report WILL assume the unknowns are organic or direct — the two most flattering
+  // guesses — and nothing would contradict them. This says exactly WHY we don't know: how many are
+  // renewals whose acquiring order carried no journey, how many are guests, and the date span.
+  breakdown       String    @default("{}")
   detail          String? // last error / summary
   leaseToken      String?
   leasedUntil     DateTime?

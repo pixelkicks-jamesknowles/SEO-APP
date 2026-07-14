@@ -1,4 +1,4 @@
-import { channelFromJourney, orderIsSubscription, foldOrders, orderCustomerKey, numericGid, UNATTRIBUTED } from "../app/lib/backfill.js";
+import { channelFromJourney, orderIsSubscription, foldOrders, orderCustomerKey, numericGid, mergeUnattributed, UNATTRIBUTED } from "../app/lib/backfill.js";
 
 const journey = (firstVisit) => ({ firstVisit });
 const order = (over = {}) => ({
@@ -114,5 +114,44 @@ describe("customer key matches the live pipeline (attribution.js customerKey)", 
     expect(orderCustomerKey({ customer: { id: "gid://shopify/Customer/753" } })).toBe("753");
     expect(orderCustomerKey({ customer: null })).toBeNull();
     expect(orderCustomerKey({})).toBeNull();
+  });
+});
+
+// Left unexplained, whoever reads this report WILL assume the unknowns are organic (or direct) — the two
+// most flattering guesses. These counters exist so the report contradicts that with facts.
+describe("(unattributed) breakdown", () => {
+  test("counts renewals whose ACQUIRING order also had no journey — the migrated-subscriber case", () => {
+    const { unattributed } = foldOrders([
+      order({ id: "r1", customer: { id: "gid://shopify/Customer/1" }, customerJourneySummary: null, lineItems: sub, totalPrice: 40 }),
+      order({ id: "r2", customer: { id: "gid://shopify/Customer/1" }, customerJourneySummary: null, lineItems: sub, totalPrice: 40 }),
+    ]);
+    expect(unattributed.orders).toBe(2);
+    expect(unattributed.subscriptionOrders).toBe(2);
+    expect(unattributed.subscriptionRevenue).toBe(80);
+    expect(unattributed.knownCustomerNoJourney).toBe(2);
+    expect(unattributed.guestNoJourney).toBe(0);
+  });
+
+  test("separates guest/POS/imported orders (no customer at all)", () => {
+    const { unattributed } = foldOrders([order({ customer: null, customerJourneySummary: null, totalPrice: 10 })]);
+    expect(unattributed.guestNoJourney).toBe(1);
+    expect(unattributed.knownCustomerNoJourney).toBe(0);
+  });
+
+  test("organic traffic Shopify DID see is attributed — it never lands in the bucket", () => {
+    const { rows, unattributed } = foldOrders([
+      order({ customerJourneySummary: { firstVisit: { referrerUrl: "https://www.google.com/search?q=raw+dog+food" } }, totalPrice: 50 }),
+    ]);
+    expect(rows[0].source).toBe("google.com"); // attributed, not unknown
+    expect(unattributed.orders).toBe(0);
+  });
+
+  test("merges across pages/ticks and widens the date span", () => {
+    const a = { orders: 2, revenue: 10, subscriptionOrders: 1, subscriptionRevenue: 5, knownCustomerNoJourney: 2, guestNoJourney: 0, oldest: "2026-06-05", newest: "2026-06-10" };
+    const b = { orders: 3, revenue: 20, subscriptionOrders: 2, subscriptionRevenue: 15, knownCustomerNoJourney: 1, guestNoJourney: 2, oldest: "2026-05-01", newest: "2026-07-01" };
+    expect(mergeUnattributed(a, b)).toEqual({
+      orders: 5, revenue: 30, subscriptionOrders: 3, subscriptionRevenue: 20,
+      knownCustomerNoJourney: 3, guestNoJourney: 2, oldest: "2026-05-01", newest: "2026-07-01",
+    });
   });
 });

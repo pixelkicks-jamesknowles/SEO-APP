@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { useLoaderData, useRevalidator, useFetcher, Await } from "@remix-run/react";
 import { defer } from "@remix-run/node";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, List, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
@@ -170,6 +170,70 @@ export default function Attribution() {
  * answered by orders placed long before the app was installed. The backfill reads Shopify's OWN attribution
  * (each order's customer journey) and replays each customer's first touch onto their renewals.
  */
+/**
+ * Explain the (unattributed) bucket, with numbers.
+ *
+ * Left unexplained, whoever reads this report WILL assume the unknowns are organic — or direct — because
+ * those are the two most flattering guesses and nothing contradicts them. They are neither. "(unattributed)"
+ * means Shopify recorded NO customer journey for the order that acquired that customer: an API-created or
+ * imported order, a migrated subscriber, or one won before journeys were captured. Organic traffic Shopify
+ * DID see is attributed (its referrer resolves to a source) — so it never lands here.
+ */
+function UnattributedBreakdown({ backfill }) {
+  let b = null;
+  try {
+    b = JSON.parse(backfill?.breakdown || "{}");
+  } catch {
+    b = null;
+  }
+  if (!b?.orders) {
+    return (
+      <Text as="p" variant="bodySm" tone="subdued">
+        <b>About (unattributed):</b> a customer is only credited to a channel if Shopify captured a journey
+        (UTMs / referrer) on the order that <b>acquired</b> them. Where it didn&apos;t, we show{" "}
+        <b>(unattributed)</b> rather than folding them into <b>(direct)</b> or assuming organic — either would
+        flatter a channel and mislead you. Run the backfill and this becomes a breakdown with real numbers.
+      </Text>
+    );
+  }
+  const pctSub = b.orders ? Math.round((b.subscriptionOrders / b.orders) * 100) : 0;
+  return (
+    <Banner tone="warning" title={`${b.orders.toLocaleString()} orders (${fmtMoney(b.revenue)}) couldn't be attributed — and they are NOT organic`}>
+      <BlockStack gap="200">
+        <Text as="p">
+          <b>(unattributed)</b> means Shopify recorded <b>no customer journey</b> for the order that acquired
+          that customer — not &ldquo;a journey we couldn&apos;t classify&rdquo;. Organic traffic Shopify{" "}
+          <i>did</i> see <b>is</b> attributed (its referrer resolves to a source), so it never lands here.
+          Counting this bucket as organic — or as direct — would invent revenue for a channel that may not
+          have earned it.
+        </Text>
+        <List>
+          <List.Item>
+            <b>{b.subscriptionOrders.toLocaleString()} are subscription renewals</b> ({pctSub}% of the bucket,{" "}
+            {fmtMoney(b.subscriptionRevenue)}) — their <b>acquiring</b> order carried no journey either.
+            Typically subscribers migrated in from another platform, or won before journeys were captured.
+          </List.Item>
+          <List.Item>
+            <b>{b.knownCustomerNoJourney.toLocaleString()}</b> are from known customers whose acquiring order
+            we found but which had no journey; <b>{b.guestNoJourney.toLocaleString()}</b> had no customer at
+            all (guest / POS / draft / imported).
+          </List.Item>
+          {b.oldest && b.newest && (
+            <List.Item>
+              Spanning <b>{b.oldest}</b> to <b>{b.newest}</b>.
+            </List.Item>
+          )}
+        </List>
+        <Text as="p" tone="subdued">
+          To confirm: open one of these orders in Shopify and look at <b>Conversion summary</b>. If it says
+          &ldquo;There aren&apos;t any conversion details available for this order&rdquo;, that is Shopify
+          itself telling you it has no journey — so no tool, this one included, can attribute it.
+        </Text>
+      </BlockStack>
+    </Banner>
+  );
+}
+
 function BackfillCard({ backfill }) {
   const fetcher = useFetcher();
   const running = backfill?.status === "running" || fetcher.state !== "idle";
@@ -198,13 +262,7 @@ function BackfillCard({ backfill }) {
             <p>Revenue by channel below now includes your order history, renewals attributed to the channel that acquired the customer.</p>
           </Banner>
         )}
-        <Text as="p" variant="bodySm" tone="subdued">
-          <b>About <span>(unattributed)</span>:</b> a customer can only be credited to a channel if Shopify
-          captured a journey (UTMs / referrer) on the order that <b>acquired</b> them. Where it didn&apos;t —
-          an offline or imported order, or a subscriber won before any of this was tracked — we show{" "}
-          <b>(unattributed)</b> rather than folding them into <b>(direct)</b>, which would flatter direct and
-          mislead you. It&apos;s an honest &ldquo;we don&apos;t know&rdquo;, not a bug.
-        </Text>
+        <UnattributedBreakdown backfill={backfill} />
         <InlineStack>
           <fetcher.Form method="post">
             <input type="hidden" name="_action" value="backfill" />

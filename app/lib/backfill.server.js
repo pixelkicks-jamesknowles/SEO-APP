@@ -16,7 +16,7 @@
 // It only ever touches days < today — the live orders/paid path owns today onward, so they never overlap.
 import crypto from "node:crypto";
 import prisma from "../db.server";
-import { foldOrders } from "./backfill";
+import { foldOrders, mergeUnattributed, emptyUnattributed } from "./backfill";
 
 const LEASE_MINUTES = 10;
 // Orders per Shopify page. NOT raised beyond 100: each node also pulls a customer journey + up to 50 line
@@ -78,8 +78,9 @@ export async function requestBackfill(shopDomain, { days = 90 } = {}) {
   await prisma.backfillJob
     .upsert({
       where: { shopDomain },
-      create: { shopDomain, status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, startedAt: new Date() },
-      update: { status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, detail: null, startedAt: new Date(), finishedAt: null },
+      // breakdown reset too — a re-run must not accumulate on top of the previous run's counters.
+      create: { shopDomain, status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, breakdown: "{}", startedAt: new Date() },
+      update: { status: "running", sinceDate: since, cursor: null, ordersProcessed: 0, breakdown: "{}", detail: null, startedAt: new Date(), finishedAt: null },
     })
     .catch(() => {});
   return { queued: true, since };
@@ -154,6 +155,14 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
   const shopDomain = job.shopDomain;
   let cursor = job.cursor;
   let processed = job.ordersProcessed || 0;
+  // Accumulated across ticks — a fresh run resets it to {} in requestBackfill.
+  let unattributed = (() => {
+    try {
+      return { ...emptyUnattributed(), ...JSON.parse(job.breakdown || "{}") };
+    } catch {
+      return emptyUnattributed();
+    }
+  })();
 
   try {
     const { unauthenticated } = await import("../shopify.server");
@@ -200,8 +209,9 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       }
 
       const orders = (conn.nodes || []).map(toOrder);
-      const { rows, learned } = foldOrders(orders, firstTouch);
+      const { rows, learned, unattributed: pageUnattributed } = foldOrders(orders, firstTouch);
       await persist(shopDomain, rows, learned);
+      unattributed = mergeUnattributed(unattributed, pageUnattributed);
 
       processed += orders.length;
       cursor = conn.pageInfo?.endCursor || null;
@@ -209,7 +219,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       pagesRun += 1;
 
       await prisma.backfillJob
-        .updateMany({ where: { shopDomain, leaseToken: token }, data: { cursor, ordersProcessed: processed } })
+        .updateMany({ where: { shopDomain, leaseToken: token }, data: { cursor, ordersProcessed: processed, breakdown: JSON.stringify(unattributed) } })
         .catch(() => {});
     }
 
@@ -221,6 +231,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
           status: done ? "done" : "running",
           cursor: done ? null : cursor,
           ordersProcessed: processed,
+          breakdown: JSON.stringify(unattributed),
           leaseToken: null,
           leasedUntil: null,
           ...(done ? { finishedAt: new Date(), detail: `${processed} orders` } : {}),

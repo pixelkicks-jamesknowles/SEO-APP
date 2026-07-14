@@ -94,6 +94,10 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 export function foldOrders(orders = [], firstTouch = new Map()) {
   const rows = new Map();
   const learned = [];
+  // Diagnostic for the (unattributed) bucket. Without this, someone reading the report WILL assume the
+  // unknowns are organic (or direct) — the two most flattering guesses — and there'd be nothing to stop
+  // them. These counters say plainly WHY we don't know.
+  const unattributed = emptyUnattributed();
 
   for (const order of orders) {
     const date = dayOf(order?.createdAt);
@@ -121,6 +125,21 @@ export function foldOrders(orders = [], firstTouch = new Map()) {
     const revenue = Number(order?.totalPrice) || 0;
     const isSub = orderIsSubscription(order);
 
+    if (source === UNATTRIBUTED) {
+      unattributed.orders += 1;
+      unattributed.revenue += revenue;
+      if (isSub) {
+        // A renewal with no channel: neither this order NOR the customer's acquiring order carried a
+        // journey. Usually a subscriber migrated in, or acquired before journeys were captured.
+        unattributed.subscriptionOrders += 1;
+        unattributed.subscriptionRevenue += revenue;
+      }
+      if (key) unattributed.knownCustomerNoJourney += 1;
+      else unattributed.guestNoJourney += 1;
+      if (!unattributed.oldest || date < unattributed.oldest) unattributed.oldest = date;
+      if (!unattributed.newest || date > unattributed.newest) unattributed.newest = date;
+    }
+
     const rk = `${date}|${source}|${medium}`;
     const agg = rows.get(rk) || { date, source, medium, orders: 0, revenue: 0, subscriptionOrders: 0, subscriptionRevenue: 0 };
     agg.orders += 1;
@@ -137,5 +156,41 @@ export function foldOrders(orders = [], firstTouch = new Map()) {
     revenue: round2(r.revenue),
     subscriptionRevenue: round2(r.subscriptionRevenue),
   }));
-  return { rows: out, firstTouch, learned };
+  unattributed.revenue = round2(unattributed.revenue);
+  unattributed.subscriptionRevenue = round2(unattributed.subscriptionRevenue);
+  return { rows: out, firstTouch, learned, unattributed };
+}
+
+export function emptyUnattributed() {
+  return {
+    orders: 0,
+    revenue: 0,
+    subscriptionOrders: 0,
+    subscriptionRevenue: 0,
+    // Shopify recorded no journey AND we found no acquiring order for this customer (migrated subscriber,
+    // API-created order, or acquired before journeys were captured).
+    knownCustomerNoJourney: 0,
+    // No customer on the order at all (guest / POS / draft) and no journey either.
+    guestNoJourney: 0,
+    oldest: null,
+    newest: null,
+  };
+}
+
+/** Merge two unattributed summaries — the backfill pages across ticks, so these accumulate. Pure. */
+export function mergeUnattributed(a, b) {
+  const x = { ...emptyUnattributed(), ...(a || {}) };
+  const y = { ...emptyUnattributed(), ...(b || {}) };
+  const minDate = (p, q) => (!p ? q : !q ? p : p < q ? p : q);
+  const maxDate = (p, q) => (!p ? q : !q ? p : p > q ? p : q);
+  return {
+    orders: x.orders + y.orders,
+    revenue: round2(x.revenue + y.revenue),
+    subscriptionOrders: x.subscriptionOrders + y.subscriptionOrders,
+    subscriptionRevenue: round2(x.subscriptionRevenue + y.subscriptionRevenue),
+    knownCustomerNoJourney: x.knownCustomerNoJourney + y.knownCustomerNoJourney,
+    guestNoJourney: x.guestNoJourney + y.guestNoJourney,
+    oldest: minDate(x.oldest, y.oldest),
+    newest: maxDate(x.newest, y.newest),
+  };
 }
