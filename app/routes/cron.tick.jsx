@@ -7,6 +7,10 @@
 //   5. purges stale rows (ProcessedWebhook / DeliveryLog / RecentEvent / finished outbox + purchases),
 //   6. pushes tracking-health alerts to each shop's configured webhook (cooldown-deduped).
 // Idempotent + best-effort: safe to call as often as the cron fires; a slow destination never wedges it.
+// NOTE: `json()` (Remix), never the static `Response.json()` — remix-serve's fetch polyfill has no
+// static Response.json, so it throws at runtime and every tick returned a 500. See
+// tests/no-response-json.test.js.
+import { json } from "@remix-run/node";
 import crypto from "node:crypto";
 import prisma from "../db.server";
 import { drainOutbox } from "../lib/outbox.server";
@@ -85,10 +89,10 @@ async function tick() {
 
 export const loader = async ({ request }) => {
   if (!authorized(request)) return new Response("Forbidden", { status: 403 });
-  return Response.json(await tick());
+  return json(await tick());
 };
 
 export const action = async ({ request }) => {
   if (!authorized(request)) return new Response("Forbidden", { status: 403 });
-  return Response.json(await tick());
+  return json(await tick());
 };

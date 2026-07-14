@@ -1,3 +1,8 @@
+// NOTE: use Remix's `json()` helper, NOT the static `Response.json()`. remix-serve swaps in the
+// @remix-run/web-fetch polyfill, which has no static Response.json — calling it throws
+// "TypeError: Response.json is not a function" at runtime (a 500 in production that never shows up in
+// dev or tests). See tests/no-response-json.test.js, which guards against this regressing.
+import { json } from "@remix-run/node";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { ingestEvent } from "../lib/ingest.server";
@@ -22,11 +27,11 @@ export const loader = async ({ request, params }) => {
   // on load; the pixel then reads the same cookie. Never cached (each response re-sets the sliding expiry).
   if (params.type === "id") {
     const { id, setCookie } = resolveDurableId(request);
-    return Response.json({ id }, { headers: { "Cache-Control": "no-store", "Set-Cookie": setCookie } });
+    return json({ id }, { headers: { "Cache-Control": "no-store", "Set-Cookie": setCookie } });
   }
   if (params.type !== "config") return new Response("Not found", { status: 404 });
   const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain } }).catch(() => null);
-  return Response.json(
+  return json(
     { dataLayer: effectiveDataLayerConfig(settings) },
     { headers: { "Cache-Control": "public, max-age=300" } },
   );
