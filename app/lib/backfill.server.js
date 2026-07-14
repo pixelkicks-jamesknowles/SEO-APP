@@ -19,11 +19,20 @@ import prisma from "../db.server";
 import { foldOrders } from "./backfill";
 
 const LEASE_MINUTES = 10;
-// Orders per Shopify page. Kept modest: each node pulls a customer journey + line items, so the query is
-// expensive in Shopify's cost-based rate limiter.
+// Orders per Shopify page. NOT raised beyond 100: each node also pulls a customer journey + up to 50 line
+// items, and Shopify prices a nested connection as parent×child — so 250 would multiply the query cost and
+// start tripping the per-query cost ceiling. 100 is the known-good size; we get throughput from more PAGES
+// per tick instead, which costs the same per order but pipelines better against the leaky bucket.
 const PAGE_SIZE = 100;
-// Pages per cron tick. Bounded so a long backfill drains over several ticks instead of outliving its lease.
-const PAGES_PER_TICK = 5;
+// Max pages per cron tick — the hard ceiling. The real limiter is TIME_BUDGET_MS below.
+const MAX_PAGES_PER_TICK = 30;
+// Wall-clock budget for one tick's paging. This is the safety-critical number, bounded by THREE things:
+//   • Cloudflare cuts the cron HTTP request at ~100s, and the tick's other jobs share that budget.
+//   • The job lease is 10 min; the budget must stay far below it or an overlapping tick could re-claim the
+//     job mid-flight and double-count.
+//   • Shopify's leaky-bucket throttles us anyway once we outrun the restore rate.
+// 45s leaves comfortable headroom on all three while lifting the ceiling from 500 to ~3,000 orders/tick.
+const TIME_BUDGET_MS = 45_000;
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
@@ -125,7 +134,7 @@ async function persist(shopDomain, rows, learned) {
  * Cron pass: advance the backfill a few pages. Leased, resumable, best-effort.
  * Returns a summary for the tick log.
  */
-export async function processBackfill({ pages = PAGES_PER_TICK } = {}) {
+export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = TIME_BUDGET_MS } = {}) {
   const now = new Date();
   const job = await prisma.backfillJob
     .findFirst({ where: { status: "running", OR: [{ leasedUntil: null }, { leasedUntil: { lt: now } }] } })
@@ -167,14 +176,21 @@ export async function processBackfill({ pages = PAGES_PER_TICK } = {}) {
 
     let hasNext = true;
     let pagesRun = 0;
-    while (hasNext && pagesRun < pages) {
+    const deadline = Date.now() + budgetMs;
+
+    // Page until we run out of orders, pages, or clock. Stopping early is always safe: the cursor is
+    // persisted, so the next tick resumes exactly where this one left off.
+    while (hasNext && pagesRun < pages && Date.now() < deadline) {
       const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor, query } });
       const json = await res.json();
       const conn = json?.data?.orders;
       if (!conn) {
+        const msg = json?.errors?.[0]?.message || "orders query failed";
+        // Throttled: we've outrun Shopify's leaky bucket. NOT an error — bank the progress we made and let
+        // the next tick pick it up from the stored cursor. Erroring here would strand the whole job.
+        if (/throttl/i.test(msg) || json?.errors?.[0]?.extensions?.code === "THROTTLED") break;
         // Surface a missing scope as itself, not as an opaque failure — this is the single most likely
         // reason a backfill won't run, and "Access denied for customer field" is meaningless to a merchant.
-        const msg = json?.errors?.[0]?.message || "orders query failed";
         if (/access denied|required access/i.test(msg)) {
           throw new Error(
             `${msg} — the app needs read_orders, read_all_orders and read_customers. Re-deploy and re-approve the app, then run the backfill again.`,

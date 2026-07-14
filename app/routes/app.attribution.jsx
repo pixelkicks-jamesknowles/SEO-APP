@@ -199,11 +199,11 @@ function BackfillCard({ backfill }) {
           </Banner>
         )}
         <Text as="p" variant="bodySm" tone="subdued">
-          <b>Heads-up on history depth:</b> Shopify only exposes the <b>last 60 days</b> of orders unless it
-          has approved the <code>read_all_orders</code> scope for this app. An established subscriber&apos;s
-          <b> acquiring</b> order is often far older than that — so until that scope is granted, those
-          customers can&apos;t have their channel recovered and are shown as <b>(unattributed)</b> rather than
-          being folded into <b>(direct)</b>, which would flatter direct and mislead you.
+          <b>About <span>(unattributed)</span>:</b> a customer can only be credited to a channel if Shopify
+          captured a journey (UTMs / referrer) on the order that <b>acquired</b> them. Where it didn&apos;t —
+          an offline or imported order, or a subscriber won before any of this was tracked — we show{" "}
+          <b>(unattributed)</b> rather than folding them into <b>(direct)</b>, which would flatter direct and
+          mislead you. It&apos;s an honest &ldquo;we don&apos;t know&rdquo;, not a bug.
         </Text>
         <InlineStack>
           <fetcher.Form method="post">
