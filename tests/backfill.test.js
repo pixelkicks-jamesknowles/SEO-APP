@@ -1,4 +1,4 @@
-import { channelFromJourney, orderIsSubscription, foldOrders, UNATTRIBUTED } from "../app/lib/backfill.js";
+import { channelFromJourney, orderIsSubscription, foldOrders, orderCustomerKey, numericGid, UNATTRIBUTED } from "../app/lib/backfill.js";
 
 const journey = (firstVisit) => ({ firstVisit });
 const order = (over = {}) => ({
@@ -62,7 +62,7 @@ describe("foldOrders", () => {
       expect(r.subscriptionRevenue).toBe(40); // both count as subscription revenue for that channel
     }
     // And we learned the customer's first touch → persisted so FUTURE renewals inherit it too.
-    expect(learned).toEqual([{ customerKey: "gid://shopify/Customer/7", source: "google", medium: "cpc", campaign: null, firstOrderId: "o1" }]);
+    expect(learned).toEqual([{ customerKey: "7", source: "google", medium: "cpc", campaign: null, firstOrderId: "1" }]);
   });
 
   test("first touch carries across pages via the shared map (resumable paging)", () => {
@@ -97,5 +97,22 @@ describe("foldOrders", () => {
     const { rows, learned } = foldOrders([order({ customer: null, customerJourneySummary: journey({ source: "bing" }), totalPrice: 12 })]);
     expect(rows[0]).toMatchObject({ source: "bing", medium: "referral", revenue: 12 });
     expect(learned).toEqual([]); // nothing to persist without a customer key
+  });
+});
+
+// The live orders/paid path looks CustomerAttribution up by the webhook's NUMERIC customer id, but GraphQL
+// hands back a GID. Seeding the GID would write rows the live path could never find — the backfill would
+// look like it worked and silently do nothing. These keys MUST agree.
+describe("customer key matches the live pipeline (attribution.js customerKey)", () => {
+  test("a GID is reduced to the numeric id the webhook delivers", () => {
+    expect(numericGid("gid://shopify/Customer/9539392930134")).toBe("9539392930134");
+    expect(numericGid("gid://shopify/Order/5500000000001")).toBe("5500000000001");
+    expect(numericGid(null)).toBeNull();
+  });
+
+  test("orderCustomerKey returns the numeric id, not the GID", () => {
+    expect(orderCustomerKey({ customer: { id: "gid://shopify/Customer/753" } })).toBe("753");
+    expect(orderCustomerKey({ customer: null })).toBeNull();
+    expect(orderCustomerKey({})).toBeNull();
   });
 });

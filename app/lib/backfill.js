@@ -56,10 +56,24 @@ export function orderIsSubscription(order) {
   return (order?.lineItems || []).some((l) => !!l?.sellingPlan);
 }
 
-/** A stable key for the customer, or null for a guest we can't tie to a journey. */
+/** Numeric id out of a Shopify GID ("gid://shopify/Customer/123" → "123"), else the value as-is. */
+export function numericGid(gid) {
+  if (gid == null) return null;
+  const s = String(gid);
+  return s.match(/\d+(?!.*\d)/)?.[0] || s || null;
+}
+
+/**
+ * A stable key for the customer, or null for a guest.
+ *
+ * MUST match attribution.js `customerKey()`, which the live orders/paid path uses to look these rows back
+ * up: the webhook delivers a REST-style NUMERIC customer id ("9539392930134"), while GraphQL returns a GID
+ * ("gid://shopify/Customer/9539392930134"). Seeding the GID would write CustomerAttribution rows the live
+ * path could never find — the backfill would look like it worked and quietly do nothing.
+ */
 export function orderCustomerKey(order) {
   const id = order?.customer?.id;
-  return id ? String(id) : null;
+  return id ? numericGid(id) : null;
 }
 
 const dayOf = (iso) => (iso ? String(iso).slice(0, 10) : null);
@@ -94,7 +108,8 @@ export function foldOrders(orders = [], firstTouch = new Map()) {
       if (!firstTouch.has(key) && own) {
         // Earliest order we've seen for this customer AND it carries a journey → this is their first touch.
         firstTouch.set(key, own);
-        learned.push({ customerKey: key, ...own, firstOrderId: order?.id ? String(order.id) : null });
+        // firstOrderId numeric too, matching what the live pipeline stores.
+        learned.push({ customerKey: key, ...own, firstOrderId: numericGid(order?.id) });
       }
       ch = firstTouch.get(key) || own;
     } else {

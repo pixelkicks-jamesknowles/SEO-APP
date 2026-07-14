@@ -29,8 +29,13 @@ automatically_update_urls_on_dev = true
 #                          it before it's granted makes `shopify app deploy` fail with:
 #                            "Version couldn't be created. app_access — scopes: read_all_orders".
 #                          Granted for this app on 2026-07-14. See DEPLOY.md Step 5b.
+#   read_customers       — the backfill groups a store's orders BY CUSTOMER so a renewal can inherit the
+#                          channel from that customer's acquiring order. Reading `Order.customer { id }` in
+#                          the Admin API needs read_customers ("Access denied for customer field"), even
+#                          though the orders/paid WEBHOOK hands us the same id for free. We only ever read
+#                          the customer ID (no PII) — the key is stored as-is; emails are hashed.
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products"
+scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_customers,read_fulfillments,read_products"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

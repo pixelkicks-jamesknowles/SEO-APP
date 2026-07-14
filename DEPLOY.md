@@ -37,7 +37,7 @@ Set these in **Service → Variables**:
 | `DATABASE_URL` | Reference the Postgres plugin: `${{Postgres.DATABASE_URL}}` |
 | `SHOPIFY_API_KEY` | The app's client ID — `708d7107539ef297a6230ea9b0716a2a` (the `client_id` in `shopify.app.toml`) |
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
-| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence, omitting it silently breaks `subscription_interval`; `read_all_orders` powers the attribution backfill and is **granted** — see Step 5b) |
+| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_all_orders,read_customers,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence, omitting it silently breaks `subscription_interval`; `read_all_orders` + `read_customers` power the attribution backfill — see Step 5b) |
 | `SHOPIFY_APP_URL` | The app's public host — currently the custom domain `https://tracking.pixelkicks.co.uk` (must match `application_url` in `shopify.app.toml`) |
 | `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Required in production: the app now fails to boot without it** (missing or malformed), so a silent fallback can't orphan credentials. **Set this before storing any server-side keys.** Once set, don't change it or stored credentials must be re-entered. |
 | `ALLOW_INSECURE_ENCRYPTION_FALLBACK` | *(optional escape hatch)* Set to `true` only for a deployment already bootstrapped on the `SHOPIFY_API_SECRET`-derived key: it downgrades the boot failure above to a warning so a redeploy isn't bricked while you migrate to a real `APP_ENCRYPTION_KEY`. Leave unset on new installs. |
@@ -140,8 +140,15 @@ Unassigned forever.
 *acquiring* order — the one carrying the UTMs / customer journey — is usually far older. Without
 `read_all_orders`, those customers can't have their channel recovered and show as **(unattributed)**.
 
-**Status: granted** (dev dashboard → API access requests → *"Read all orders scope — Your app can access the
-full order history for a store."*). It's listed in `shopify.app.toml` and the `SCOPES` env above.
+The backfill needs **two** scopes, both listed in `shopify.app.toml` and the `SCOPES` env above:
+
+- **`read_all_orders`** — *granted* (dev dashboard → API access requests → *"Read all orders scope — Your app
+  can access the full order history for a store."*). Without it you only see the last 60 days.
+- **`read_customers`** — the backfill groups orders **by customer** so a renewal can inherit the channel from
+  that customer's acquiring order. Reading `Order.customer { id }` in the Admin API requires it, and without
+  it the job fails with *"Access denied for customer field. Required access: `read_customers` access scope."*
+  (The `orders/paid` **webhook** hands us the same id for free, which is why nothing else needed this.) We
+  only ever read the customer **ID** — no PII.
 
 > ⚠️ **Order matters — you cannot declare the scope before it's granted.** Putting `read_all_orders` in the
 > toml while it's unapproved makes `shopify app deploy` fail outright with:

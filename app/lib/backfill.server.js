@@ -171,7 +171,17 @@ export async function processBackfill({ pages = PAGES_PER_TICK } = {}) {
       const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor, query } });
       const json = await res.json();
       const conn = json?.data?.orders;
-      if (!conn) throw new Error(json?.errors?.[0]?.message || "orders query failed");
+      if (!conn) {
+        // Surface a missing scope as itself, not as an opaque failure — this is the single most likely
+        // reason a backfill won't run, and "Access denied for customer field" is meaningless to a merchant.
+        const msg = json?.errors?.[0]?.message || "orders query failed";
+        if (/access denied|required access/i.test(msg)) {
+          throw new Error(
+            `${msg} — the app needs read_orders, read_all_orders and read_customers. Re-deploy and re-approve the app, then run the backfill again.`,
+          );
+        }
+        throw new Error(msg);
+      }
 
       const orders = (conn.nodes || []).map(toOrder);
       const { rows, learned } = foldOrders(orders, firstTouch);
