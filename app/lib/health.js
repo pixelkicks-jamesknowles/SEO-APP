@@ -11,12 +11,37 @@ export const DELIVERY_MIN = 98; // % of server-side sends that succeeded
 export const OUTBOX_BACKLOG_MAX = 25; // pending retries before it's worth flagging
 
 /**
+ * A single composite data-quality score (0-100 + letter grade) for the store's tracking — the headline
+ * number an agency can put on a client report. Blends the two rates that matter (purchase capture +
+ * delivery success) and docks points for operational failures the rates don't fully capture (dead-lettered
+ * sends = conversions permanently lost; a stalled worker = everything deferred stops). A dimension with no
+ * data yet scores as full rather than penalising a quiet store; with NO activity at all the score is null.
+ * Pure.
+ */
+export function dataQualityScore(metrics = {}) {
+  const captureRate = pct(metrics.purchasesDelivered30 || 0, metrics.ordersPaid30 || 0);
+  const sends = (metrics.eventsSent30 || 0) + (metrics.eventsFailed30 || 0);
+  const deliveryRate = pct(metrics.eventsSent30 || 0, sends);
+  if (captureRate == null && deliveryRate == null) return { score: null, grade: null, label: "No data yet" };
+  const cap = captureRate == null ? 100 : captureRate;
+  const del = deliveryRate == null ? 100 : deliveryRate;
+  let score = 0.5 * cap + 0.5 * del;
+  if ((metrics.outboxDead || 0) > 0) score -= 15; // conversions we can't deliver without action
+  if ((metrics.cronStaleMinutes ?? 0) > 30) score -= 20; // worker stalled → retries/reconciliation stop
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const grade = score >= 95 ? "A" : score >= 85 ? "B" : score >= 70 ? "C" : score >= 50 ? "D" : "F";
+  const label = { A: "Excellent", B: "Good", C: "Needs attention", D: "Poor", F: "Critical" }[grade];
+  return { score, grade, label };
+}
+
+/**
  * metrics: {
  *   ordersPaid30, purchasesDelivered30, eventsSent30, eventsFailed30,  // 30-day totals
  *   ordersPaid24, purchasesDelivered24,                                 // last-24h totals
  *   outboxPending, outboxDead,                                          // retry queue
+ *   cronStaleMinutes,                                                   // worker liveness
  * }
- * Returns { captureRate, deliveryRate, outboxPending, outboxDead, alerts: [{ kind, severity, title, body }] }.
+ * Returns { captureRate, deliveryRate, outboxPending, outboxDead, quality, alerts: [{ kind, severity, title, body }] }.
  * Alerts are ordered most-severe first.
  */
 export function evaluateHealth(metrics = {}) {
@@ -78,5 +103,5 @@ export function evaluateHealth(metrics = {}) {
     });
   }
 
-  return { captureRate, deliveryRate, outboxPending: m.outboxPending || 0, outboxDead: m.outboxDead || 0, alerts };
+  return { captureRate, deliveryRate, outboxPending: m.outboxPending || 0, outboxDead: m.outboxDead || 0, quality: dataQualityScore(m), alerts };
 }

@@ -30,14 +30,20 @@ export const loader = async ({ request }) => {
 // loader so it streams after the shell.
 async function buildAccuracy(shopDomain) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [health, rows, tracking, matchQuality] = await Promise.all([
+  const [health, rows, tracking, matchQuality, channelRows] = await Promise.all([
     computeHealth(shopDomain),
     prisma.trackingDaily.findMany({ where: { shopDomain, date: { gte: since } }, orderBy: { date: "desc" } }),
     prisma.trackingSettings.findUnique({ where: { shopDomain }, select: { reportingCurrency: true } }),
     getMatchQuality(shopDomain, 30),
+    // Subscription revenue attributed to a channel — GA4 reports every renewal as Unassigned (no session),
+    // so this is revenue visibility the app adds that GA4 structurally cannot. Feeds the GA4-gap card.
+    prisma.channelRevenueDaily.findMany({ where: { shopDomain, date: { gte: since } }, select: { subscriptionRevenue: true } }).catch(() => []),
   ]);
   const sum = (k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
+  const subscriptionAttributed = channelRows.reduce((t, r) => t + (r.subscriptionRevenue || 0), 0);
   return {
+    quality: health.quality,
+    subscriptionAttributed,
     days: rows.map((r) => ({
       date: r.date,
       ordersPaid: r.ordersPaid,
@@ -138,12 +144,17 @@ export default function Accuracy() {
   );
 }
 
-function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, outboxDead, matchQuality }) {
+function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, outboxDead, matchQuality, quality, subscriptionAttributed }) {
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
   const deliveryRate = pct(totals.eventsSent, sends);
   const hasData = totals.ordersPaid > 0 || sends > 0;
   const recovered = totals.purchasesRecovered || 0;
+  // GA4 gap: revenue this app makes visible that GA4 alone would miss — pixel-missed purchases we
+  // backfilled server-side (ad-blockers / ITP / the checkout sandbox) PLUS subscription renewals GA4
+  // reports as Unassigned (no browser session to attribute).
+  const ga4Gap = (totals.revenueRecovered || 0) + (subscriptionAttributed || 0);
+  const qualityTone = quality?.score == null ? undefined : quality.score >= 85 ? "success" : quality.score >= 70 ? undefined : "critical";
 
   return (
     <BlockStack gap="400">
@@ -159,6 +170,37 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 {a.body}
               </Banner>
             ))}
+
+            {quality?.score != null && (
+              <Card>
+                <InlineStack gap="400" blockAlign="center" align="space-between" wrap>
+                  <BlockStack gap="100">
+                    <Text as="span" variant="bodySm" tone="subdued">Tracking data quality (30d)</Text>
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text as="span" variant="heading2xl">{quality.score}%</Text>
+                      <Badge tone={qualityTone === "success" ? "success" : qualityTone === "critical" ? "critical" : "attention"}>{`${quality.grade} — ${quality.label}`}</Badge>
+                    </InlineStack>
+                    <Text as="span" variant="bodySm" tone="subdued">Blends purchase capture and delivery success, less any dead-lettered sends or a stalled worker.</Text>
+                  </BlockStack>
+                  <div style={{ minWidth: 220, flex: "1 1 220px" }}>
+                    <ProgressBar progress={quality.score} tone={qualityTone} size="small" />
+                  </div>
+                </InlineStack>
+              </Card>
+            )}
+
+            {ga4Gap > 0 && (
+              <Banner tone="success" title={`${formatMoney(ga4Gap, recoveredCurrency)} of revenue is visible here that GA4 alone would miss (30d)`}>
+                <BlockStack gap="100">
+                  <Text as="p">
+                    {formatMoney(totals.revenueRecovered, recoveredCurrency)} from purchases the storefront pixel missed
+                    (ad-blockers, Safari ITP, the checkout sandbox) and backfilled server-side, plus{" "}
+                    {formatMoney(subscriptionAttributed, recoveredCurrency)} of subscription renewals attributed to a
+                    channel — which GA4 reports as Unassigned because a renewal has no browser session.
+                  </Text>
+                </BlockStack>
+              </Banner>
+            )}
 
             <InlineStack gap="400" wrap>
               <Stat

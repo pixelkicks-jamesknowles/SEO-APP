@@ -1,4 +1,4 @@
-import { evaluateHealth, CAPTURE_MIN, DELIVERY_MIN, OUTBOX_BACKLOG_MAX } from "../app/lib/health.js";
+import { evaluateHealth, dataQualityScore, CAPTURE_MIN, DELIVERY_MIN, OUTBOX_BACKLOG_MAX } from "../app/lib/health.js";
 import { CRON_STALE_MIN, CRON_ALERT_MIN } from "../app/lib/heartbeat.js";
 
 const kinds = (h) => h.alerts.map((a) => a.kind);
@@ -63,5 +63,44 @@ describe("evaluateHealth", () => {
   test("worker never run (null) → no cron_stale alarm", () => {
     const h = evaluateHealth({ cronStaleMinutes: null });
     expect(kinds(h)).not.toContain("cron_stale");
+  });
+});
+
+describe("dataQualityScore", () => {
+  test("a clean store scores A (100)", () => {
+    const q = dataQualityScore({ ordersPaid30: 100, purchasesDelivered30: 100, eventsSent30: 500, eventsFailed30: 0 });
+    expect(q).toEqual({ score: 100, grade: "A", label: "Excellent" });
+  });
+
+  test("blends capture and delivery 50/50", () => {
+    // capture 80%, delivery 100% → 90
+    const q = dataQualityScore({ ordersPaid30: 100, purchasesDelivered30: 80, eventsSent30: 100, eventsFailed30: 0 });
+    expect(q.score).toBe(90);
+    expect(q.grade).toBe("B");
+  });
+
+  test("dead-lettered sends dock the score", () => {
+    const clean = dataQualityScore({ ordersPaid30: 100, purchasesDelivered30: 100, eventsSent30: 100, eventsFailed30: 0 });
+    const dead = dataQualityScore({ ordersPaid30: 100, purchasesDelivered30: 100, eventsSent30: 100, eventsFailed30: 0, outboxDead: 2 });
+    expect(dead.score).toBe(clean.score - 15);
+  });
+
+  test("a stalled worker docks the score", () => {
+    const q = dataQualityScore({ ordersPaid30: 100, purchasesDelivered30: 100, eventsSent30: 100, eventsFailed30: 0, cronStaleMinutes: 120 });
+    expect(q.score).toBe(80);
+  });
+
+  test("a dimension with no data doesn't penalise (delivery-only store)", () => {
+    const q = dataQualityScore({ eventsSent30: 100, eventsFailed30: 0 }); // no orders → capture null → treated as 100
+    expect(q.score).toBe(100);
+  });
+
+  test("no activity at all → null score", () => {
+    expect(dataQualityScore({})).toEqual({ score: null, grade: null, label: "No data yet" });
+  });
+
+  test("evaluateHealth exposes the composite score", () => {
+    const h = evaluateHealth({ ordersPaid30: 100, purchasesDelivered30: 100, eventsSent30: 100, eventsFailed30: 0 });
+    expect(h.quality).toEqual({ score: 100, grade: "A", label: "Excellent" });
   });
 });
