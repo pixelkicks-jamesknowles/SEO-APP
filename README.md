@@ -16,10 +16,16 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   API** + **Microsoft UET (Bing) Conversions API** + **Klaviyo Events API** (onsite browse/abandonment
   events) + server-side GTM fan-out from the `/track` beacon (`app/lib/server-side.server.js`),
   matrix-gated per destination.
-- **Durable first-party id** — the app proxy sets an ITP-proof first-party cookie (`pxp_id`) via a
-  server `Set-Cookie` (not capped by Safari's 7-day script-cookie rule); the pixel + embed both carry it
-  as a stable `client_id`, so a returning visitor is ONE user across sessions even after `_ga` expires
-  (`app/lib/durable-id.server.js`). Requires the SEO-engagement theme embed (it mints the cookie).
+- **Durable first-party id** — the app proxy mints a stable first-party id (`pxp_id`); the pixel + embed
+  both carry it as a stable `client_id`, so a returning visitor is ONE user across sessions even after
+  `_ga` expires (`app/lib/durable-id.server.js`). Requires the SEO-engagement theme embed.
+  > **Cookie-lifetime caveat.** The proxy returns a `Set-Cookie`, but **Shopify's App Proxy does not pass
+  > `Set-Cookie` through to the browser**, so in practice the embed persists the id from the response body
+  > as a **script-written** cookie. That means it *is* subject to Safari's 7-day ITP cap (400 days on
+  > Chrome/Firefox) — it is **not** the "ITP-proof" server-set cookie this originally claimed. A truly
+  > ITP-proof id needs a **custom first-party subdomain** (`CNAME track.<merchant> → the app host`), which
+  > is how Elevar/Stape do it. Tracked as a roadmap item; the code already prefers a real server-set
+  > cookie if one ever lands, so that upgrade is drop-in.
 - **Identity stitching** — a graph links the durable id ↔ GA4 client id ↔ customer, so a conversion
   inherits its visitor's original first-touch across sessions/devices instead of looking direct
   (`app/lib/identity.server.js`).
