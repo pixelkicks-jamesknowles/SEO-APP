@@ -21,8 +21,15 @@ automatically_update_urls_on_dev = true
 #   read_products        — read the SellingPlan deliveryPolicy (subscription cadence → subscription_interval);
 #                          the order's LineItemSellingPlan is under read_orders, but the SellingPlan object
 #                          itself is products-domain, so resolveIntervalDays needs read_products.
+#   read_all_orders      — revenue-by-channel BACKFILL. read_orders only exposes the LAST 60 DAYS, but an
+#                          established subscriber's ACQUIRING order (the one carrying the customer journey /
+#                          UTMs) is often years old — so without this we can never recover which channel
+#                          actually won them, and their renewal revenue reports as "(unattributed)" forever.
+#                          ⚠️ Shopify must APPROVE this scope (Partner Dashboard → API access → request it,
+#                          with a justification). Until approved it is simply not granted and the backfill
+#                          degrades gracefully to the 60-day window.
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders,read_fulfillments,read_products"
+scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

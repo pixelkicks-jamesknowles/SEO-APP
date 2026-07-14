@@ -52,6 +52,14 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   customer's **first-touch** source onto each renewal, and splits `subscriptionRevenue` out per channel, so
   you can actually see which channels drive subscription revenue. On the Attribution page
   (`byChannelRevenue` in `app/lib/attribution-report.js`, recorded in `webhooks.orders.paid.jsx`).
+- **Attribution backfill** — rebuilds the above from **Shopify's own order attribution**
+  (`Order.customerJourneySummary.firstVisit`), replaying each customer's first touch onto their renewals,
+  and seeding `CustomerAttribution` so future renewals inherit it too (`app/lib/backfill.js` pure +
+  `backfill.server.js`). Leased + resumable on `/cron/tick`; a fresh run clears the window first so it can't
+  double-count, and it only touches days **before today** (the live `orders/paid` path owns today onward).
+  Triggered from the Attribution page. **Needs `read_all_orders`** to see past 60 days — see
+  [DEPLOY.md Step 5b](DEPLOY.md). Unrecoverable customers are shown as **`(unattributed)`**, never folded
+  into `(direct)`.
 - **Proactive alerting** — the cron posts tracking-health alerts (dead-lettered sends, capture/delivery
   drops, retry backlog) to a Slack/Discord/Teams/generic webhook, deduped on a cooldown
   (`app/lib/alerting.server.js`).

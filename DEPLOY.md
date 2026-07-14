@@ -37,7 +37,7 @@ Set these in **Service → Variables**:
 | `DATABASE_URL` | Reference the Postgres plugin: `${{Postgres.DATABASE_URL}}` |
 | `SHOPIFY_API_KEY` | The app's client ID — `708d7107539ef297a6230ea9b0716a2a` (the `client_id` in `shopify.app.toml`) |
 | `SHOPIFY_API_SECRET` | From Partner Dashboard → your app → **API credentials → API secret key** |
-| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence; omitting it silently breaks `subscription_interval`) |
+| `SCOPES` | `write_pixels,read_customer_events,read_orders,read_all_orders,read_fulfillments,read_products` (must match `shopify.app.toml` — `read_products` resolves the subscription cadence; omitting it silently breaks `subscription_interval`. `read_all_orders` powers the attribution backfill — see Step 5b) |
 | `SHOPIFY_APP_URL` | The app's public host — currently the custom domain `https://tracking.pixelkicks.co.uk` (must match `application_url` in `shopify.app.toml`) |
 | `APP_ENCRYPTION_KEY` | A dedicated 32-byte key for merchant-credential encryption — generate with `openssl rand -base64 32`. **Required in production: the app now fails to boot without it** (missing or malformed), so a silent fallback can't orphan credentials. **Set this before storing any server-side keys.** Once set, don't change it or stored credentials must be re-entered. |
 | `ALLOW_INSECURE_ENCRYPTION_FALLBACK` | *(optional escape hatch)* Set to `true` only for a deployment already bootstrapped on the `SHOPIFY_API_SECRET`-derived key: it downgrades the boot failure above to a warning so a redeploy isn't bricked while you migrate to a real `APP_ENCRYPTION_KEY`. Leave unset on new installs. |
@@ -128,6 +128,27 @@ In **Partner Dashboard → your app → Distribution**, pick one:
   store, not searchable in the App Store.
 
 Installing triggers OAuth against the Railway host and stores the offline token (auto-refreshing).
+
+## Step 5b — `read_all_orders` (needed for the attribution backfill)  ⚠️ Shopify must approve this
+The **Attribution → Backfill from order history** job rebuilds revenue-by-channel from Shopify's own order
+attribution (each order's customer journey), and replays each customer's **first-touch** channel onto their
+**renewals** — so subscription revenue is credited to the channel that actually acquired the subscriber.
+GA4 can never do this: a renewal has no browser session, so it has no channel to inherit and reports as
+Unassigned forever.
+
+**The catch:** `read_orders` only exposes the **last 60 days** of orders. An established subscriber's
+*acquiring* order — the one carrying the UTMs / customer journey — is usually far older. Without
+`read_all_orders`, those customers can't have their channel recovered and show as **(unattributed)**.
+
+1. Partner/dev dashboard → your app → **API access** → request **`read_all_orders`**, with a justification
+   (e.g. *"Rebuild historical marketing attribution: credit subscription renewal revenue to the channel that
+   originally acquired the customer. Read-only; no order data leaves the merchant's own analytics."*).
+2. Shopify reviews it. Until it's granted the scope simply isn't given, and the backfill **degrades
+   gracefully** to the 60-day window — nothing breaks.
+3. Once approved, `shopify.app.toml` already lists it, so the next `npm run deploy` picks it up.
+
+> ⚠️ **Scope change = merchant re-consent.** Adding `read_all_orders` to the scope string means every
+> installed store must re-approve the app on the next deploy. Expect that, and tell the client first.
 
 ## Step 6 — Per-client setup (in the app)
 For each installed store:

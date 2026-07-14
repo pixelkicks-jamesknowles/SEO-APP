@@ -278,6 +278,30 @@ model ChannelRevenueDaily {
   @@index([shopDomain, date])
 }
 
+// Historical revenue-by-channel backfill. ChannelRevenueDaily only fills from orders/paid going forward,
+// so the Attribution report starts empty — and a subscription business's key question ("which channel
+// acquired the subscribers whose renewals pay us now?") is answered by orders placed long before install.
+// This job pages Shopify's order history (oldest-first, so a customer's earliest order is seen first and
+// becomes their first touch), rebuilds the daily rollup, and populates CustomerAttribution so FUTURE
+// renewals inherit the right channel too.
+//
+// Resumable: `cursor` is the Shopify page cursor. Leased like the other cron work so two ticks can't run
+// it twice. Rows for days < today are cleared on a fresh start (cursor null) so a re-run can't double-count;
+// the live orders/paid path owns today onward, so the two never overlap.
+model BackfillJob {
+  shopDomain      String    @id
+  status          String    @default("idle") // idle | running | done | error
+  cursor          String? // Shopify pagination cursor (null = not started / finished)
+  sinceDate       String? // YYYY-MM-DD — the window start this run is rebuilding
+  ordersProcessed Int       @default(0)
+  detail          String? // last error / summary
+  leaseToken      String?
+  leasedUntil     DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  updatedAt       DateTime  @updatedAt
+}
+
 // Inbound-webhook idempotency (Shopify can deliver >once). Keyed on X-Shopify-Webhook-Id (fallback:
 // order id). Purged on a TTL by the existing cron.audit job.
 model ProcessedWebhook {

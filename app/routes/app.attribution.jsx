@@ -1,18 +1,32 @@
 import { Suspense } from "react";
-import { useLoaderData, useRevalidator, Await } from "@remix-run/react";
+import { useLoaderData, useRevalidator, useFetcher, Await } from "@remix-run/react";
 import { defer } from "@remix-run/node";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Button, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue } from "../lib/attribution-report";
 import { identityStats } from "../lib/identity.server";
+import { requestBackfill, backfillStatus } from "../lib/backfill.server";
+
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const form = await request.formData();
+  if (form.get("_action") === "backfill") {
+    // Queued, not run inline: paging a store's order history takes minutes, so /cron/tick advances it a
+    // few pages at a time (leased + resumable).
+    return await requestBackfill(session.shop, { days: 90 });
+  }
+  return { ok: true };
+};
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   // Defer the report so the page shell paints immediately and the tables stream in — this report scans up
   // to two 5,000-row tables + aggregates, so keeping it off the initial paint is the main LCP lever here.
-  return defer({ report: buildReport(session.shop) });
+  // The backfill status is cheap (one row) and drives the card, so it's awaited.
+  const backfill = await backfillStatus(session.shop);
+  return defer({ backfill, report: buildReport(session.shop) });
 };
 
 // Build the attribution report (all reads in one round-trip group). Kept as a non-awaited promise by the
@@ -128,7 +142,7 @@ function AttributionSkeleton() {
 }
 
 export default function Attribution() {
-  const { report } = useLoaderData();
+  const { report, backfill } = useLoaderData();
   const revalidator = useRevalidator();
   return (
     <Page
@@ -136,12 +150,71 @@ export default function Attribution() {
       subtitle="Which channels drive revenue, where your visitors first came from, and how their journey builds across sessions and devices."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
-      <Suspense fallback={<AttributionSkeleton />}>
-        <Await resolve={report} errorElement={<Banner tone="critical" title="Couldn't load attribution data">Refresh to try again.</Banner>}>
-          {(resolved) => <AttributionBody {...resolved} />}
-        </Await>
-      </Suspense>
+      <BlockStack gap="400">
+        <BackfillCard backfill={backfill} />
+        <Suspense fallback={<AttributionSkeleton />}>
+          <Await resolve={report} errorElement={<Banner tone="critical" title="Couldn't load attribution data">Refresh to try again.</Banner>}>
+            {(resolved) => <AttributionBody {...resolved} />}
+          </Await>
+        </Suspense>
+      </BlockStack>
     </Page>
+  );
+}
+
+/**
+ * Rebuild revenue-by-channel from Shopify's order history.
+ *
+ * This report otherwise only fills from new orders, so it starts empty — and the question a subscription
+ * business most wants answered ("which channel acquired the subscribers whose renewals pay us now?") is
+ * answered by orders placed long before the app was installed. The backfill reads Shopify's OWN attribution
+ * (each order's customer journey) and replays each customer's first touch onto their renewals.
+ */
+function BackfillCard({ backfill }) {
+  const fetcher = useFetcher();
+  const running = backfill?.status === "running" || fetcher.state !== "idle";
+  const done = backfill?.status === "done";
+  const errored = backfill?.status === "error";
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <SectionHeading
+          title="Backfill from order history"
+          description="Rebuilds revenue-by-channel from Shopify's own order attribution, and replays each customer's first-touch channel onto their renewals — so subscription revenue is credited to the channel that actually won the subscriber."
+        />
+        <Divider />
+        {errored && <Banner tone="critical" title="Backfill failed">{backfill.detail || "Try again."}</Banner>}
+        {running && (
+          <Banner tone="info" title="Backfill running">
+            <p>
+              Processed {(backfill?.ordersProcessed || 0).toLocaleString()} orders so far. It pages through
+              your history in the background, so it can take a few minutes — leave the page and come back.
+            </p>
+          </Banner>
+        )}
+        {done && (
+          <Banner tone="success" title={`Backfill complete — ${(backfill.ordersProcessed || 0).toLocaleString()} orders`}>
+            <p>Revenue by channel below now includes your order history, renewals attributed to the channel that acquired the customer.</p>
+          </Banner>
+        )}
+        <Text as="p" variant="bodySm" tone="subdued">
+          <b>Heads-up on history depth:</b> Shopify only exposes the <b>last 60 days</b> of orders unless it
+          has approved the <code>read_all_orders</code> scope for this app. An established subscriber&apos;s
+          <b> acquiring</b> order is often far older than that — so until that scope is granted, those
+          customers can&apos;t have their channel recovered and are shown as <b>(unattributed)</b> rather than
+          being folded into <b>(direct)</b>, which would flatter direct and mislead you.
+        </Text>
+        <InlineStack>
+          <fetcher.Form method="post">
+            <input type="hidden" name="_action" value="backfill" />
+            <Button submit loading={running} disabled={running}>
+              {done ? "Run backfill again" : "Backfill last 90 days"}
+            </Button>
+          </fetcher.Form>
+        </InlineStack>
+      </BlockStack>
+    </Card>
   );
 }
 

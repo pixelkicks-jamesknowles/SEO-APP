@@ -19,6 +19,7 @@ import { processPendingSubscriptions } from "../lib/subscription-cron.server";
 import { refreshFxRates } from "../lib/fx.server";
 import { runAlerts } from "../lib/alerting.server";
 import { recordTick } from "../lib/heartbeat.server";
+import { processBackfill } from "../lib/backfill.server";
 
 // Constant-time compare of the presented secret against CRON_SECRET (same pattern as pixel-token).
 // Header-only: a `?key=` query param would land in access logs / referrers, so the secret must be
@@ -63,7 +64,7 @@ async function tick() {
   // ticks (the cron fires frequently) rather than risking a double-send.
   const startedAt = Date.now();
   try {
-    const [outbox, reconciled, subscriptions, fx, purged, alerts] = await Promise.all([
+    const [outbox, reconciled, subscriptions, fx, purged, alerts, backfill] = await Promise.all([
       drainOutbox({ limit: 40 }),
       reconcilePending({ graceMinutes: 20, limit: 8 }),
       // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
@@ -74,10 +75,13 @@ async function tick() {
       // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
       // an alerting failure must never wedge the outbox/reconcile work above.
       runAlerts().catch(() => ({ shops: 0, notified: 0 })),
+      // Historical revenue-by-channel backfill: advance a few pages of a merchant-requested job. Leased +
+      // resumable, so a long history drains over many ticks. Best-effort — it must never wedge delivery.
+      processBackfill().catch((e) => ({ ran: 0, error: String(e?.message || e).slice(0, 120) })),
     ]);
-    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts };
+    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, alerts, backfill };
     // Stamp the heartbeat so the app can tell the worker is alive (dashboard tile + cron_stale alert).
-    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, alerts } });
+    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, alerts, backfill } });
     return result;
   } catch (e) {
     // Record the failed run too (the worker is up, just erroring) so it shows as "last run errored" rather
