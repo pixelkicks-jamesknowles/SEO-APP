@@ -34,7 +34,10 @@ export const loader = async ({ request }) => {
   const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop } });
   const keys = readServerSideKeys(tracking);
   const configured = Object.fromEntries(DEST_SERVER.map((d) => [d.key, Boolean(tracking?.[d.idCol])]));
-  return { state: wizardState(tracking, keys), shop: session.shop, configured };
+  // ?restart=1 (from the Settings "Re-run setup wizard" button) forces the full step flow again even for an
+  // already-configured store, and prefills the non-secret GA4 id so they can breeze past what's done.
+  const restart = new URL(request.url).searchParams.get("restart") === "1";
+  return { state: wizardState(tracking, keys), shop: session.shop, configured, restart, savedGa4Id: tracking?.ga4Id || "" };
 };
 
 function withGa4Defaults(existingMatrixJson) {
@@ -214,18 +217,19 @@ function DestinationPicker({ configured }) {
 }
 
 export default function Wizard() {
-  const { state, shop, configured } = useLoaderData();
+  const { state, shop, configured, restart, savedGa4Id } = useLoaderData();
   const actionData = useActionData();
-  // Client-driven step (so the optional destinations step can be skipped). Seeded from server state.
-  const [step, setStep] = useState(!state.hasGa4 ? 1 : !state.hasSecret ? 2 : 3);
+  // Client-driven step (so the optional destinations step can be skipped). Seeded from server state; a
+  // restart always begins at step 1.
+  const [step, setStep] = useState(restart ? 1 : !state.hasGa4 ? 1 : !state.hasSecret ? 2 : 3);
   // Whether setup was ALREADY complete when the wizard opened (a returning merchant) — captured at mount so
   // it doesn't flip mid-flow (a fresh flow makes state.complete true after step 2, but the merchant should
-  // still see steps 3-4). Only this shows the "all set" screen.
-  const returningComplete = useRef(state.complete);
+  // still see steps 3-4). A restart bypasses this to force the flow.
+  const returningComplete = useRef(state.complete && !restart);
   const flow = useFetcher(); // saves for steps 1-3
   const testFetcher = useFetcher(); // step 4 live test
   const handled = useRef(null);
-  const [ga4Id, setGa4Id] = useState("");
+  const [ga4Id, setGa4Id] = useState(restart ? savedGa4Id : "");
   const [secret, setSecret] = useState("");
 
   // Advance once per completed save (fetcher.data is a fresh object per response).
@@ -280,7 +284,10 @@ export default function Wizard() {
                 <input type="hidden" name="intent" value="connect_ga4" />
                 <BlockStack gap="300">
                   <TextField label="Google Analytics Measurement ID" name="ga4Id" autoComplete="off" value={ga4Id} onChange={setGa4Id} placeholder="G-XXXXXXXXXX" helpText="Where to find it: in Google Analytics, click Admin (the cog, bottom-left) → Data streams → click your website → the Measurement ID (G-…) is at the top right." />
-                  <InlineStack><Button submit variant="primary" loading={busy}>Connect and continue</Button></InlineStack>
+                  <InlineStack gap="200">
+                    <Button submit variant="primary" loading={busy}>Connect and continue</Button>
+                    {restart && state.hasGa4 && <Button variant="plain" onClick={() => setStep(2)}>Skip — GA4 already connected</Button>}
+                  </InlineStack>
                 </BlockStack>
               </flow.Form>
             </BlockStack>
@@ -298,6 +305,7 @@ export default function Wizard() {
                   <TextField label="GA4 Measurement Protocol secret" name="ga4ApiSecret" type="password" autoComplete="off" value={secret} onChange={setSecret} helpText="Where to find it: Google Analytics → Admin → Data streams → click your website → scroll to “Measurement Protocol API secrets” → Create → copy the Secret value here." />
                   <InlineStack gap="200">
                     <Button submit variant="primary" loading={busy}>Save and continue</Button>
+                    {restart && state.hasSecret && <Button variant="plain" onClick={() => setStep(3)}>Skip — secret already saved</Button>}
                     <Button variant="plain" onClick={() => setStep(1)}>Back</Button>
                   </InlineStack>
                 </BlockStack>

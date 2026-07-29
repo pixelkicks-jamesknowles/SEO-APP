@@ -295,6 +295,18 @@ export default function Settings() {
         <Card>
           <BlockStack gap="300">
             <SectionHeading
+              title="Guided setup"
+              description="Prefer the step-by-step walkthrough? Re-open the setup wizard to review your connection or add another ad platform (Meta, TikTok, Reddit…). It won't undo anything you've already saved."
+            />
+            <InlineStack>
+              <Button url="/app/wizard?restart=1">Re-run setup wizard</Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <SectionHeading
               title="Server-side credentials"
               description="Used by server-side delivery: the GA4 Measurement Protocol secret (also powers the subscription event), the Meta CAPI token, and a server-side GTM container URL."
             />
