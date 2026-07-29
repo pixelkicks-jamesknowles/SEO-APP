@@ -40,3 +40,25 @@ export function checklistStatus(items = []) {
   if (items.some((i) => i.ok)) return "partial";
   return "empty";
 }
+
+/**
+ * State for the hand-holding setup wizard (the plain-language, 3-step flow for non-technical merchants).
+ * Only GA4 is required — the wizard turns on server-side, sets the event matrix and creates the pixel for
+ * them behind the scenes, so the merchant only ever pastes two values.
+ *   step 1 — Connect GA4 (measurement ID)
+ *   step 2 — Add the GA4 secret
+ *   step 3 — Turn on the theme embed + run a live test (embed can't be detected, so it's the final screen)
+ * `started` gates the on-install redirect (fresh install → wizard); `complete` gates the Home nudge. Pure.
+ */
+export function wizardState(settings, keys) {
+  const s = settings || {};
+  const k = keys || {};
+  const hasGa4 = Boolean(s.ga4Id);
+  const hasSecret = Boolean(k.ga4ApiSecret);
+  const started = hasGa4 || Boolean(s.serverSide);
+  const complete = hasGa4 && hasSecret && Boolean(s.serverSide) && Boolean(s.webPixelId);
+  let step = 1;
+  if (hasGa4 && !hasSecret) step = 2;
+  else if (hasGa4 && hasSecret) step = 3;
+  return { step, total: 3, started, complete, hasGa4, hasSecret };
+}

@@ -19,7 +19,7 @@ import prisma from "../db.server";
 import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { eventLabel } from "../lib/event-labels";
-import { pixelToken } from "../lib/pixel-token.server";
+import { syncWebPixel } from "../lib/web-pixel.server";
 import { readServerSideKeys } from "../lib/secrets.server";
 
 // Build the matrix[platform][event] = boolean map from saved settings.
@@ -126,22 +126,6 @@ export const loader = async ({ request }) => {
   };
 };
 
-const CREATE_PIXEL = `#graphql
-  mutation CreateWebPixel($webPixel: WebPixelInput!) {
-    webPixelCreate(webPixel: $webPixel) {
-      webPixel { id }
-      userErrors { field message }
-    }
-  }`;
-
-const UPDATE_PIXEL = `#graphql
-  mutation UpdateWebPixel($id: ID!, $webPixel: WebPixelInput!) {
-    webPixelUpdate(id: $id, webPixel: $webPixel) {
-      webPixel { id }
-      userErrors { field message }
-    }
-  }`;
-
 export const action = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
@@ -204,60 +188,23 @@ export const action = async ({ request }) => {
     update: data,
   });
 
-  // Push the effective config to the Web Pixel sandbox. Settings keys MUST match the
-  // extension's declared fields (extensions/tracking-pixel/shopify.extension.toml).
-  // One JSON field - the extension declares a single non-blank `config` field, so individual
-  // platform IDs can be left blank (e.g. GA4-only) without Shopify's "can't be blank" rejection.
-  // The Web Pixel's strict sandbox blocks same-origin requests, so it CANNOT use the app proxy - it
-  // must beacon cross-origin to the app's own host. Hard-code that absolute URL (+ the shop, since a
-  // direct request carries no app-proxy signature) into the pixel config here.
-  const appHost = (process.env.SHOPIFY_APP_URL || new URL(request.url).origin).replace(/\/$/, "");
-  const pixelSettings = {
-    config: JSON.stringify({
-      gtmId: data.gtmId || "",
-      ga4Id: data.ga4Id || "",
-      metaPixelId: data.metaPixelId || "",
+  // Push the effective config to the Web Pixel sandbox (create/update). Shared with the setup wizard.
+  const appHost = process.env.SHOPIFY_APP_URL || new URL(request.url).origin;
+  const { webPixelId, pixelError } = await syncWebPixel({
+    admin,
+    appHost,
+    shopDomain,
+    existingId: existing?.webPixelId,
+    config: {
+      gtmId: data.gtmId,
+      ga4Id: data.ga4Id,
+      metaPixelId: data.metaPixelId,
       eventMatrix: JSON.parse(data.eventMatrix || "{}"),
       consentMode: data.consentMode,
       consentSignals: data.consentSignals,
       debug: data.pixelDebug,
-      trackUrl: `${appHost}/pixel/track`,
-      shopDomain,
-      // Shop-scoped token so /pixel/track (an unsigned cross-origin beacon) can reject forged events
-      // for arbitrary shops. See app/lib/pixel-token.server.js for what this does and doesn't buy.
-      trackToken: pixelToken(shopDomain),
-    }),
-  };
-  const input = { settings: JSON.stringify(pixelSettings) };
-
-  let webPixelId = existing?.webPixelId || null;
-  let pixelError = null;
-  const createPixel = async () => {
-    const res = await admin.graphql(CREATE_PIXEL, { variables: { webPixel: input } });
-    const json = await res.json();
-    const errs = json.data?.webPixelCreate?.userErrors ?? [];
-    if (errs.length) pixelError = errs.map((e) => e.message).join("; ");
-    else webPixelId = json.data?.webPixelCreate?.webPixel?.id ?? null;
-  };
-  try {
-    if (webPixelId) {
-      const res = await admin.graphql(UPDATE_PIXEL, { variables: { id: webPixelId, webPixel: input } });
-      const json = await res.json();
-      const errs = json.data?.webPixelUpdate?.userErrors ?? [];
-      // The stored pixel can vanish (app reinstall, dev-store reset, manual delete). When the update
-      // can't find it, drop the stale ID and create a fresh pixel so the save self-heals.
-      if (errs.some((e) => /couldn't be found|could not be found|does not exist/i.test(e.message))) {
-        webPixelId = null;
-        await createPixel();
-      } else if (errs.length) {
-        pixelError = errs.map((e) => e.message).join("; ");
-      }
-    } else {
-      await createPixel();
-    }
-  } catch (e) {
-    pixelError = e.message;
-  }
+    },
+  });
 
   if (webPixelId && webPixelId !== existing?.webPixelId) {
     await prisma.trackingSettings.update({ where: { shopDomain }, data: { webPixelId } });

@@ -1,4 +1,4 @@
-import { buildChecklist, checklistStatus } from "../app/lib/wizard.js";
+import { buildChecklist, checklistStatus, wizardState } from "../app/lib/wizard.js";
 
 describe("buildChecklist", () => {
   test("empty settings → base checks all failing", () => {
@@ -40,5 +40,24 @@ describe("buildChecklist", () => {
   test("malformed eventMatrix doesn't throw", () => {
     const items = buildChecklist({ ga4Id: "G-X", eventMatrix: "not json" }, { ga4ApiSecret: "s" });
     expect(items.find((i) => i.key === "ga4purchase").ok).toBe(false);
+  });
+});
+
+describe("wizardState (hand-holding setup flow)", () => {
+  test("fresh install → step 1, not started", () => {
+    expect(wizardState(null, {})).toMatchObject({ step: 1, total: 3, started: false, complete: false });
+  });
+  test("GA4 id set, no secret → step 2, started", () => {
+    expect(wizardState({ ga4Id: "G-1", serverSide: true }, {})).toMatchObject({ step: 2, started: true, complete: false });
+  });
+  test("GA4 id + secret → step 3", () => {
+    expect(wizardState({ ga4Id: "G-1", serverSide: true }, { ga4ApiSecret: "s" }).step).toBe(3);
+  });
+  test("fully configured (id + secret + serverSide + pixel) → complete", () => {
+    const st = wizardState({ ga4Id: "G-1", serverSide: true, webPixelId: "gid://x" }, { ga4ApiSecret: "s" });
+    expect(st.complete).toBe(true);
+  });
+  test("serverSide on but no GA4 counts as started (so we don't re-force the wizard)", () => {
+    expect(wizardState({ serverSide: true }, {}).started).toBe(true);
   });
 });

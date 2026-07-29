@@ -171,6 +171,11 @@ After the re-consented deploy, run **Attribution → Backfill last 90 days** aga
 history now visible.
 
 ## Step 6 — Per-client setup (in the app)
+> **Quick path:** a fresh install lands on a guided **Setup** wizard (`/app/wizard`) that hand-holds a
+> non-technical merchant through GA4 (paste measurement ID + secret) and turns on server-side delivery,
+> the event matrix and the Web Pixel automatically. Use the manual steps below for full control (Meta,
+> other destinations, subscriptions, etc.).
+
 For each installed store:
 1. **Tracking**: enter GA4 / Meta / GTM IDs, tick events, turn on **Server-side delivery** (+ Consent
    mode, Bot filtering; optionally Subscription / Refund tracking). If the store **also runs Google's

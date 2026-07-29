@@ -1,8 +1,10 @@
 import { useLoaderData, useFetcher } from "@remix-run/react";
+import { redirect } from "@remix-run/node";
 import { Page, Layout, Card, Text, BlockStack, InlineStack, Badge, Button, List, Banner } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { readServerSideKeys } from "../lib/secrets.server";
+import { wizardState } from "../lib/wizard";
 import { computeHealth, dismissAlert } from "../lib/health.server";
 import { getHeartbeat } from "../lib/heartbeat.server";
 import { minutesSince, CRON_STALE_MIN, CRON_ALERT_MIN } from "../lib/heartbeat";
@@ -28,6 +30,10 @@ export const loader = async ({ request }) => {
     getHeartbeat(),
   ]);
   const keys = readServerSideKeys(tracking);
+  // Fresh install (nothing configured yet) → send them straight into the guided setup wizard. Once they've
+  // started, we don't force it again; an incomplete setup just shows a "finish setup" banner below.
+  const setup = wizardState(tracking, keys);
+  if (!setup.started) throw redirect("/app/wizard");
   const idKeys = ["gtmId", "ga4Id", "metaPixelId"];
   const platforms = tracking ? idKeys.filter((k) => tracking[k]).length : 0;
   const serverSide = tracking?.serverSide ?? false;
@@ -54,6 +60,9 @@ export const loader = async ({ request }) => {
     alerts: health.alerts,
     // Background-worker liveness: minutes since the last /cron/tick, or null if it has never run.
     workerLastRunMin: heartbeat ? minutesSince(heartbeat.lastTickAt) : null,
+    setupComplete: setup.complete,
+    setupStep: setup.step,
+    setupTotal: setup.total,
   };
 };
 
@@ -66,8 +75,7 @@ function workerBadge(min) {
 }
 
 export default function Index() {
-  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts, workerLastRunMin } = useLoaderData();
-  const notConfigured = platforms === 0;
+  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts, workerLastRunMin, setupComplete, setupStep, setupTotal } = useLoaderData();
   const worker = workerBadge(workerLastRunMin);
   const dismisser = useFetcher();
 
@@ -90,15 +98,15 @@ export default function Index() {
           </Layout.Section>
         ))}
 
-        {notConfigured && (
+        {!setupComplete && (
           <Layout.Section>
             <Banner
               tone="info"
-              title="You're not tracking anything yet"
-              action={{ content: "Set up tracking", url: "/app/tracking" }}
+              title="Finish setting up your tracking"
+              action={{ content: `Continue setup (step ${setupStep} of ${setupTotal})`, url: "/app/wizard" }}
               secondaryAction={{ content: "Read the guide", url: "/app/help" }}
             >
-              <p>Add a GA4, Meta or GTM destination on the Tracking page, then turn on Server-side delivery.</p>
+              <p>You&apos;re a couple of steps from live tracking. The guided setup walks you through it.</p>
             </Banner>
           </Layout.Section>
         )}

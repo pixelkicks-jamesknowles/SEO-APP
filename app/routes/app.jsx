@@ -23,7 +23,7 @@ export default function App() {
         </Link>
         <Link to="/app/tracking">Tracking</Link>
         <Link to="/app/datalayer">GTM data layer</Link>
-        <Link to="/app/wizard">Setup check</Link>
+        <Link to="/app/wizard">Setup</Link>
         <Link to="/app/sandbox">Event sandbox</Link>
         <Link to="/app/events">Live events</Link>
         <Link to="/app/accuracy">Accuracy</Link>
