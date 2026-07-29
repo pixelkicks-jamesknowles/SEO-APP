@@ -1,5 +1,5 @@
 import { useLoaderData, useActionData, useFetcher } from "@remix-run/react";
-import { Page, Card, BlockStack, InlineStack, Text, Banner, Button, Badge, Divider, TextField, Checkbox, ProgressBar, Link as PolarisLink } from "@shopify/polaris";
+import { Page, Card, BlockStack, InlineStack, Text, Banner, Button, Badge, Divider, TextField, Checkbox, Select, ProgressBar, Link as PolarisLink } from "@shopify/polaris";
 import { useEffect, useRef, useState } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -13,7 +13,28 @@ import { logActivity } from "../lib/activity.server";
 // boxes; the wizard turns on server-side delivery, sets the event matrix and creates the Web Pixel for them.
 // 4 steps: GA4 id → GA4 secret → other ad platforms (optional) → enable embed + live test.
 
-const TOTAL = 4;
+const TOTAL = 5;
+
+// Known Shopify subscription apps. Subscription tracking reads Shopify's NATIVE selling-plan data off the
+// orders/paid webhook, so it's app-agnostic — apps that use native subscriptions (nearly all) work
+// automatically once the toggle is on. The picker is for reassurance + surfacing the one real caveat: an
+// app that takes payment on its OWN checkout (outside Shopify) whose renewals may never reach the webhook.
+const SUBSCRIPTION_APPS = [
+  { value: "shopify", label: "Shopify Subscriptions (native)", ok: true, note: "Fully compatible. Renewals use Shopify's native selling plans, so they're tracked automatically — nothing else to set up." },
+  { value: "recharge", label: "Recharge", ok: true, note: "Compatible. Make sure Recharge is on “Shopify Checkout Integration” (its current default) so renewals go through Shopify's native subscriptions — then there's nothing else to do." },
+  { value: "bold", label: "Bold Subscriptions", ok: true, note: "Compatible — renewals are tracked automatically via Shopify's native selling plans." },
+  { value: "loop", label: "Loop Subscriptions", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "skio", label: "Skio", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "seal", label: "Seal Subscriptions", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "appstle", label: "Appstle Subscriptions", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "smartrr", label: "Smartrr", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "stayai", label: "Stay Ai", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "subify", label: "Subify", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "paywhirl", label: "PayWhirl", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "recurpay", label: "Recurpay", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "propel", label: "Propel Subscriptions", ok: true, note: "Compatible — tracked automatically via native selling plans." },
+  { value: "other", label: "Another app / not sure", ok: false, note: "Most subscription apps use Shopify's native selling plans, which we read automatically — so it usually just works. The only exception is an app that takes payment on its OWN checkout (outside Shopify); those renewals may not reach us. If unsure, turn it on and check the Attribution page after your next renewal." },
+];
 
 // Server-side destination map: which form field → which TrackingSettings id column / serverSideKeys secret.
 const DEST_SERVER = [
@@ -37,7 +58,21 @@ export const loader = async ({ request }) => {
   // ?restart=1 (from the Settings "Re-run setup wizard" button) forces the full step flow again even for an
   // already-configured store, and prefills the non-secret GA4 id so they can breeze past what's done.
   const restart = new URL(request.url).searchParams.get("restart") === "1";
-  return { state: wizardState(tracking, keys), shop: session.shop, configured, restart, savedGa4Id: tracking?.ga4Id || "" };
+  let subCfg = {};
+  try {
+    subCfg = JSON.parse(tracking?.subscriptionConfig || "{}");
+  } catch {
+    subCfg = {};
+  }
+  return {
+    state: wizardState(tracking, keys),
+    shop: session.shop,
+    configured,
+    restart,
+    savedGa4Id: tracking?.ga4Id || "",
+    subscriptionOn: Boolean(tracking?.subscriptionTracking),
+    subscriptionApp: subCfg.app || "shopify",
+  };
 };
 
 function withGa4Defaults(existingMatrixJson) {
@@ -146,6 +181,28 @@ export const action = async ({ request }) => {
     return { ok: true, next: 4, pixelError, added };
   }
 
+  // Optional step 4 — subscriptions. App-agnostic: we read Shopify's native selling-plan data, so turning
+  // the toggle on is all that's needed. The chosen app is stored for reference/support only.
+  if (intent === "connect_subscriptions") {
+    const wants = form.get("subscription") === "on";
+    let cfg = {};
+    try {
+      cfg = JSON.parse(existing?.subscriptionConfig || "{}");
+    } catch {
+      cfg = {};
+    }
+    const app = (form.get("subscriptionApp") || "").trim() || cfg.app || null;
+    const subscriptionConfig = JSON.stringify({
+      eventName: cfg.eventName || "subscription_purchase",
+      monthDays: cfg.monthDays || 28,
+      respectConsent: cfg.respectConsent ?? true,
+      app: wants ? app : cfg.app || null,
+    });
+    await prisma.trackingSettings.update({ where: { shopDomain }, data: { subscriptionTracking: wants, subscriptionConfig } });
+    await logActivity(shopDomain, wants ? `Setup wizard: subscription tracking on (${app || "unspecified"})` : "Setup wizard: subscriptions skipped");
+    return { ok: true, next: 5, subscriptionOn: wants };
+  }
+
   if (intent === "test") {
     if (!existing?.ga4Id) return { error: "Connect GA4 first." };
     const event = { name: "pixelify_diagnostic", params: { debug_mode: 1, source: "pixelify-wizard" }, clientId: "test.0" };
@@ -217,7 +274,7 @@ function DestinationPicker({ configured }) {
 }
 
 export default function Wizard() {
-  const { state, shop, configured, restart, savedGa4Id } = useLoaderData();
+  const { state, shop, configured, restart, savedGa4Id, subscriptionOn, subscriptionApp } = useLoaderData();
   const actionData = useActionData();
   // Client-driven step (so the optional destinations step can be skipped). Seeded from server state; a
   // restart always begins at step 1.
@@ -231,6 +288,9 @@ export default function Wizard() {
   const handled = useRef(null);
   const [ga4Id, setGa4Id] = useState(restart ? savedGa4Id : "");
   const [secret, setSecret] = useState("");
+  const [subOn, setSubOn] = useState(Boolean(subscriptionOn));
+  const [subApp, setSubApp] = useState(subscriptionApp || "shopify");
+  const subNote = SUBSCRIPTION_APPS.find((a) => a.value === subApp);
 
   // Advance once per completed save (fetcher.data is a fresh object per response).
   useEffect(() => {
@@ -329,7 +389,7 @@ export default function Wizard() {
                 <div style={{ paddingTop: "var(--p-space-400)" }}>
                   <InlineStack gap="200">
                     <Button submit variant="primary" loading={busy}>Save and continue</Button>
-                    <Button variant="plain" onClick={() => setStep(4)}>Skip — just Google Analytics</Button>
+                    <Button variant="plain" onClick={() => setStep(4)}>Skip — no ad platforms</Button>
                   </InlineStack>
                 </div>
               </flow.Form>
@@ -340,7 +400,49 @@ export default function Wizard() {
         {step === 4 && (
           <Card>
             <BlockStack gap="400">
-              <StepHeader step={4} title="Turn on the storefront add-on, then test" />
+              <StepHeader step={4} title="Do you sell subscriptions? (optional)" />
+              <Text as="p">
+                If you sell subscriptions, we can track every renewal and credit it to the channel that first
+                won that customer — something Google Analytics can&apos;t do, because a renewal has no browser
+                session. Turn it on and tell us which app you use.
+              </Text>
+              <flow.Form method="post">
+                <input type="hidden" name="intent" value="connect_subscriptions" />
+                <input type="hidden" name="subscription" value={subOn ? "on" : ""} />
+                <BlockStack gap="300">
+                  <Checkbox label="Yes — I sell subscriptions and want renewals tracked" checked={subOn} onChange={setSubOn} />
+                  {subOn && (
+                    <BlockStack gap="300">
+                      <Select
+                        label="Which subscription app do you use?"
+                        name="subscriptionApp"
+                        options={SUBSCRIPTION_APPS.map((a) => ({ label: a.label, value: a.value }))}
+                        value={subApp}
+                        onChange={setSubApp}
+                      />
+                      {subNote && <Banner tone={subNote.ok ? "success" : "info"}>{subNote.note}</Banner>}
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        You&apos;ll see subscription revenue by channel on the Attribution page. Renewals rely
+                        on the storefront add-on (next step) to capture the buyer&apos;s Google Analytics
+                        session, so make sure that&apos;s switched on.
+                      </Text>
+                    </BlockStack>
+                  )}
+                  <InlineStack gap="200">
+                    <Button submit variant="primary" loading={busy}>Save and continue</Button>
+                    <Button variant="plain" onClick={() => setStep(5)}>Skip — no subscriptions</Button>
+                    <Button variant="plain" onClick={() => setStep(3)}>Back</Button>
+                  </InlineStack>
+                </BlockStack>
+              </flow.Form>
+            </BlockStack>
+          </Card>
+        )}
+
+        {step === 5 && (
+          <Card>
+            <BlockStack gap="400">
+              <StepHeader step={5} title="Turn on the storefront add-on, then test" />
               {flow.data?.added?.length ? <Banner tone="success">Added: {flow.data.added.join(", ")}.</Banner> : null}
               <Text as="p">Last thing: switch on the app in your theme so it can track visitors browsing your store.</Text>
               <BlockStack gap="200">
@@ -364,7 +466,7 @@ export default function Wizard() {
                 {testFetcher.data?.testDetail && <Text as="p" variant="bodySm" tone={testFetcher.data?.testOk ? "subdued" : "critical"}>{testFetcher.data.testDetail}</Text>}
                 <InlineStack gap="300">
                   {testFetcher.data?.testOk && <Button url="/app/attribution" variant="primary">Finish — see your data</Button>}
-                  <Button variant="plain" onClick={() => setStep(3)}>Back</Button>
+                  <Button variant="plain" onClick={() => setStep(4)}>Back</Button>
                 </InlineStack>
               </BlockStack>
             </BlockStack>
