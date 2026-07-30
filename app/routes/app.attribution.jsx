@@ -400,9 +400,12 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
   return (
     <BlockStack gap="400">
         {!hasData ? (
-          <Banner tone="info">
-            No attribution data yet. This populates as visitors arrive with UTM-tagged links (utm_source /
-            utm_medium / utm_campaign). It's captured automatically — no setup needed.
+          <Banner tone="info" title="No marketing data yet">
+            <p>
+              This fills in automatically as shoppers arrive from your ads, emails, social and search —
+              nothing to set up. Already have past orders? Use <b>Backfill from order history</b> above to
+              build this report from them right now (great for seeing which channels won your subscribers).
+            </p>
           </Banner>
         ) : (
           <>
@@ -483,7 +486,7 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                 <BlockStack gap="300">
                   <SectionHeading
                     title="Revenue by channel"
-                    description="Every paid order's revenue attributed to the source/medium that first acquired the customer (first-touch), over the last 90 days — from the orders/paid webhook, so it includes recurring subscription renewals."
+                    description="Every paid order's revenue credited to the channel that first brought that customer in, over the last 90 days. Because it's based on your actual orders, it includes recurring subscription renewals — which Google Analytics can't credit to a channel."
                   />
                   {channelSubscriptionRevenue > 0 && (
                     <Banner tone="info" title={`${fmtMoney(channelSubscriptionRevenue)} of subscription revenue is attributed here — GA4 cannot attribute it`}>

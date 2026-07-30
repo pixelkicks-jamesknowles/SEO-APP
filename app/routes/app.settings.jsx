@@ -331,7 +331,7 @@ export default function Settings() {
                   type="password"
                   value={ga4Secret}
                   onChange={setGa4Secret}
-                  helpText={hasGa4Secret ? "A secret is saved. Enter a new one to replace it." : "GA4, Admin, Data Streams, Measurement Protocol API secrets."}
+                  helpText={hasGa4Secret ? "A secret is saved. Enter a new one to replace it." : "Where to find it: in Google Analytics → Admin → Data streams → click your website → scroll to “Measurement Protocol API secrets” → Create → copy the Secret value."}
                 />
                 <TextField
                   label="Meta CAPI access token"
@@ -340,7 +340,7 @@ export default function Settings() {
                   type="password"
                   value={capiToken}
                   onChange={setCapiToken}
-                  helpText={hasCapiToken ? "A token is saved. Enter a new one to replace it." : "Meta Events Manager, your dataset, Settings, Conversions API, Generate access token."}
+                  helpText={hasCapiToken ? "A token is saved. Enter a new one to replace it." : "Where to find it: in Meta Events Manager → your dataset → Settings → Conversions API → Generate access token."}
                 />
                 <TextField
                   label="Server-side GTM container URL"

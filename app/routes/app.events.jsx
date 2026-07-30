@@ -148,10 +148,9 @@ export default function Events() {
           <BlockStack gap="200">
             {filtered.length === 0 ? (
               <Text as="p" tone="subdued">
-                No events yet. Events appear here as visitors trigger them on your storefront (with
-                consent). Check that you&apos;ve added a destination and turned on Server-side delivery on
-                the Tracking page, then browse the store to generate some. You can preview payloads
-                anytime in the Event sandbox.
+                No events yet. They&apos;ll show up here the moment a shopper does something on your store — a
+                page view, an add to cart, or a purchase. If nothing appears, open the guided <b>Setup</b> to
+                finish connecting, then visit your store to try it.
               </Text>
             ) : (
               filtered.map((e) => {

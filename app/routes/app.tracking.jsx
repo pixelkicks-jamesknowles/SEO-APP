@@ -393,7 +393,7 @@ export default function Tracking() {
               />
               <FormLayout>
                 <FormLayout.Group>
-                  <TextField label="GTM container ID" name="gtmId" autoComplete="off" value={ids.gtmId} onChange={setId("gtmId")} placeholder="GTM-XXXXXXX" error={idError("gtm", ids.gtmId)} />
+                  <TextField label="GTM container ID" name="gtmId" autoComplete="off" value={ids.gtmId} onChange={setId("gtmId")} placeholder="GTM-XXXXXXX" error={idError("gtm", ids.gtmId)} helpText="Only if you use Google Tag Manager. Leave blank otherwise. Server-side delivery needs a container URL on Settings." />
                   <TextField
                     label="GA4 measurement ID"
                     name="ga4Id"
