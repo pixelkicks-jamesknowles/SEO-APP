@@ -13,27 +13,6 @@ export const loader = async ({ request }) => {
 // summaries always visible; bodies expand on click) instead of one long scroll.
 const SECTIONS = [
   {
-    id: "overview",
-    title: "What Pixel Kicks Tracking does",
-    summary: "A free, server-side conversion + engagement tracker for any Shopify store.",
-    body: (
-      <>
-        <Text as="p">
-          It captures storefront and checkout events and delivers them server-side to GA4 (Measurement
-          Protocol), Meta, TikTok, Pinterest, Snapchat and Reddit (Conversions APIs), Klaviyo (onsite
-          events) and a server-side GTM container. On top of the standard events it adds subscription
-          conversion tracking, refund / cancellation tracking, SEO engagement signals (scroll depth and
-          engaged-content views), and an optional GTM web data layer — with bot filtering and
-          per-destination delivery health built in.
-        </Text>
-        <Text as="p" tone="subdued">
-          Because delivery is server-side, events keep flowing past ad blockers, Safari ITP and the
-          checkout sandbox that breaks theme-based tracking.
-        </Text>
-      </>
-    ),
-  },
-  {
     id: "glossary",
     title: "Plain-English glossary",
     summary: "Every technical term in the app, explained in one line.",
@@ -62,6 +41,27 @@ const SECTIONS = [
           </BlockStack>
         ))}
       </BlockStack>
+    ),
+  },
+  {
+    id: "overview",
+    title: "What Pixel Kicks Tracking does",
+    summary: "A free, server-side conversion + engagement tracker for any Shopify store.",
+    body: (
+      <>
+        <Text as="p">
+          It captures storefront and checkout events and delivers them server-side to GA4 (Measurement
+          Protocol), Meta, TikTok, Pinterest, Snapchat and Reddit (Conversions APIs), Klaviyo (onsite
+          events) and a server-side GTM container. On top of the standard events it adds subscription
+          conversion tracking, refund / cancellation tracking, SEO engagement signals (scroll depth and
+          engaged-content views), and an optional GTM web data layer — with bot filtering and
+          per-destination delivery health built in.
+        </Text>
+        <Text as="p" tone="subdued">
+          Because delivery is server-side, events keep flowing past ad blockers, Safari ITP and the
+          checkout sandbox that breaks theme-based tracking.
+        </Text>
+      </>
     ),
   },
   {
@@ -639,9 +639,10 @@ export default function Help() {
         ))}
 
         <Banner tone="info">
-          Still stuck? The Event sandbox shows precisely what the app would send, Debug mode confirms what
-          fires on the storefront, and Delivery health shows what actually landed. Between them you can
-          diagnose almost any tracking question without guessing.
+          Still stuck? The <b><Link to="/app/sandbox">Event sandbox</Link></b> shows precisely what the app
+          would send, console logging (on <b><Link to="/app/tracking">Tracking</Link></b>) confirms what
+          fires on the storefront, and <b><Link to="/app/events">Live events</Link></b> shows what actually
+          landed. Between them you can diagnose almost any tracking question without guessing.
         </Banner>
         <Box paddingBlockEnd="400" />
       </BlockStack>

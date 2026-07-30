@@ -17,18 +17,20 @@ export default function App() {
   const { apiKey } = useLoaderData();
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
+      {/* Order: the everyday/value screens first (Attribution → Tracking → Settings), then the more
+          advanced/diagnostic ones, then Setup + Help. Shopify's NavMenu is a flat link list (no dividers). */}
       <NavMenu>
         <Link to="/app" rel="home">
           Home
         </Link>
+        <Link to="/app/attribution">Attribution</Link>
         <Link to="/app/tracking">Tracking</Link>
+        <Link to="/app/settings">Settings</Link>
+        <Link to="/app/accuracy">Accuracy</Link>
+        <Link to="/app/events">Live events</Link>
+        <Link to="/app/sandbox">Event sandbox</Link>
         <Link to="/app/datalayer">GTM data layer</Link>
         <Link to="/app/wizard">Setup</Link>
-        <Link to="/app/sandbox">Event sandbox</Link>
-        <Link to="/app/events">Live events</Link>
-        <Link to="/app/accuracy">Accuracy</Link>
-        <Link to="/app/attribution">Attribution</Link>
-        <Link to="/app/settings">Settings</Link>
         <Link to="/app/help">Help</Link>
       </NavMenu>
       {/* Bottom breathing room below every page's content (e.g. trailing Save buttons). */}

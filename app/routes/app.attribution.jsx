@@ -177,12 +177,14 @@ export default function Attribution() {
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
       <BlockStack gap="400">
-        <BackfillCard backfill={backfill} />
+        {/* Report (headline numbers + channel tables) first — that's what merchants come here for. The
+            backfill tool sits below it: useful, but a setup action, not the thing you look at daily. */}
         <Suspense fallback={<AttributionSkeleton />}>
           <Await resolve={report} errorElement={<Banner tone="critical" title="Couldn't load attribution data">Refresh to try again.</Banner>}>
             {(resolved) => <AttributionBody {...resolved} />}
           </Await>
         </Suspense>
+        <BackfillCard backfill={backfill} />
       </BlockStack>
     </Page>
   );
