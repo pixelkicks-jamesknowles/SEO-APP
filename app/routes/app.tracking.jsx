@@ -11,6 +11,7 @@ import {
   Checkbox,
   Button,
   Banner,
+  Collapsible,
 } from "@shopify/polaris";
 import { SaveBar, useAppBridge } from "@shopify/app-bridge-react";
 import { useState, useRef, useEffect } from "react";
@@ -322,6 +323,12 @@ export default function Tracking() {
 
   // Inline config validation - catch the "set up but sends nothing" traps.
   const idsSet = !!(ids.gtmId || ids.ga4Id || ids.metaPixelId || ids.tiktokPixelId || ids.pinterestId || ids.snapPixelId || ids.redditPixelId || ids.linkedinConversionId || ids.bingUetId);
+  // Progressive disclosure: hide the intimidating bits (extra ad platforms, the full event grid, SEO
+  // engagement) behind an "advanced" toggle. Default OPEN only if the store already uses any of them, so an
+  // existing power user still sees their config; a newcomer gets the simple view. Advanced content stays
+  // MOUNTED inside Collapsible, so hidden inputs still submit and the save flow is unaffected.
+  const advancedConfigured = !!(data.gtmId || data.tiktokPixelId || data.pinterestId || data.snapPixelId || data.redditPixelId || data.linkedinConversionId || data.bingUetId || seoHas("scroll") || seoHas("engaged_view"));
+  const [showAdvanced, setShowAdvanced] = useState(advancedConfigured);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -347,6 +354,15 @@ export default function Tracking() {
               <Button url="/app/wizard">Open guided Setup</Button>
             </div>
           </Banner>
+
+          <InlineStack align="space-between" blockAlign="center">
+            <Text as="span" variant="bodySm" tone="subdued">
+              {showAdvanced ? "Showing all options." : "Showing the essentials — Google Analytics and delivery."}
+            </Text>
+            <Button variant="plain" disclosure={showAdvanced ? "up" : "down"} onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced ? "Hide advanced options" : "Show advanced options (more ad platforms, event grid)"}
+            </Button>
+          </InlineStack>
           {actionData?.ok && !actionData?.pixelError && (
             <Banner tone="success">Saved - web pixel synced.</Banner>
           )}
@@ -389,7 +405,10 @@ export default function Tracking() {
                     helpText="The GA4 data stream we send server-side events to. If you also run the Google & YouTube app (or any on-site GA4 tag), this MUST be the same stream that tag uses — GA4 Admin → Data streams. If they differ, a web order's purchase can't join the on-site session and stays Unassigned. Use “Send test event” on Settings to confirm the ID + secret are accepted."
                   />
                 </FormLayout.Group>
-                <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} />
+                <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} helpText="Facebook & Instagram. Add its Conversions API token on Settings to deliver server-side." />
+                <Collapsible open={showAdvanced} id="adv-destinations" transition={{ duration: "200ms" }}>
+                  <BlockStack gap="200">
+                    <Text as="span" variant="bodySm" tone="subdued">More ad platforms — add any you advertise on.</Text>
                 <FormLayout.Group>
                   <TextField
                     label="TikTok Pixel ID"
@@ -445,10 +464,14 @@ export default function Tracking() {
                     helpText={data.hasBingToken ? "Delivered server-side via the Microsoft UET Conversions API." : "Add a Microsoft UET Conversions API token on Settings to deliver these."}
                   />
                 </FormLayout.Group>
+                  </BlockStack>
+                </Collapsible>
               </FormLayout>
             </BlockStack>
           </Card>
 
+          <Collapsible open={showAdvanced} id="adv-events" transition={{ duration: "200ms" }}>
+          <BlockStack gap="400">
           <Card padding="0">
             <div style={{ padding: "var(--p-space-400)" }}>
               <SectionHeading
@@ -571,6 +594,8 @@ export default function Tracking() {
               />
             </BlockStack>
           </Card>
+          </BlockStack>
+          </Collapsible>
 
           {/* Delivery — the master switch + delivery hygiene + the testing toggle. */}
           <Card>
