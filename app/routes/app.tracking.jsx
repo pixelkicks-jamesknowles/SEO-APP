@@ -10,6 +10,7 @@ import {
   Select,
   Checkbox,
   Button,
+  ButtonGroup,
   Banner,
   Collapsible,
 } from "@shopify/polaris";
@@ -374,13 +375,20 @@ export default function Tracking() {
             </div>
           </Banner>
 
-          <InlineStack align="space-between" blockAlign="center">
+          {/* A view-MODE switch, not a dropdown — the extra options live in-context further down the page
+              (more destinations, the event grid, extra conversion settings), so a "Simple / Advanced"
+              segmented control reads correctly ("change the whole page's density") where a disclosure
+              chevron wrongly implied a menu opening right here. */}
+          <InlineStack align="space-between" blockAlign="center" gap="300" wrap>
             <Text as="span" variant="bodySm" tone="subdued">
-              {showAdvanced ? "Showing all options." : "Showing the essentials — Google Analytics and delivery."}
+              {showAdvanced
+                ? "Advanced view — every option is shown across the page."
+                : "Simple view — just Google Analytics and delivery. Advanced adds more ad platforms, the event grid and extra settings, in place below."}
             </Text>
-            <Button variant="plain" disclosure={showAdvanced ? "up" : "down"} onClick={() => setShowAdvanced((v) => !v)}>
-              {showAdvanced ? "Hide advanced options" : "Show advanced options (more ad platforms, event grid)"}
-            </Button>
+            <ButtonGroup variant="segmented">
+              <Button pressed={!showAdvanced} onClick={() => setShowAdvanced(false)}>Simple</Button>
+              <Button pressed={showAdvanced} onClick={() => setShowAdvanced(true)}>Advanced</Button>
+            </ButtonGroup>
           </InlineStack>
           {actionData?.ok && !actionData?.pixelError && (
             <Banner tone="success">Saved - web pixel synced.</Banner>
