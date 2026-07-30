@@ -92,6 +92,7 @@ export const loader = async ({ request }) => {
   });
   const keys = readServerSideKeys(t);
   return {
+    shop: session.shop,
     hasGa4Secret: Boolean(keys.ga4ApiSecret),
     hasCapiToken: Boolean(keys.metaCapiToken),
     gtmId: t?.gtmId ?? "",
@@ -329,6 +330,18 @@ export default function Tracking() {
   // MOUNTED inside Collapsible, so hidden inputs still submit and the save flow is unaffected.
   const advancedConfigured = !!(data.gtmId || data.tiktokPixelId || data.pinterestId || data.snapPixelId || data.redditPixelId || data.linkedinConversionId || data.bingUetId || seoHas("scroll") || seoHas("engaged_view"));
   const [showAdvanced, setShowAdvanced] = useState(advancedConfigured);
+  // Only show event-matrix columns for destinations that are actually set up (an ID entered, or Klaviyo's
+  // key). Declutters the grid from 10 columns to the few in use. Falls back to all columns when nothing is
+  // configured yet, so a fresh store can still tick things.
+  const platformConfigured = {
+    ga4: !!ids.ga4Id, gtm: !!ids.gtmId, meta: !!ids.metaPixelId, tiktok: !!ids.tiktokPixelId,
+    pinterest: !!ids.pinterestId, snap: !!ids.snapPixelId, reddit: !!ids.redditPixelId,
+    linkedin: !!ids.linkedinConversionId, bing: !!ids.bingUetId, klaviyo: !!data.hasKlaviyoKey,
+  };
+  const anyConfigured = PLATFORMS.some((p) => platformConfigured[p.key]);
+  const showPlatform = (key) => !anyConfigured || platformConfigured[key];
+  const visiblePlatforms = PLATFORMS.filter((p) => showPlatform(p.key));
+  const visibleGroups = PLATFORM_GROUPS.map((g) => ({ ...g, platforms: g.platforms.filter((p) => showPlatform(p.key)) })).filter((g) => g.platforms.length);
   const deliveryOffWarn = idsSet && !serverSide;
   const ga4SecretWarn = serverSide && !!ids.ga4Id && !data.hasGa4Secret;
   const metaTokenWarn = serverSide && !!ids.metaPixelId && !data.hasCapiToken;
@@ -406,6 +419,15 @@ export default function Tracking() {
                   />
                 </FormLayout.Group>
                 <TextField label="Meta Pixel ID" name="metaPixelId" autoComplete="off" value={ids.metaPixelId} onChange={setId("metaPixelId")} helpText="Facebook & Instagram. Add its Conversions API token on Settings to deliver server-side." />
+                <TextField
+                  label="Bing (Microsoft) UET tag ID"
+                  name="bingUetId"
+                  autoComplete="off"
+                  value={ids.bingUetId}
+                  onChange={setId("bingUetId")}
+                  placeholder="123456789"
+                  helpText={data.hasBingToken ? "Delivered server-side via the Microsoft UET Conversions API." : "Add a Microsoft UET Conversions API token on Settings to deliver these."}
+                />
                 <Collapsible open={showAdvanced} id="adv-destinations" transition={{ duration: "200ms" }}>
                   <BlockStack gap="200">
                     <Text as="span" variant="bodySm" tone="subdued">More ad platforms — add any you advertise on.</Text>
@@ -454,15 +476,6 @@ export default function Tracking() {
                     placeholder="12345678"
                     helpText={data.hasLinkedinToken ? "Delivered server-side (B2B) via the LinkedIn Conversions API." : "Add a LinkedIn Conversions API token on Settings to deliver these."}
                   />
-                  <TextField
-                    label="Bing (Microsoft) UET tag ID"
-                    name="bingUetId"
-                    autoComplete="off"
-                    value={ids.bingUetId}
-                    onChange={setId("bingUetId")}
-                    placeholder="123456789"
-                    helpText={data.hasBingToken ? "Delivered server-side via the Microsoft UET Conversions API." : "Add a Microsoft UET Conversions API token on Settings to deliver these."}
-                  />
                 </FormLayout.Group>
                   </BlockStack>
                 </Collapsible>
@@ -488,7 +501,7 @@ export default function Tracking() {
                 {/* Group row: browser tags vs server-side conversions APIs. */}
                 <tr>
                   <td style={stickyCol(2)} />
-                  {PLATFORM_GROUPS.map((g, gi) => (
+                  {visibleGroups.map((g, gi) => (
                     <th
                       key={g.label}
                       scope="colgroup"
@@ -503,7 +516,7 @@ export default function Tracking() {
                   <th scope="col" style={{ ...stickyCol(2), textAlign: "left", padding: "var(--p-space-100) var(--p-space-400)" }}>
                     <Text as="span" variant="bodySm" tone="subdued">Event</Text>
                   </th>
-                  {PLATFORMS.map((p) => (
+                  {visiblePlatforms.map((p) => (
                     <th
                       key={p.key}
                       scope="col"
@@ -525,7 +538,7 @@ export default function Tracking() {
                     <th scope="row" style={{ ...stickyCol(1), textAlign: "left", fontWeight: "normal", padding: "var(--p-space-150) var(--p-space-400)", whiteSpace: "nowrap" }}>
                       <Text as="span" variant="bodyMd">{eventLabel(e)}</Text>
                     </th>
-                    {PLATFORMS.map((p) => {
+                    {visiblePlatforms.map((p) => {
                       const supported = destSupports(p.key, e);
                       return (
                         <td key={p.key} style={{ padding: "var(--p-space-100) var(--p-space-200)", borderLeft: GROUP_START_KEYS.has(p.key) ? GROUP_DIVIDER : undefined }}>
@@ -577,6 +590,11 @@ export default function Tracking() {
                 Enable the <b>Pixelify SEO engagement</b> app embed in your theme, then choose what to forward.
                 Sent to GA4/GTM only (not Meta). Requires Server-side on below.
               </Text>
+              <InlineStack>
+                <Button url={`https://${data.shop}/admin/themes/current/editor?context=apps`} target="_blank" variant="plain">
+                  Open theme editor → App embeds
+                </Button>
+              </InlineStack>
               <input type="hidden" name="evt:ga4:scroll" value={scrollDepth ? "on" : ""} />
               <input type="hidden" name="evt:gtm:scroll" value={scrollDepth ? "on" : ""} />
               <Checkbox
@@ -621,18 +639,20 @@ export default function Tracking() {
               />
               <input type="hidden" name="companionMode" value={companionMode ? "on" : ""} />
               <Checkbox
-                label="Companion mode - this store also runs Google's “Google & YouTube” app"
-                helpText="Turn on if another GA4 tag (the Google & YouTube app) already sends page views, product views and add-to-carts. We then send GA4 conversions only (purchase + subscription), so those page-level events aren't double-counted. Purchases dedupe by transaction_id; Meta and other destinations are unaffected."
+                label="Companion mode — this store also runs Google's “Google & YouTube” app"
+                helpText="Important: if you use the Google & YouTube app (or any other on-page GA4 tag), turn this ON. That app already sends page views, product views and add-to-carts, so we then send GA4 conversions only (purchase + subscription) and those page-level events aren't double-counted. Purchases still dedupe safely by transaction_id, and Meta and other destinations are unaffected. (This is a manual switch — we don't auto-detect the other app.)"
                 checked={companionMode}
                 onChange={setCompanionMode}
               />
-              <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
-              <Checkbox
-                label="Console logging (for testing) — print every event to the browser console"
-                helpText="Because this app sends events server-side, they do NOT appear in Google Tag Assistant or GTM Preview (those only see tags running in the browser). Turn this on to log every event to your browser console instead, so you can confirm they fire: open the storefront, DevTools → Console, look for “[pixelify-tracking]”. It only logs — it does not change or flag what's sent. Turn off in production to keep the console clean."
-                checked={debug}
-                onChange={setDebug}
-              />
+              <Collapsible open={showAdvanced} id="adv-debug" transition={{ duration: "200ms" }}>
+                <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
+                <Checkbox
+                  label="Console logging (for testing) — print every event to the browser console"
+                  helpText="Because this app sends events server-side, they do NOT appear in Google Tag Assistant or GTM Preview (those only see tags running in the browser). Turn this on to log every event to your browser console instead, so you can confirm they fire: open the storefront, DevTools → Console, look for “[pixelify-tracking]”. It only logs — it does not change or flag what's sent. Turn off in production to keep the console clean."
+                  checked={debug}
+                  onChange={setDebug}
+                />
+              </Collapsible>
             </BlockStack>
           </Card>
 
@@ -667,6 +687,7 @@ export default function Tracking() {
                 title="Conversion tracking"
                 help="What conversion value to optimise for, plus server-side purchase / refund / subscription events from order webhooks. Requires Server-side delivery."
               />
+              <Collapsible open={showAdvanced} id="adv-valuemode" transition={{ duration: "200ms" }}>
               <input type="hidden" name="valueMode" value={valueMode} />
               <input type="hidden" name="marginPct" value={marginPct || "0"} />
               <Select
@@ -700,6 +721,7 @@ export default function Tracking() {
                   helpText="Whole percent, e.g. 40 = send 40% of revenue as the conversion value."
                 />
               ) : null}
+              </Collapsible>
               <input type="hidden" name="refundTracking" value={refundTracking && serverSide ? "on" : ""} />
               <Checkbox
                 label="Refund & cancellation tracking - send a GA4 refund event from refunds/orders cancelled"
@@ -741,6 +763,8 @@ export default function Tracking() {
                 </FormLayout>
               ) : null}
 
+              <Collapsible open={showAdvanced} id="adv-lifecycle-fx" transition={{ duration: "200ms" }}>
+              <BlockStack gap="300">
               <input type="hidden" name="lifecycleTracking" value={lifecycleTracking && serverSide ? "on" : ""} />
               <Checkbox
                 label="Post-purchase & lifecycle events — order edits and fulfillments"
@@ -781,6 +805,8 @@ export default function Tracking() {
               ) : (
                 <input type="hidden" name="reportingCurrency" value={reportingCurrency} />
               )}
+              </BlockStack>
+              </Collapsible>
             </BlockStack>
           </Card>
 
