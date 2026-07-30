@@ -314,6 +314,13 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
               a sudden drop is the signal to investigate. Missed purchases are automatically backfilled
               server-side within about 20 minutes (reconciliation), so this should trend toward 100%.
             </Text>
+            <Text as="p" tone="subdued" variant="bodySm">
+              <b>About consent:</b> if a shopper declines analytics on your cookie banner, their sale is still
+              counted here (it&apos;s a real paid order and we still record it), but with Consent Mode on we
+              only send Google a privacy-safe, modelled signal for it and send nothing to marketing
+              destinations. So a healthy match rate here doesn&apos;t mean every sale was fully tracked in your
+              ad platforms — consented traffic is what those receive in full.
+            </Text>
           </>
         )}
       </BlockStack>
