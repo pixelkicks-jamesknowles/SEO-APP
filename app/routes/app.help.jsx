@@ -201,9 +201,9 @@ const SECTIONS = [
           event code so it shows under Test Events). Start here.
         </List.Item>
         <List.Item>
-          <b><Link to="/app/sandbox">Event sandbox</Link></b>: preview the exact GTM dataLayer, GA4 and
-          Meta payloads for any event (or several together), with different consent states. Nothing is
-          sent, so it is safe to experiment and to build GTM tags against.
+          <b><Link to="/app/datalayer">Developer tools → Event preview</Link></b>: preview the exact GTM
+          dataLayer, GA4 and Meta payloads for any event (or several together), with different consent states.
+          Nothing is sent, so it is safe to experiment and to build GTM tags against.
         </List.Item>
         <List.Item>
           <b>Settings verify buttons</b>: <i>Send test event</i> (a ping), <i>Send test purchase</i>{" "}
@@ -272,7 +272,7 @@ const SECTIONS = [
           </List.Item>
         </List>
         <Text as="p" tone="subdued">
-          You can see exactly how each consent state changes the payload in the Event sandbox.
+          You can see exactly how each consent state changes the payload under Developer tools → Event preview.
         </Text>
       </>
     ),
@@ -639,10 +639,10 @@ export default function Help() {
         ))}
 
         <Banner tone="info">
-          Still stuck? The <b><Link to="/app/sandbox">Event sandbox</Link></b> shows precisely what the app
-          would send, console logging (on <b><Link to="/app/tracking">Tracking</Link></b>) confirms what
-          fires on the storefront, and <b><Link to="/app/events">Live events</Link></b> shows what actually
-          landed. Between them you can diagnose almost any tracking question without guessing.
+          Still stuck? <b><Link to="/app/datalayer">Developer tools → Event preview</Link></b> shows precisely
+          what the app would send, console logging (on <b><Link to="/app/tracking">Tracking</Link></b>)
+          confirms what fires on the storefront, and <b><Link to="/app/events">Live events</Link></b> shows
+          what actually landed. Between them you can diagnose almost any tracking question without guessing.
         </Banner>
         <Box paddingBlockEnd="400" />
       </BlockStack>

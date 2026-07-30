@@ -139,7 +139,7 @@ export default function Index() {
               </InlineStack>
               <InlineStack gap="300">
                 <Button url="/app/tracking" variant="primary">Open Tracking</Button>
-                <Button url="/app/sandbox">Test in the sandbox</Button>
+                <Button url="/app/datalayer">Preview events</Button>
                 <Button url="/app/events">Live events</Button>
               </InlineStack>
             </BlockStack>
@@ -158,7 +158,7 @@ export default function Index() {
                 <List.Item>On <b>Tracking</b>, add a destination ID (GA4, GTM or Meta) and tick which events each should receive.</List.Item>
                 <List.Item>On <b>Settings</b>, add the server-side credentials (GA4 Measurement Protocol secret, Meta CAPI token).</List.Item>
                 <List.Item>Turn on <b>Server-side delivery</b>, and keep <b>Consent mode</b> on so events respect Customer Privacy consent.</List.Item>
-                <List.Item>Preview everything in the <b>Event sandbox</b>, then verify live in GA4 DebugView and Meta Test Events.</List.Item>
+                <List.Item>Preview everything under <b>Developer tools → Event preview</b>, then verify live in GA4 Realtime and Meta Test Events.</List.Item>
               </List>
               <InlineStack gap="200">
                 <Button url="/app/tracking">Open Tracking</Button>

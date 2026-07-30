@@ -28,8 +28,7 @@ export default function App() {
         <Link to="/app/settings">Settings</Link>
         <Link to="/app/accuracy">Accuracy</Link>
         <Link to="/app/events">Live events</Link>
-        <Link to="/app/sandbox">Event sandbox</Link>
-        <Link to="/app/datalayer">GTM data layer</Link>
+        <Link to="/app/datalayer">Developer tools</Link>
         {/* Setup wizard is intentionally NOT a nav item: it's force-shown on install, nudged from the Home
             banner, and re-runnable from Settings — keeping it out of the nav declutters for everyday use. */}
         <Link to="/app/help">Help</Link>
