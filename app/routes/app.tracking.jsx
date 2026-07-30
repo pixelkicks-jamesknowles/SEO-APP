@@ -370,7 +370,7 @@ export default function Tracking() {
               <b>guided Setup</b> instead — it fills most of this in for you.
             </p>
             <div style={{ marginTop: "var(--p-space-200)" }}>
-              <Button url="/app/wizard">Open guided Setup</Button>
+              <Button url="/app/wizard?restart=1">Open guided Setup</Button>
             </div>
           </Banner>
 

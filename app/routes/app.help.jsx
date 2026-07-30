@@ -182,8 +182,8 @@ const SECTIONS = [
           Theme editor, App embeds, then tick those events on the Tracking page.
         </List.Item>
         <List.Item>
-          Run <b><Link to="/app/wizard">Setup check</Link></b>: it confirms every required piece is in place
-          and fires a live test event to each destination. Then watch them in GA4 Realtime / DebugView and
+          Run the <b><Link to="/app/wizard?restart=1">guided Setup</Link></b>: it walks you through every
+          required piece and, at the end, fires a live test event to GA4. Then watch it in GA4 Realtime and
           on the Live events page.
         </List.Item>
       </List>
@@ -196,9 +196,9 @@ const SECTIONS = [
     body: (
       <List>
         <List.Item>
-          <b><Link to="/app/wizard">Setup check</Link></b>: a one-screen checklist of everything required
-          for delivery, plus a button to fire a live diagnostic event to GA4 and Meta (Meta uses a test
-          event code so it shows under Test Events). Start here.
+          <b><Link to="/app/wizard?restart=1">Guided Setup</Link></b>: walks you through everything required
+          for delivery step by step, and at the end fires a live diagnostic event to GA4 so you can confirm
+          the connection. Start here.
         </List.Item>
         <List.Item>
           <b><Link to="/app/datalayer">Developer tools → Event preview</Link></b>: preview the exact GTM
