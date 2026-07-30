@@ -132,7 +132,7 @@ export default function Accuracy() {
   return (
     <Page
       title="Accuracy"
-      subtitle="How completely your store's purchases and events are being captured and delivered (last 30 days)."
+      subtitle="How much of your sales and events are being tracked and sent — and the revenue this app recovers that you'd otherwise miss (last 30 days)."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
       <Suspense fallback={<AccuracySkeleton />}>

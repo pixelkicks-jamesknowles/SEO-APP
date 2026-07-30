@@ -329,7 +329,7 @@ export default function Tracking() {
   return (
     <Page
       title="Tracking"
-      subtitle="Send GTM, GA4 and Meta events via the Web Pixels API, consent-gated."
+      subtitle="Choose where your sales and events are sent (Google Analytics, Meta and more), and which events each one gets. Not sure? Use the guided Setup instead — it does this for you."
       primaryAction={{ content: "Save", onAction: saveNow, loading: saving, disabled: !dirty }}
     >
       <SaveBar id="tracking-save">
@@ -338,6 +338,15 @@ export default function Tracking() {
       </SaveBar>
       <Form method="post" ref={formRef}>
         <BlockStack gap="400">
+          <Banner tone="info" title="This is the advanced control panel">
+            <p>
+              It gives you every option. If you&apos;d rather be walked through it in plain English, use the{" "}
+              <b>guided Setup</b> instead — it fills most of this in for you.
+            </p>
+            <div style={{ marginTop: "var(--p-space-200)" }}>
+              <Button url="/app/wizard">Open guided Setup</Button>
+            </div>
+          </Banner>
           {actionData?.ok && !actionData?.pixelError && (
             <Banner tone="success">Saved - web pixel synced.</Banner>
           )}

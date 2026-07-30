@@ -149,7 +149,7 @@ export default function Sandbox() {
   return (
     <Page
       title="Event sandbox"
-      subtitle="Preview the exact GTM / GA4 / Meta output for each event, using the real production builders. Nothing is sent - this is preview only."
+      subtitle="See the exact data the app would send for each event — a safe preview for checking your setup. Nothing is actually sent."
     >
       <BlockStack gap="400">
         <Card>

@@ -173,7 +173,7 @@ export default function Attribution() {
   return (
     <Page
       title="Attribution"
-      subtitle="Which channels drive revenue, where your visitors first came from, and how their journey builds across sessions and devices."
+      subtitle="See which marketing channels actually drive your sales — including subscription renewals that Google Analytics can't credit to a channel."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
     >
       <BlockStack gap="400">

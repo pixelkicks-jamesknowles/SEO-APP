@@ -92,7 +92,7 @@ export default function Events() {
   return (
     <Page
       title="Live events"
-      subtitle="Server-side events as the app receives them. Auto-refreshes every 5 seconds."
+      subtitle="A live feed of the events being tracked as they happen, so you can see it working. Refreshes every 5 seconds."
       primaryAction={{ content: "Refresh", onAction: () => revalidator.revalidate() }}
       secondaryActions={
         events.length

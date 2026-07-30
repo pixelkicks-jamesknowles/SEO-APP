@@ -277,7 +277,7 @@ export default function Settings() {
   return (
     <Page
       title="Settings"
-      subtitle="Server-side delivery credentials, and a live test."
+      subtitle="Your secret keys for sending data (like the GA4 secret), plus a button to send a test and check it works."
       primaryAction={{ content: "Save", onAction: saveNow, loading: busy("save-keys"), disabled: !dirty }}
     >
       <SaveBar id="settings-save">

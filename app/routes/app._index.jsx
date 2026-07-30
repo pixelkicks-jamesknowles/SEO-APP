@@ -82,7 +82,7 @@ export default function Index() {
   return (
     <Page
       title="Pixel Kicks Tracking"
-      subtitle="Free, server-side conversion & SEO tracking for any Shopify store."
+      subtitle="Track your sales and marketing accurately. Free, and set up in minutes — no code needed."
     >
       <Layout>
         {alerts.map((a) => (

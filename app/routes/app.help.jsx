@@ -34,6 +34,37 @@ const SECTIONS = [
     ),
   },
   {
+    id: "glossary",
+    title: "Plain-English glossary",
+    summary: "Every technical term in the app, explained in one line.",
+    body: (
+      <BlockStack gap="300">
+        {[
+          ["Google Analytics 4 (GA4)", "Google's free analytics tool. Most stores send their data here to see traffic and sales."],
+          ["Measurement ID", "Your GA4 account's ID. It looks like G-XXXXXXXXXX and tells us which account to send to."],
+          ["Measurement Protocol secret", "A password from GA4 that lets us send your sales to it securely from our server."],
+          ["Server-side vs client-side", "Client-side = tracking from the shopper's browser (ad blockers and Safari can break it). Server-side = we send it from our server instead, so it's far more reliable. This app is server-side."],
+          ["Web Pixel", "Shopify's official, safe way for an app to see storefront and checkout events. We create it for you when you save."],
+          ["Theme app embed", "A switch in your theme editor that turns the app on for live storefront visitors. Needed for visitor tracking and to keep the marketing channel on your sales."],
+          ["Event", "Something a shopper does — a page view, add to cart, or a purchase. We send these to your analytics and ad platforms."],
+          ["Conversions API (CAPI)", "The server-side way to send conversions to an ad platform like Meta or TikTok. More reliable than a browser pixel, and it's what we use."],
+          ["Consent Mode", "Respecting your cookie banner. With it on, shoppers who decline aren't tracked for marketing; Google can still estimate the gap."],
+          ["Attribution / first touch", "Working out which marketing channel brought a customer in. “First touch” credits the very first thing that brought them to you."],
+          ["Channel", "The type of source a visit came from — Organic Search, Paid Social, Email, Direct, and so on."],
+          ["Subscription renewal", "A recurring subscription charge. It has no website visit, so Google Analytics can't tell which channel it came from — this app can, by remembering how that customer was first won."],
+          ["Reconciliation", "A safety net: if a sale ever isn't captured live, the app quietly re-sends it a few minutes later so nothing is missed."],
+          ["Transaction ID / deduplication", "A unique order number sent with each sale so it's never counted twice, even if two tools report it."],
+          ["Server-side GTM (sGTM)", "An advanced Google Tag Manager setup some teams run on their own server. Optional — ignore it unless your team already uses it."],
+        ].map(([term, def]) => (
+          <BlockStack gap="050" key={term}>
+            <Text as="p" fontWeight="semibold">{term}</Text>
+            <Text as="p" tone="subdued">{def}</Text>
+          </BlockStack>
+        ))}
+      </BlockStack>
+    ),
+  },
+  {
     id: "how",
     title: "How it works",
     summary: "One first-party beacon to the app, then server-side fan-out to each destination.",

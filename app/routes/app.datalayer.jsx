@@ -47,7 +47,7 @@ export default function DataLayer() {
   return (
     <Page
       title="GTM data layer"
-      subtitle="Push GA4-standard + Elevar-compatible dl_* ecommerce events to your own Google Tag Manager web container."
+      subtitle="Advanced: for teams who run their own Google Tag Manager. Pushes ecommerce events into your GTM container. Skip this unless you use GTM."
     >
       <BlockStack gap="400">
         {pro.enforced && !pro.active && (
