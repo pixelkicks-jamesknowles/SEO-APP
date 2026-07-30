@@ -1,6 +1,7 @@
 import prisma from "../db.server";
 import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
-import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordConversionPath } from "./delivery.server";
+import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordConversionPath, bumpDaily } from "./delivery.server";
+import { analyticsConsented } from "./consent";
 import { enqueueFailures } from "./outbox.server";
 import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
@@ -61,6 +62,11 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   // Cap the buffer at ~50/shop. Prune probabilistically (not on every event) to avoid a
   // findMany+deleteMany on every storefront hit — see pruneCap.
   await pruneCap(prisma.recentEvent, shopDomain, 50);
+
+  // Consent-rate counter (Accuracy): every ingested storefront event is classified granted/denied by its
+  // analytics-consent state, so the merchant can read the capture numbers against how many shoppers accept
+  // their cookie banner. Best-effort.
+  await bumpDaily(shopDomain, analyticsConsented(body.event.consent) ? { consentGranted: 1 } : { consentDenied: 1 });
 
   const event = { ...body.event, clientIp: body.event.clientIp || clientIp };
   // Durable first-party id (ITP-proof cookie minted by the app proxy): use it as the stable client id

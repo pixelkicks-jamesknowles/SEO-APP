@@ -30,7 +30,8 @@ export default function App() {
         <Link to="/app/events">Live events</Link>
         <Link to="/app/sandbox">Event sandbox</Link>
         <Link to="/app/datalayer">GTM data layer</Link>
-        <Link to="/app/wizard">Setup</Link>
+        {/* Setup wizard is intentionally NOT a nav item: it's force-shown on install, nudged from the Home
+            banner, and re-runnable from Settings — keeping it out of the nav declutters for everyday use. */}
         <Link to="/app/help">Help</Link>
       </NavMenu>
       {/* Bottom breathing room below every page's content (e.g. trailing Save buttons). */}

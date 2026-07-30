@@ -217,6 +217,10 @@ model TrackingDaily {
   // and their summed order value — the recovered-revenue headline on the Accuracy page.
   purchasesRecovered Int      @default(0)
   revenueRecovered   Float    @default(0)
+  // Analytics-consent split of ingested storefront events, for the Accuracy "consent rate" — so the
+  // capture numbers can be read in the light of how many shoppers accept your cookie banner.
+  consentGranted     Int      @default(0)
+  consentDenied      Int      @default(0)
   updatedAt          DateTime @updatedAt
 
   @@id([shopDomain, date])

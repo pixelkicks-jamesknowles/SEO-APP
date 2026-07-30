@@ -58,6 +58,8 @@ async function buildAccuracy(shopDomain) {
       eventsFailed: sum("eventsFailed"),
       purchasesRecovered: sum("purchasesRecovered"),
       revenueRecovered: rows.reduce((t, r) => t + (r.revenueRecovered || 0), 0),
+      consentGranted: sum("consentGranted"),
+      consentDenied: sum("consentDenied"),
     },
     recoveredCurrency: tracking?.reportingCurrency || null,
     alerts: health.alerts,
@@ -148,6 +150,8 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
   const deliveryRate = pct(totals.eventsSent, sends);
+  const consentSeen = (totals.consentGranted || 0) + (totals.consentDenied || 0);
+  const consentRate = pct(totals.consentGranted || 0, consentSeen);
   const hasData = totals.ordersPaid > 0 || sends > 0;
   const recovered = totals.purchasesRecovered || 0;
   // GA4 gap: revenue this app makes visible that GA4 alone would miss — pixel-missed purchases we
@@ -228,6 +232,13 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 tone={deliveryRate != null && deliveryRate < 98 ? "critical" : "success"}
               />
               <Stat title="Events sent (30d)" value={totals.eventsSent.toLocaleString()} sub="Server-side deliveries" />
+              <Stat
+                title="Consent rate (30d)"
+                value={consentRate == null ? "-" : `${consentRate}%`}
+                sub={consentRate == null ? "Share of shoppers who accept analytics" : `${(totals.consentGranted || 0).toLocaleString()} of ${consentSeen.toLocaleString()} events had analytics consent`}
+                progress={consentRate ?? 0}
+                tone={consentRate != null && consentRate < 50 ? "critical" : undefined}
+              />
               <Stat
                 title="Retry queue"
                 value={(outboxPending || 0).toLocaleString()}
