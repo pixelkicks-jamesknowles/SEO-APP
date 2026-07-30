@@ -110,14 +110,22 @@ export default function DataLayer() {
               <List.Item>Enable the <b>Pixelify SEO engagement</b> app embed (Theme editor → App embeds) — it hosts the data layer script.</List.Item>
               <List.Item>In GTM, confirm your GA4 Configuration tag is installed on the storefront (or add one).</List.Item>
               <List.Item>Create GA4 Event tags triggered on Custom Events <code>view_item</code>, <code>add_to_cart</code>, <code>begin_checkout</code>, etc., reading the <code>ecommerce</code> object — or import a prebuilt GA4 container that listens on the <code>dl_*</code> events.</List.Item>
-              <List.Item>Use GTM Preview + the browser console (<code>window.dataLayer</code>) to confirm events fire as you browse, add to cart, and hit checkout.</List.Item>
+              <List.Item>Use <b>Google Tag Assistant</b> (or GTM Preview) plus the browser console (<code>window.dataLayer</code>) to confirm events fire as you browse, add to cart, and hit checkout.</List.Item>
             </List>
             <Box background="bg-surface-secondary" padding="300" borderRadius="200">
-              <Text as="p" variant="bodySm" tone="subdued">
-                Events are consent-gated through the storefront&rsquo;s Customer Privacy API and only fire once this
-                toggle is on — the storefront reads the live on/off state from the app, so it can&rsquo;t be enabled
-                from the theme editor alone.
-              </Text>
+              <BlockStack gap="200">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Events are consent-gated through the storefront&rsquo;s Customer Privacy API and only fire once this
+                  toggle is on — the storefront reads the live on/off state from the app, so it can&rsquo;t be enabled
+                  from the theme editor alone.
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  <b>Important for testing:</b> this data layer is the one place your on-page GTM / Tag Assistant
+                  can see. The rest of the app delivers <b>server-side</b> (GA4 Measurement Protocol), which Tag
+                  Assistant and GTM Preview can&rsquo;t see at all — so if you&rsquo;re debugging those, use{" "}
+                  <b>Live events</b> and GA4 Realtime instead of Tag Assistant.
+                </Text>
+              </BlockStack>
             </Box>
           </BlockStack>
         </Card>

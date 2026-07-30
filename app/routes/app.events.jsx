@@ -10,6 +10,7 @@ import {
   Select,
   Collapsible,
   Box,
+  Banner,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -105,6 +106,13 @@ export default function Events() {
       </Form>
 
       <BlockStack gap="300">
+        <Banner tone="info">
+          <p>
+            Think of this as this app&apos;s version of GA4&apos;s DebugView — but for what we send{" "}
+            <b>server-side</b>. Google&apos;s DebugView only shows tags firing in the browser; because we
+            deliver from our server, this is where you confirm your events are flowing.
+          </p>
+        </Banner>
         {health.length > 0 && (
           <Card>
             <BlockStack gap="200">

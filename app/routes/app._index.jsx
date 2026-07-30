@@ -149,14 +149,20 @@ export default function Index() {
         <Layout.Section>
           <Card>
             <BlockStack gap="300">
-              <Text as="h2" variant="headingMd">Get set up</Text>
+              <Text as="h2" variant="headingMd">Set up manually</Text>
+              <Text as="p" tone="subdued" variant="bodySm">
+                Most people should use the guided <b>Setup</b> above. These are the manual steps if you&apos;d
+                rather do it yourself:
+              </Text>
               <List type="number">
                 <List.Item>On <b>Tracking</b>, add a destination ID (GA4, GTM or Meta) and tick which events each should receive.</List.Item>
                 <List.Item>On <b>Settings</b>, add the server-side credentials (GA4 Measurement Protocol secret, Meta CAPI token).</List.Item>
                 <List.Item>Turn on <b>Server-side delivery</b>, and keep <b>Consent mode</b> on so events respect Customer Privacy consent.</List.Item>
                 <List.Item>Preview everything in the <b>Event sandbox</b>, then verify live in GA4 DebugView and Meta Test Events.</List.Item>
               </List>
-              <InlineStack>
+              <InlineStack gap="200">
+                <Button url="/app/tracking">Open Tracking</Button>
+                <Button url="/app/settings">Open Settings</Button>
                 <Button url="/app/help" variant="plain">How testing works</Button>
               </InlineStack>
             </BlockStack>

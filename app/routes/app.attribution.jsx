@@ -317,7 +317,7 @@ function BackfillCard({ backfill }) {
       <BlockStack gap="300">
         <SectionHeading
           title="Backfill from order history"
-          description="Reads Shopify's own order attribution to learn which channel first acquired each customer, then replays that channel onto their renewals — so subscription revenue is credited to the channel that actually won the subscriber."
+          description="Builds this whole report from your past orders, so you don't have to wait for new sales to see which channels drive revenue. It reads the channel that first brought each customer in and credits their orders to it. If you sell subscriptions, it also credits every renewal to the channel that originally won that subscriber — which nothing else can do."
         />
         <Divider />
         {errored && <Banner tone="critical" title="Backfill failed">{backfill.detail || "Try again."}</Banner>}
@@ -485,7 +485,7 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
               <Card>
                 <BlockStack gap="300">
                   <SectionHeading
-                    title="Revenue by channel"
+                    title="Revenue by source / medium"
                     description="Every paid order's revenue credited to the channel that first brought that customer in, over the last 90 days. Because it's based on your actual orders, it includes recurring subscription renewals — which Google Analytics can't credit to a channel."
                   />
                   {channelSubscriptionRevenue > 0 && (

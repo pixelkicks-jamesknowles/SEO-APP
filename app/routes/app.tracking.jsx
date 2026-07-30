@@ -588,7 +588,7 @@ export default function Tracking() {
               <input type="hidden" name="evt:gtm:engaged_view" value={engagedView ? "on" : ""} />
               <Checkbox
                 label="Engaged-content views - “engaged_view” when a visitor reads (time on page + scroll)"
-                helpText="Lets SEO teams see which content actually gets consumed, not just landed on. Thresholds are configured on the app embed."
+                helpText="Lets marketing teams see which content actually gets consumed, not just landed on. Thresholds are configured on the app embed."
                 checked={engagedView}
                 onChange={setEngagedView}
               />
@@ -628,8 +628,8 @@ export default function Tracking() {
               />
               <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />
               <Checkbox
-                label="Debug mode - log every event to the storefront browser console"
-                helpText="For testing: confirm events fire without configuring any platform. Open the storefront, DevTools → Console, look for “[pixelify-tracking]”. Turn off in production."
+                label="Console logging (for testing) — print every event to the browser console"
+                helpText="Because this app sends events server-side, they do NOT appear in Google Tag Assistant or GTM Preview (those only see tags running in the browser). Turn this on to log every event to your browser console instead, so you can confirm they fire: open the storefront, DevTools → Console, look for “[pixelify-tracking]”. It only logs — it does not change or flag what's sent. Turn off in production to keep the console clean."
                 checked={debug}
                 onChange={setDebug}
               />

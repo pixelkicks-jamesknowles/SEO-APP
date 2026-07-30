@@ -402,9 +402,9 @@ export default function Wizard() {
             <BlockStack gap="400">
               <StepHeader step={4} title="Do you sell subscriptions? (optional)" />
               <Text as="p">
-                If you sell subscriptions, we can track every renewal and credit it to the channel that first
-                won that customer — something Google Analytics can&apos;t do, because a renewal has no browser
-                session. Turn it on and tell us which app you use.
+                Turn this on to get the marketing channel tied to every subscription — both the first sale
+                and each renewal — in your reports. Google Analytics can&apos;t do the renewals, because a
+                renewal has no website visit for it to read a channel from. Tell us which app you use.
               </Text>
               <flow.Form method="post">
                 <input type="hidden" name="intent" value="connect_subscriptions" />
