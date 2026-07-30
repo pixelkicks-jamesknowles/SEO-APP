@@ -383,3 +383,30 @@ describe("companion mode (store also runs the Google & YouTube app)", () => {
     expect(ga4Called()).toBe(true);
   });
 });
+
+describe("companion mode — auto-detection of another on-page GA4 tag", () => {
+  const base = { serverSide: true, ga4Id: "G-1", eventMatrix: matrixAll, serverSideKeys: JSON.stringify({ ga4ApiSecret: "s" }) };
+  const pageEvent = { name: "page_viewed", id: "pv2", timestamp: "2026-06-26T10:00:00.000Z", context: { document: { location: { href: "https://shop.example.com/" } } } };
+  const ga4Called = () => global.fetch.mock.calls.some((c) => c[0].includes("google-analytics.com/mp/collect"));
+  const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+
+  test("fresh detection + companionAuto default → suppresses non-conversion GA4 automatically", async () => {
+    await fanOutServerSide({ ...base, onPageGa4DetectedAt: daysAgo(1) }, pageEvent);
+    expect(ga4Called()).toBe(false);
+  });
+
+  test("stale detection (8 days) → does NOT auto-apply companion", async () => {
+    await fanOutServerSide({ ...base, onPageGa4DetectedAt: daysAgo(8) }, pageEvent);
+    expect(ga4Called()).toBe(true);
+  });
+
+  test("companionAuto false overrides a fresh detection (always send everything)", async () => {
+    await fanOutServerSide({ ...base, onPageGa4DetectedAt: daysAgo(1), companionAuto: false }, pageEvent);
+    expect(ga4Called()).toBe(true);
+  });
+
+  test("manual companionMode still wins even with companionAuto off", async () => {
+    await fanOutServerSide({ ...base, companionMode: true, companionAuto: false }, pageEvent);
+    expect(ga4Called()).toBe(false);
+  });
+});

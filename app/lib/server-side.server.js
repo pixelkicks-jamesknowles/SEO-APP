@@ -1000,7 +1000,12 @@ export function buildJobs(settings, event, { force = false, hooks = {} } = {}) {
   // transaction_id, so overlap with the G&Y app is safe) and custom/lead events still send (the G&Y app
   // can't produce those). Meta and the other destinations are untouched. sGTM is included because it
   // forwards to the same GA4 property.
-  const companionSuppressed = (p) => settings.companionMode && (p === "ga4" || p === "gtm") && name !== "checkout_completed";
+  // Companion applies when the merchant flips it on, OR when auto-detection is on (default) and we've seen
+  // another on-page GA4 tag within the last week (companionActive). Fresh detection expires on its own if
+  // that other app is removed. companionAuto=false is the override to ignore detection.
+  const detectionFresh = !!settings.onPageGa4DetectedAt && Date.now() - new Date(settings.onPageGa4DetectedAt).getTime() < 7 * 24 * 60 * 60 * 1000;
+  const companionActive = !!settings.companionMode || (settings.companionAuto !== false && detectionFresh);
+  const companionSuppressed = (p) => companionActive && (p === "ga4" || p === "gtm") && name !== "checkout_completed";
   // force (test sends) and custom/lead events (window.pxp.track) bypass the per-event matrix — they go
   // to every configured destination (still credential- and consent-gated).
   const wants = (p) => (force ? true : event?.custom ? true : !companionSuppressed(p) && platformWants(matrix, p, name));

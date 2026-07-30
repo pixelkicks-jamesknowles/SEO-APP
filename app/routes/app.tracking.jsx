@@ -120,6 +120,9 @@ export const loader = async ({ request }) => {
     refundTracking: t?.refundTracking ?? false,
     botFiltering: t?.botFiltering ?? true,
     companionMode: t?.companionMode ?? false,
+    companionAuto: t?.companionAuto ?? true,
+    // On-page GA4 tag seen within the last week (auto-detection). Drives the "detected" note + auto-companion.
+    companionDetected: !!t?.onPageGa4DetectedAt && Date.now() - new Date(t.onPageGa4DetectedAt).getTime() < 7 * 24 * 60 * 60 * 1000,
     valueMode: t?.valueMode ?? "revenue",
     marginPct: t?.marginPct ?? 0,
     reportingCurrency: t?.reportingCurrency ?? "",
@@ -169,6 +172,7 @@ export const action = async ({ request }) => {
     refundTracking: form.get("refundTracking") === "on",
     botFiltering: form.get("botFiltering") === "on",
     companionMode: form.get("companionMode") === "on",
+    companionAuto: form.get("companionAuto") === "on",
     serverSide: form.get("serverSide") === "on",
     valueMode,
     marginPct,
@@ -235,6 +239,7 @@ export default function Tracking() {
   const [refundTracking, setRefundTracking] = useState(data.refundTracking);
   const [botFiltering, setBotFiltering] = useState(data.botFiltering);
   const [companionMode, setCompanionMode] = useState(data.companionMode);
+  const [companionAuto, setCompanionAuto] = useState(data.companionAuto);
   const [valueMode, setValueMode] = useState(data.valueMode);
   const [marginPct, setMarginPct] = useState(String(data.marginPct ?? 0));
   const [fxOn, setFxOn] = useState(data.fxMode === "on");
@@ -279,7 +284,7 @@ export default function Tracking() {
   const submit = useSubmit();
   const formRef = useRef(null);
   const snapshotOf = () =>
-    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, companionMode, valueMode, marginPct, fxOn, reportingCurrency, lifecycleTracking, subTracking, subCfg, ids });
+    JSON.stringify({ matrix, consent, consentSignals, debug, scrollDepth, engagedView, serverSide, refundTracking, botFiltering, companionMode, companionAuto, valueMode, marginPct, fxOn, reportingCurrency, lifecycleTracking, subTracking, subCfg, ids });
   const snapshot = snapshotOf();
   const baseline = useRef(snapshot);
   const dirty = snapshot !== baseline.current;
@@ -308,6 +313,7 @@ export default function Tracking() {
     setRefundTracking(data.refundTracking);
     setBotFiltering(data.botFiltering);
     setCompanionMode(data.companionMode);
+    setCompanionAuto(data.companionAuto);
     setValueMode(data.valueMode);
     setMarginPct(String(data.marginPct ?? 0));
     setFxOn(data.fxMode === "on");
@@ -637,12 +643,32 @@ export default function Tracking() {
                 checked={botFiltering}
                 onChange={setBotFiltering}
               />
+              {data.companionDetected && companionAuto && !companionMode && (
+                <Banner tone="info">
+                  <p>
+                    We&apos;ve detected another GA4 tag live on your storefront (e.g. the <b>Google &amp;
+                    YouTube</b> app). <b>Companion mode is applied automatically</b> — we&apos;re sending GA4
+                    conversions only, so page views aren&apos;t double-counted. No action needed.
+                  </p>
+                </Banner>
+              )}
               <input type="hidden" name="companionMode" value={companionMode ? "on" : ""} />
               <Checkbox
                 label="Companion mode — this store also runs Google's “Google & YouTube” app"
-                helpText="Important: if you use the Google & YouTube app (or any other on-page GA4 tag), turn this ON. That app already sends page views, product views and add-to-carts, so we then send GA4 conversions only (purchase + subscription) and those page-level events aren't double-counted. Purchases still dedupe safely by transaction_id, and Meta and other destinations are unaffected. (This is a manual switch — we don't auto-detect the other app.)"
+                helpText="If you use the Google & YouTube app (or any other on-page GA4 tag), it already sends page views, product views and add-to-carts. With this on we send GA4 conversions only (purchase + subscription), so those aren't double-counted. Purchases still dedupe safely by transaction_id; Meta and other destinations are unaffected. You usually don't need to touch this — we detect the other tag and apply it for you (see below)."
                 checked={companionMode}
                 onChange={setCompanionMode}
+              />
+              <input type="hidden" name="companionAuto" value={companionAuto ? "on" : ""} />
+              <Checkbox
+                label="Auto-detect and apply companion mode"
+                helpText={
+                  data.companionDetected
+                    ? "On: another on-page GA4 tag is currently detected, so companion mode is active automatically. Untick to ignore detection and always send every event to GA4."
+                    : "On (recommended): if we ever detect another on-page GA4 tag, we'll apply companion mode automatically so page views aren't double-counted. Untick to always send everything regardless."
+                }
+                checked={companionAuto}
+                onChange={setCompanionAuto}
               />
               <Collapsible open={showAdvanced} id="adv-debug" transition={{ duration: "200ms" }}>
                 <input type="hidden" name="pixelDebug" value={debug ? "on" : ""} />

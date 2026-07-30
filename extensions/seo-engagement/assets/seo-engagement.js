@@ -85,10 +85,19 @@
       } catch (e) {
         /* private mode — just send */
       }
+      // Detect another on-page GA4 tag (the Google & YouTube app, or a theme gtag): it defines window.gtag
+      // and/or sets the _ga_<container> session cookie we read below. Reported so the app can auto-enable
+      // companion mode and avoid double-counting page-level events.
+      var onPageGa4 = false;
+      try {
+        onPageGa4 = typeof window.gtag === "function" || !!gaSessionId();
+      } catch (e) {
+        /* ignore */
+      }
       fetch(base + "/visit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: gaClientId(), utm: utmFromSearch(), referrer: externalReferrer() }),
+        body: JSON.stringify({ clientId: gaClientId(), utm: utmFromSearch(), referrer: externalReferrer(), gtag: onPageGa4 }),
         credentials: "same-origin",
         keepalive: true
       })

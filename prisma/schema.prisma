@@ -84,6 +84,15 @@ model TrackingSettings {
   // and the orders/paid subscription path is unaffected (the G&Y app can't see renewals). Meta/other
   // destinations are untouched. Off by default.
   companionMode        Boolean  @default(false)
+  // Auto-detection of another on-page GA4 tag (the Google & YouTube app, or a theme gtag). The storefront
+  // embed reports whether an on-page GA4 tag is present (it sets the _ga_<container> cookie we already read
+  // for session stitching); onPageGa4DetectedAt is refreshed each time it's seen and treated as STALE after
+  // a week (so removing that app clears it on its own). When companionAuto is on (default) and detection is
+  // fresh, companion behaviour applies even if the manual toggle above is off — with companionAuto as the
+  // override to ignore detection and always send everything.
+  onPageGa4Detected    Boolean   @default(false)
+  onPageGa4DetectedAt  DateTime?
+  companionAuto        Boolean   @default(true)
   // Value-based optimisation: send margin (revenue × marginPct) as the conversion `value` instead of
   // raw revenue, so ad platforms optimise for profit. Opt-in; raw revenue kept as a `revenue` param.
   valueMode            String   @default("revenue") // "revenue" | "margin"

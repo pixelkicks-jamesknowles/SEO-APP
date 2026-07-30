@@ -62,6 +62,13 @@ export const action = async ({ request, params }) => {
     const vkey = visitorKey({ durableId, clientId });
     await recordVisit(shopDomain, vkey, body?.utm, body?.referrer).catch(() => {});
     await linkIdentity(shopDomain, { durableId, clientId, customerKey: null }).catch(() => {});
+    // Another on-page GA4 tag is live (Google & YouTube app / theme gtag) → record it so companion mode can
+    // auto-apply. Only ever set true + refresh the timestamp; staleness (a week) handles the tag going away.
+    if (body?.gtag === true) {
+      await prisma.trackingSettings
+        .updateMany({ where: { shopDomain }, data: { onPageGa4Detected: true, onPageGa4DetectedAt: new Date() } })
+        .catch(() => {});
+    }
     return new Response(null, { status: 204 });
   }
 
