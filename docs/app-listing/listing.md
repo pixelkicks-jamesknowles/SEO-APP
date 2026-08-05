@@ -1,9 +1,9 @@
-# App listing copy — Pixel Kicks Tracking
+# App listing copy — Connect Analytics
 
 Paste these into the Partner Dashboard listing. Fields marked `[…]` need your input.
 
 ## App name
-Pixel Kicks Tracking
+Connect Analytics
 
 ## Tagline (short, ~62 chars)
 Server-side GA4, Meta & GTM tracking that survives ad blockers
@@ -12,7 +12,7 @@ Server-side GA4, Meta & GTM tracking that survives ad blockers
 Accurate server-side conversion tracking for GA4, Meta and GTM — plus subscriptions, refunds and SEO events.
 
 ## Full description
-Pixel Kicks Tracking sends your store's events to GA4, Meta (Conversions API) and a server-side GTM container from the server, not the browser — so your data keeps flowing past ad blockers, Safari ITP and the Checkout Extensibility sandbox that breaks theme-based tracking.
+Connect Analytics sends your store's events to GA4, Meta (Conversions API) and a server-side GTM container from the server, not the browser — so your data keeps flowing past ad blockers, Safari ITP and the Checkout Extensibility sandbox that breaks theme-based tracking.
 
 Built on Shopify's Web Pixels API, it covers the events theme scripts can no longer reach (including checkout and purchase) and adds the things most trackers miss:
 

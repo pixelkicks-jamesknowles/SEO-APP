@@ -5,7 +5,7 @@
 # During `shopify app dev`, automatically_update_urls_on_dev keeps these pointed at the tunnel.
 
 client_id = "708d7107539ef297a6230ea9b0716a2a"
-name = "Pixel Kicks Tracking"
+name = "Connect Analytics"
 application_url = "https://tracking.pixelkicks.co.uk"
 embedded = true
 

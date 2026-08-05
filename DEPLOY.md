@@ -1,4 +1,4 @@
-# Deploy runbook — Pixel Kicks Tracking on Railway
+# Deploy runbook — Connect Analytics on Railway
 
 This app is **multi-tenant** (everything is keyed by `shopDomain`), so **one Railway deployment
 serves all your client stores**. You host it once, in one agency-owned Railway project, and install

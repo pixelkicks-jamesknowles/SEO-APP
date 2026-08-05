@@ -1,4 +1,4 @@
-# Reviewer test instructions — Pixel Kicks Tracking
+# Reviewer test instructions — Connect Analytics
 
 Paste this into the "Testing instructions" field of the app submission. It lets a reviewer verify
 the app with and without external credentials.

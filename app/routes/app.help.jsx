@@ -45,7 +45,7 @@ const SECTIONS = [
   },
   {
     id: "overview",
-    title: "What Pixel Kicks Tracking does",
+    title: "What Connect Analytics does",
     summary: "A free, server-side conversion + engagement tracker for any Shopify store.",
     body: (
       <>

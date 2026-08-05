@@ -1,9 +1,9 @@
-# pixelify-seo → Pixel Kicks Tracking
+# pixelify-seo → Connect Analytics
 
 > **Free, tracking-only app.** The SEO half (meta/schema, audit, CWV, GSC, redirects, sitemap/robots/
 > llms, the `seo-schema` extension, plan tiers) was stripped back and **archived** on the
 > `archive/seo-full-featured` branch — restore from there if/when it's wanted again. The directory is
-> still named `pixelify-seo` for now; the Shopify-facing app name is **Pixel Kicks Tracking**.
+> still named `pixelify-seo` for now; the Shopify-facing app name is **Connect Analytics**.
 
 Conversion & event tracking for any Shopify store — client-side (Web Pixels) **and** server-side
 (GA4 Measurement Protocol / Meta CAPI), including the subscription-purchase event.
@@ -140,7 +140,7 @@ cd app/pixelify-seo
 cp .env.example .env
 docker compose up -d db
 npm install
-shopify app config link      # links to "Pixel Kicks Tracking"
+shopify app config link      # links to "Connect Analytics"
 npx prisma migrate dev
 shopify app dev
 ```

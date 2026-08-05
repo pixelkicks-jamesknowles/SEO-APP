@@ -1,6 +1,6 @@
 # Tracking features roadmap — dev spec
 
-Remaining tracking features for Pixel Kicks Tracking, scoped against the current architecture so any
+Remaining tracking features for Connect Analytics, scoped against the current architecture so any
 can be picked up later. Prioritised for an agency running **B2B + DTC across many industries**. This
 doc tracks only work that is **not built yet**.
 

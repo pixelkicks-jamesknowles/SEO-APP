@@ -152,7 +152,7 @@ export const action = async ({ request }) => {
     const tracking = await prisma.trackingSettings.findUnique({ where: { shopDomain } });
     if (!tracking?.alertWebhookUrl) return { testError: "Save an alert webhook URL first, then send a test." };
     const payload = buildAlertPayload(shopDomain, [
-      { severity: "warning", title: "Test alert from Pixel Kicks Tracking", body: "If you can see this, your tracking-health alerts are wired up correctly." },
+      { severity: "warning", title: "Test alert from Connect Analytics", body: "If you can see this, your tracking-health alerts are wired up correctly." },
     ]);
     const r = await postAlertWebhook(tracking.alertWebhookUrl, payload);
     return r.ok ? { testOk: "Test alert sent — check your Slack/Discord/webhook channel." } : { testError: `Webhook responded ${r.detail}. Check the URL.` };

@@ -1,8 +1,8 @@
-# Privacy Policy — Pixel Kicks Tracking
+# Privacy Policy — Connect Analytics
 
 _Last updated: [DATE]_
 
-This policy explains what data the Pixel Kicks Tracking app ("the App", "we") processes when
+This policy explains what data the Connect Analytics app ("the App", "we") processes when
 installed on a Shopify store, and why. Fill the `[…]` placeholders and host this page at a public
 URL, then enter that URL in the app listing.
 

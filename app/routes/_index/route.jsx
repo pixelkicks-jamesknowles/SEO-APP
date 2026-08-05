@@ -7,9 +7,9 @@ const SUPPORT_EMAIL = "support@pushon.co.uk";
 const PRIVACY_URL = "https://www.pushon.co.uk/privacy-policy/"; // host privacy-policy.md here
 
 export const meta = () => [
-  { title: "Pixel Kicks Tracking by PushON" },
+  { title: "Connect Analytics by PushON" },
   { name: "description", content: "Accurate server-side conversion tracking for Shopify. GA4, Meta and GTM, with no theme code." },
-  { property: "og:title", content: "Pixel Kicks Tracking" },
+  { property: "og:title", content: "Connect Analytics" },
   { property: "og:description", content: "Server-side GA4, Meta and GTM tracking for Shopify that survives ad blockers, ITP and checkout." },
   { property: "og:type", content: "website" },
 ];
@@ -44,7 +44,7 @@ export default function App() {
     <main className="pk">
       <style>{CSS}</style>
       <div className="pk-card">
-        <h1 className="pk-title">Pixel Kicks <span className="pk-accent">Tracking</span></h1>
+        <h1 className="pk-title">Connect <span className="pk-accent">Analytics</span></h1>
         <p className="pk-tag">
           Accurate server-side conversion tracking for Shopify. GA4, Meta and GTM, with no theme code.
         </p>

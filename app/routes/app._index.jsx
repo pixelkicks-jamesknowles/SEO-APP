@@ -81,7 +81,7 @@ export default function Index() {
 
   return (
     <Page
-      title="Pixel Kicks Tracking"
+      title="Connect Analytics"
       subtitle="Track your sales and marketing accurately. Free, and set up in minutes — no code needed."
     >
       <Layout>

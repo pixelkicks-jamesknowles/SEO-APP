@@ -18,7 +18,7 @@ const EMOJI = { critical: ":rotating_light:", warning: ":warning:" };
  *  (Discord) so one URL works across the common targets. Pure. */
 export function buildAlertPayload(shopDomain, alerts) {
   const lines = alerts.map((a) => `${EMOJI[a.severity] || "•"} *${a.title}*\n${a.body}`);
-  const text = `*Pixel Kicks Tracking* — ${shopDomain}\n\n${lines.join("\n\n")}`;
+  const text = `*Connect Analytics* — ${shopDomain}\n\n${lines.join("\n\n")}`;
   return { text, content: text };
 }
 
