@@ -19,7 +19,7 @@ gating, subscription/refund tracking, SEO engagement events, bot filtering and d
 ## Test 2 — confirm events fire on the storefront (no external accounts needed)
 1. App → **Tracking** → enable **Debug mode**, Save.
 2. Visit the demo storefront, open DevTools → Console.
-3. Browse a product / add to cart → see `[pixelify-tracking]` log lines proving events fire and
+3. Browse a product / add to cart → see `[connect-analytics]` log lines proving events fire and
    respect consent.
 
 ## Test 3 — live server-side delivery to GA4 (uses a test GA4 property)

@@ -447,7 +447,7 @@ export default function Wizard() {
               <Text as="p">Last thing: switch on the app in your theme so it can track visitors browsing your store.</Text>
               <BlockStack gap="200">
                 <Text as="p" variant="bodyMd">1. Click the button below (it opens your theme editor in a new tab).</Text>
-                <Text as="p" variant="bodyMd">2. In the panel that opens, find <b>Pixelify SEO engagement</b> and switch it <b>on</b>.</Text>
+                <Text as="p" variant="bodyMd">2. In the panel that opens, find <b>Connect Analytics Engagement</b> and switch it <b>on</b>.</Text>
                 <Text as="p" variant="bodyMd">3. Click <b>Save</b> in the theme editor, then come back here.</Text>
                 <InlineStack><Button url={embedUrl} target="_blank" variant="primary">Open my theme editor</Button></InlineStack>
               </BlockStack>

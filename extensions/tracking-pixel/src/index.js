@@ -158,7 +158,7 @@ register(({ analytics, browser, settings, init }) => {
     if (cfg.debug) {
       try {
         // eslint-disable-next-line no-console
-        console.log("[pixelify-tracking]", name, { analyticsOk, marketingOk, platforms: wanted, payload });
+        console.log("[connect-analytics]", name, { analyticsOk, marketingOk, platforms: wanted, payload });
       } catch {
         /* sandbox: never throw */
       }
@@ -240,7 +240,7 @@ register(({ analytics, browser, settings, init }) => {
     if (!cfg.debug) return;
     try {
       // eslint-disable-next-line no-console
-      console.log("[pixelify-tracking]", ...args);
+      console.log("[connect-analytics]", ...args);
     } catch {
       /* sandbox: never throw */
     }
