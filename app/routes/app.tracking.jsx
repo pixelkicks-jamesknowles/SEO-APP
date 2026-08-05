@@ -598,10 +598,10 @@ export default function Tracking() {
             <BlockStack gap="300">
               <SectionHeading
                 title="SEO engagement (GA4 & GTM)"
-                help="Scroll depth and engaged-content views aren't Shopify customer events, so they're captured by the “Connect Analytics Engagement” app embed (enable it in Theme editor → App embeds) and forwarded server-side to GA4/GTM. These toggles control whether the server forwards them."
+                help="Scroll depth and engaged-content views aren't Shopify customer events, so they're captured by the “Connect Analytics” app embed (enable it in Theme editor → App embeds) and forwarded server-side to GA4/GTM. These toggles control whether the server forwards them."
               />
               <Text as="p" tone="subdued">
-                Enable the <b>Connect Analytics Engagement</b> app embed in your theme, then choose what to forward.
+                Enable the <b>Connect Analytics</b> app embed in your theme, then choose what to forward.
                 Sent to GA4/GTM only (not Meta). Requires Server-side on below.
               </Text>
               <InlineStack>
@@ -788,7 +788,7 @@ export default function Tracking() {
                   </FormLayout.Group>
                   <Text as="p" variant="bodySm" tone="subdued">
                     <b>Client ID:</b> server-side conversions reuse the shopper&apos;s real GA4 client ID and
-                    session ID, captured by the <b>Connect Analytics Engagement</b> app embed, so GA4 attaches the
+                    session ID, captured by the <b>Connect Analytics</b> app embed, so GA4 attaches the
                     purchase to their actual session and keeps the acquisition channel. Enable that embed in
                     the theme, or conversions fall back to a synthetic ID and report as <b>Unassigned</b>.
                     (A recurring renewal has no browser session, so it carries the customer&apos;s ID but no

@@ -220,7 +220,7 @@ export default function DeveloperTools() {
             <SectionHeading title="Set it up in Google Tag Manager" description="One-time wiring in your own GTM web container." />
             <Divider />
             <List type="number">
-              <List.Item>Enable the <b>Connect Analytics Engagement</b> app embed (Theme editor → App embeds) — it hosts the data layer script.</List.Item>
+              <List.Item>Enable the <b>Connect Analytics</b> app embed (Theme editor → App embeds) — it hosts the data layer script.</List.Item>
               <List.Item>In GTM, confirm your GA4 Configuration tag is installed on the storefront (or add one).</List.Item>
               <List.Item>Create GA4 Event tags triggered on Custom Events <code>view_item</code>, <code>add_to_cart</code>, <code>begin_checkout</code>, etc., reading the <code>ecommerce</code> object — or import a prebuilt GA4 container that listens on the <code>dl_*</code> events.</List.Item>
               <List.Item>Use <b>Google Tag Assistant</b> (or GTM Preview) plus the browser console (<code>window.dataLayer</code>) to confirm events fire as you browse, add to cart, and hit checkout.</List.Item>

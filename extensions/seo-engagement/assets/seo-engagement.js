@@ -1,4 +1,4 @@
-/* Connect Analytics Engagement — scroll depth + engaged-content views.
+/* Connect Analytics — scroll depth + engaged-content views.
  * Runs in the storefront DOM (the Web Pixel sandbox can't see scroll), detects milestones, and
  * beacons them to the app proxy /track, which forwards them server-side to GA4 / sGTM as
  * `scroll` / `engaged_view` events. Consent-gated; never throws. ~1KB, no dependencies. */

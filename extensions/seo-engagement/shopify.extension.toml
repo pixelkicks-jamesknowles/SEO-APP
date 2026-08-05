@@ -8,5 +8,5 @@ uid = "73f7ee0f-5f33-49b5-a94a-78e4de347e5a"
 # as proper `scroll` / `engaged_view` events. Consent-gated via the storefront Customer Privacy API.
 [[extensions]]
 type = "theme"
-name = "Connect Analytics Engagement"
+name = "Connect Analytics"
 handle = "seo-engagement"

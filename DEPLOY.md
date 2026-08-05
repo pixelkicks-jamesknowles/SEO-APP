@@ -183,7 +183,7 @@ For each installed store:
    conversions only and its page views etc. aren't double-counted. The GA4 measurement ID must be the
    **same data stream** that on-page tag uses.
 2. **Settings**: add the GA4 MP secret, Meta CAPI token, and sGTM URL if used.
-3. Enable the **Connect Analytics Engagement** app embed in the store's Theme editor → App embeds (for
+3. Enable the **Connect Analytics** app embed in the store's Theme editor → App embeds (for
    scroll / engaged-content events).
 
 ## Step 7 — Verify (the real end-to-end test)

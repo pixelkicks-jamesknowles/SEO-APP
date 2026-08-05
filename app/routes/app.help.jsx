@@ -178,7 +178,7 @@ const SECTIONS = [
           &amp; lifecycle</b> and <b>multi-currency</b> normalization.
         </List.Item>
         <List.Item>
-          For scroll and engaged-content events, enable the <b>Connect Analytics Engagement</b> app embed in
+          For scroll and engaged-content events, enable the <b>Connect Analytics</b> app embed in
           Theme editor, App embeds, then tick those events on the Tracking page.
         </List.Item>
         <List.Item>
@@ -374,7 +374,7 @@ const SECTIONS = [
     body: (
       <Text as="p">
         Scroll depth and engaged-content views are not Shopify customer events, so they are captured by the{" "}
-        <b>Connect Analytics Engagement</b> app embed (Theme editor → App embeds) and forwarded to GA4 / GTM as{" "}
+        <b>Connect Analytics</b> app embed (Theme editor → App embeds) and forwarded to GA4 / GTM as{" "}
         <b>scroll</b> (with percent_scrolled) and <b>engaged_view</b> events. Site search is sent as a
         complete GA4 <b>search</b> event with search_term. Enable the embed, then tick the engagement
         events on the Tracking page. These go to GA4 and GTM only, not Meta.
@@ -390,7 +390,7 @@ const SECTIONS = [
         <Text as="p">
           Beyond the standard events, your theme can fire arbitrary events - quote / RFQ, trade-account
           request, sample request, finance application, configurator - with a one-line call, delivered
-          server-side to every configured destination. Requires the <b>Connect Analytics Engagement</b> app
+          server-side to every configured destination. Requires the <b>Connect Analytics</b> app
           embed (it exposes the API) and <b>Server-side delivery</b> on. Call it on form submit / click:
         </Text>
         <Box background="bg-surface-secondary" padding="300" borderRadius="200">
@@ -492,7 +492,7 @@ const SECTIONS = [
           <b>Unassigned</b>.
         </Text>
         <Text as="p">
-          The <b>Connect Analytics Engagement</b> app embed handles this: it reads the shopper&apos;s GA4 cookies
+          The <b>Connect Analytics</b> app embed handles this: it reads the shopper&apos;s GA4 cookies
           and writes them onto the cart, so they arrive on the order. The purchase we send from{" "}
           <code>orders/paid</code> (and any reconciliation backfill) then reuses that same pair, and GA4
           attaches the conversion to the real session, keeping the channel.
