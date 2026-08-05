@@ -97,7 +97,10 @@
       fetch(base + "/visit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: gaClientId(), utm: utmFromSearch(), referrer: externalReferrer(), gtag: onPageGa4 }),
+        // Send the durable id in the BODY (read client-side) — Shopify's App Proxy doesn't reliably forward
+        // the pxp_id COOKIE to the app, so the server can't depend on reading it from the request. This is
+        // what lets identity stitching ("Identified") actually record.
+        body: JSON.stringify({ clientId: gaClientId(), durableId: readPxpId(), utm: utmFromSearch(), referrer: externalReferrer(), gtag: onPageGa4 }),
         credentials: "same-origin",
         keepalive: true
       })
@@ -227,6 +230,7 @@
             custom: custom || undefined,
             params: params,
             clientId: gaClientId(),
+            durableId: readPxpId(),
             consent: consentState(),
             context: { document: { location: { href: location.href } } }
           }

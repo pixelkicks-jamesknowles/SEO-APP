@@ -10,7 +10,15 @@ import { recordVisit } from "../lib/delivery.server";
 import { visitorKey, linkIdentity } from "../lib/identity.server";
 import { checkIngestRate, clientIpFromRequest } from "../lib/ratelimit.server";
 import { effectiveDataLayerConfig } from "../lib/datalayer";
-import { resolveDurableId, readDurableId } from "../lib/durable-id.server";
+import { resolveDurableId, readDurableId, isValidDurableId } from "../lib/durable-id.server";
+
+// The durable id may arrive in the request body (the embed/pixel read the pxp_id cookie client-side and
+// send it) OR in the request cookie. Prefer the body: Shopify's App Proxy does NOT reliably forward the
+// storefront's cookie to the app, so the cookie read alone leaves identity stitching empty. Validate either.
+function durableIdFrom(request, body) {
+  const fromBody = typeof body?.durableId === "string" && isValidDurableId(body.durableId) ? body.durableId : null;
+  return fromBody || readDurableId(request);
+}
 
 // App Proxy entrypoint - Shopify signs and forwards /apps/<subpath>/<type> here. Used by the SEO-
 // engagement theme embed (main-page context, so it can hit the same-origin proxy). The Web Pixel can't
@@ -57,7 +65,7 @@ export const action = async ({ request, params }) => {
   // which is what populates the Attribution page's top-of-funnel. The durable id is read server-side.
   if (params.type === "visit") {
     const body = await request.json().catch(() => null);
-    const durableId = readDurableId(request);
+    const durableId = durableIdFrom(request, body);
     const clientId = body?.clientId || null;
     const vkey = visitorKey({ durableId, clientId });
     await recordVisit(shopDomain, vkey, body?.utm, body?.referrer).catch(() => {});
@@ -76,7 +84,9 @@ export const action = async ({ request, params }) => {
   // Durable id: this is a first-party same-origin request, so the pxp_id cookie rides along. Read it
   // server-side (authoritative — not spoofable from the body) and stamp it on the event so embed-sourced
   // events carry the same stable id the pixel reads from the cookie.
-  const durableId = readDurableId(request);
+  // Prefer the durable id the embed/pixel put in the event body; fall back to the cookie. (App Proxy cookie
+  // forwarding is unreliable — see durableIdFrom.)
+  const durableId = (typeof body?.event?.durableId === "string" && isValidDurableId(body.event.durableId) ? body.event.durableId : null) || readDurableId(request);
   if (durableId && body?.event) body.event.durableId = durableId;
   // Best-effort, like /pixel/track: a post-delivery DB hiccup must not turn a successful send into a
   // 500 (Shopify would retry the proxy call → a duplicate fan-out). Always ack with 204.
