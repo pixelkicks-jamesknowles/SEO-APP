@@ -3,6 +3,11 @@
 Scopes the build proposed in response to the client's (Duncan / Equaliser) 2026-07 review. This doc is the
 planning artifact for sizing against the agreed 1-2 day T&M, and for the call.
 
+> **Update (Aug 2026):** superseded/reorganised by
+> [equaliser-aug2026-requests.md](equaliser-aug2026-requests.md) after the client's consolidated list. Item 1's
+> `subscription_type` marker is now generalised to two attributes (order type + customer type); items 3 & 4
+> (date range, CSV export) are **parked** per the client. Read the Aug spec first.
+
 ## The goal ("done")
 
 The client can see **which channels and campaigns drive NEW subscribers**, over a **selectable date range**,
