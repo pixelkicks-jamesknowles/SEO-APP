@@ -230,6 +230,10 @@ model TrackingDaily {
   // capture numbers can be read in the light of how many shoppers accept your cookie banner.
   consentGranted     Int      @default(0)
   consentDenied      Int      @default(0)
+  // Same split but scoped to PURCHASES (checkout_completed) — so the Accuracy page can show how many ORDERS
+  // came from shoppers who declined analytics tracking (the merchant's tracking blind spot), not just events.
+  purchaseConsentGranted Int  @default(0)
+  purchaseConsentDenied  Int  @default(0)
   updatedAt          DateTime @updatedAt
 
   @@id([shopDomain, date])
@@ -275,6 +279,9 @@ model VisitorIdentity {
 
   @@id([shopDomain, durableId])
   @@index([shopDomain, customerKey])
+  // Cross-channel identity stitch (linkIdentity): attach a customerKey to every durable identity sharing a
+  // GA client id, so a checkout event (no pxp_id) can identify the durable visitor the embed saw.
+  @@index([shopDomain, clientId])
 }
 
 // Per-day revenue attributed to an acquisition channel (first-touch source/medium), bumped on each

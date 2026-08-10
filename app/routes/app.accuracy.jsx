@@ -60,6 +60,8 @@ async function buildAccuracy(shopDomain) {
       revenueRecovered: rows.reduce((t, r) => t + (r.revenueRecovered || 0), 0),
       consentGranted: sum("consentGranted"),
       consentDenied: sum("consentDenied"),
+      purchaseConsentGranted: sum("purchaseConsentGranted"),
+      purchaseConsentDenied: sum("purchaseConsentDenied"),
     },
     recoveredCurrency: tracking?.reportingCurrency || null,
     alerts: health.alerts,
@@ -152,6 +154,8 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
   const deliveryRate = pct(totals.eventsSent, sends);
   const consentSeen = (totals.consentGranted || 0) + (totals.consentDenied || 0);
   const consentRate = pct(totals.consentGranted || 0, consentSeen);
+  const optedOutOrders = totals.purchaseConsentDenied || 0;
+  const purchaseConsentSeen = (totals.purchaseConsentGranted || 0) + optedOutOrders;
   const hasData = totals.ordersPaid > 0 || sends > 0;
   const recovered = totals.purchasesRecovered || 0;
   // GA4 gap: revenue this app makes visible that GA4 alone would miss — pixel-missed purchases we
@@ -238,6 +242,16 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 sub={consentRate == null ? "Share of shoppers who accept analytics" : `${(totals.consentGranted || 0).toLocaleString()} of ${consentSeen.toLocaleString()} events had analytics consent`}
                 progress={consentRate ?? 0}
                 tone={consentRate != null && consentRate < 50 ? "critical" : undefined}
+              />
+              <Stat
+                title="Orders opted out of tracking (30d)"
+                value={optedOutOrders.toLocaleString()}
+                sub={
+                  purchaseConsentSeen === 0
+                    ? "No checkout consent data yet"
+                    : `of ${purchaseConsentSeen.toLocaleString()} orders — shoppers who declined analytics consent, so their journey isn't tracked`
+                }
+                tone={optedOutOrders > 0 ? "warning" : undefined}
               />
               <Stat
                 title="Retry queue"

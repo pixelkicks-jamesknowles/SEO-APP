@@ -28,16 +28,31 @@ export function eventCustomerKey(event) {
 }
 
 /** Record/refresh the identity links for an event: durableId ↔ latest clientId ↔ customerKey (the last set
- *  once the visitor identifies at checkout/login). Best-effort. Only sets fields (never nulls them). */
+ *  once the visitor identifies at checkout/login). Best-effort. Only sets fields (never nulls them).
+ *
+ *  Cross-CHANNEL stitch (this is what makes "Identified" climb off 0): the durable id (pxp_id) is minted by
+ *  the theme embed on the main page, but the CUSTOMER identity (email) arrives on the Web Pixel at checkout,
+ *  whose strict sandbox can't read the pxp_id cookie — so a checkout event has a customerKey + GA client id
+ *  but NO durable id. The embed recorded that same client id against the durable id, so when we learn a
+ *  customerKey and have a clientId we attach it to every still-anonymous durable identity sharing that
+ *  client id. Without this the two channels never meet and every durable visitor stays unidentified. */
 export async function linkIdentity(shopDomain, { durableId, clientId, customerKey } = {}) {
-  if (!durableId) return;
-  await prisma.visitorIdentity
-    .upsert({
-      where: { shopDomain_durableId: { shopDomain, durableId } },
-      create: { shopDomain, durableId, clientId: clientId || null, customerKey: customerKey || null },
-      update: { ...(clientId ? { clientId } : {}), ...(customerKey ? { customerKey } : {}) },
-    })
-    .catch(() => {});
+  if (durableId) {
+    await prisma.visitorIdentity
+      .upsert({
+        where: { shopDomain_durableId: { shopDomain, durableId } },
+        create: { shopDomain, durableId, clientId: clientId || null, customerKey: customerKey || null },
+        update: { ...(clientId ? { clientId } : {}), ...(customerKey ? { customerKey } : {}) },
+      })
+      .catch(() => {});
+  }
+  // Stitch the customer onto durable identities that share this GA client id but haven't been identified yet
+  // (covers the durable-id-less checkout event, and back-links earlier anonymous sessions on the same _ga).
+  if (customerKey && clientId) {
+    await prisma.visitorIdentity
+      .updateMany({ where: { shopDomain, clientId, customerKey: null }, data: { customerKey } })
+      .catch(() => {});
+  }
 }
 
 /** The customerKey a durable id is linked to (cross-device: whichever session of this visitor identified),

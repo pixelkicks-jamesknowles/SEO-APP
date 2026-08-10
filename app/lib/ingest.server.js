@@ -130,5 +130,8 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     const orderId = numericId(event.data?.checkout?.order?.id);
     if (orderId) await recordCaptureFromResults(shopDomain, orderId, results);
     await bumpMatchQuality(shopDomain, metaIdentifierKeys(metaUserData(event)));
+    // Order-level consent split (for the Accuracy "orders opted out of tracking" tile): count this order
+    // by whether the shopper granted analytics consent, so the merchant can see their tracking blind spot.
+    await bumpDaily(shopDomain, analyticsConsented(event.consent) ? { purchaseConsentGranted: 1 } : { purchaseConsentDenied: 1 });
   }
 }

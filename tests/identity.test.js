@@ -43,6 +43,25 @@ describe("linkIdentity", () => {
     await linkIdentity(SHOP, { durableId: "d1", customerKey: "991" });
     expect(prisma.visitorIdentity.upsert.mock.calls[0][0].update).toEqual({ customerKey: "991" });
   });
+
+  test("cross-channel stitch: a checkout event (clientId + customerKey, NO durable id) identifies durable rows sharing the client id", async () => {
+    await linkIdentity(SHOP, { clientId: "c1", customerKey: "991" });
+    // No durable id → no upsert, but the client-id stitch attaches the customer to anonymous durable rows.
+    expect(prisma.visitorIdentity.upsert).not.toHaveBeenCalled();
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith({
+      where: { shopDomain: SHOP, clientId: "c1", customerKey: null },
+      data: { customerKey: "991" },
+    });
+  });
+
+  test("with a durable id AND a client id, does both the upsert and the client-id stitch", async () => {
+    await linkIdentity(SHOP, { durableId: "d1", clientId: "c1", customerKey: "991" });
+    expect(prisma.visitorIdentity.upsert).toHaveBeenCalled();
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith({
+      where: { shopDomain: SHOP, clientId: "c1", customerKey: null },
+      data: { customerKey: "991" },
+    });
+  });
 });
 
 describe("resolveCustomerKey", () => {
