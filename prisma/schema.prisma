@@ -301,6 +301,28 @@ model ChannelRevenueDaily {
   @@index([shopDomain, date])
 }
 
+// Per-day acquisition rollup, split by the two attributes the client asked for (order type + customer type)
+// on top of channel + campaign. Kept SEPARATE from ChannelRevenueDaily (rather than widening its key) so the
+// existing "Revenue by source / medium" report and its backfill are untouched; this powers the newer
+// "New vs returning · subscription vs one-off, by channel and campaign" breakdown. Written from orders/paid
+// (Shopify's source of truth — the only path that sees renewals). Campaign defaults to "(none)"; orderType
+// is one of subscription_checkout|renewal|one_off; customerType is new|returning|(unknown).
+model AcquisitionDaily {
+  shopDomain   String
+  date         String // YYYY-MM-DD (UTC)
+  source       String
+  medium       String
+  campaign     String @default("(none)")
+  orderType    String @default("one_off")
+  customerType String @default("(unknown)")
+  orders       Int    @default(0)
+  revenue      Float  @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@id([shopDomain, date, source, medium, campaign, orderType, customerType])
+  @@index([shopDomain, date])
+}
+
 // Historical revenue-by-channel backfill. ChannelRevenueDaily only fills from orders/paid going forward,
 // so the Attribution report starts empty — and a subscription business's key question ("which channel
 // acquired the subscribers whose renewals pay us now?") is answered by orders placed long before install.
@@ -333,6 +355,27 @@ model BackfillJob {
   startedAt       DateTime?
   finishedAt      DateTime?
   updatedAt       DateTime  @updatedAt
+}
+
+// Historical attribution WRITE-BACK: stamp connect_analytics.* metafields onto past orders so a merchant's
+// native Shopify reports (and order pages / segments) show the resolved channel for history, not just for
+// orders placed after install. Separate from BackfillJob (which rebuilds the app's own revenue rollup) so
+// the two run independently: this one should run AFTER BackfillJob has populated CustomerAttribution, since
+// it reads each customer's learned first-touch + firstOrderId to classify new-vs-returning and the acquiring
+// channel per historical order. Resumable + leased exactly like BackfillJob.
+model MetafieldBackfillJob {
+  shopDomain        String    @id
+  status            String    @default("idle") // idle | running | done | error
+  cursor            String? // Shopify pagination cursor (null = not started / finished)
+  historySince      String? // YYYY-MM-DD — how far back to stamp
+  ordersProcessed   Int       @default(0)
+  metafieldsWritten Int       @default(0)
+  detail            String?
+  leaseToken        String?
+  leasedUntil       DateTime?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  updatedAt         DateTime  @updatedAt
 }
 
 // A converting visitor's touch PATH + order value, snapshotted at checkout — the input to the multi-touch

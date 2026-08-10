@@ -8,6 +8,7 @@ import { wizardState } from "../lib/wizard";
 import { computeHealth, dismissAlert } from "../lib/health.server";
 import { getHeartbeat } from "../lib/heartbeat.server";
 import { minutesSince, CRON_STALE_MIN, CRON_ALERT_MIN } from "../lib/heartbeat";
+import { captureHealth } from "../lib/identity.server";
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -22,12 +23,13 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [tracking, recentEvents, deliveryFailures, health, heartbeat] = await Promise.all([
+  const [tracking, recentEvents, deliveryFailures, health, heartbeat, capture] = await Promise.all([
     prisma.trackingSettings.findUnique({ where: { shopDomain } }),
     prisma.recentEvent.count({ where: { shopDomain } }),
     prisma.deliveryLog.count({ where: { shopDomain, ok: false, createdAt: { gte: since } } }),
     computeHealth(shopDomain),
     getHeartbeat(),
+    captureHealth(shopDomain),
   ]);
   const keys = readServerSideKeys(tracking);
   // Fresh install (nothing configured yet) → send them straight into the guided setup wizard. Once they've
@@ -63,8 +65,20 @@ export const loader = async ({ request }) => {
     setupComplete: setup.complete,
     setupStep: setup.step,
     setupTotal: setup.total,
+    capture,
   };
 };
+
+// Relative "time ago" for the last visit received (capture-health tile). Coarse on purpose.
+function timeAgo(iso) {
+  if (!iso) return "never";
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
 
 // Worker-status badge descriptor from "minutes since last tick" (null = never run yet).
 function workerBadge(min) {
@@ -75,7 +89,7 @@ function workerBadge(min) {
 }
 
 export default function Index() {
-  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts, workerLastRunMin, setupComplete, setupStep, setupTotal } = useLoaderData();
+  const { platforms, recentEvents, deliveryFailures, serverSide, subscriptionTracking, warnings, alerts, workerLastRunMin, setupComplete, setupStep, setupTotal, capture } = useLoaderData();
   const worker = workerBadge(workerLastRunMin);
   const dismisser = useFetcher();
 
@@ -141,6 +155,39 @@ export default function Index() {
                 <Button url="/app/tracking" variant="primary">Open Tracking</Button>
                 <Button url="/app/datalayer">Preview events</Button>
                 <Button url="/app/events">Live events</Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="h2" variant="headingMd">Live capture</Text>
+                <Badge tone={capture?.live ? "success" : "attention"}>
+                  {capture?.live ? "Receiving visits" : capture?.lastVisitAt ? "No recent visits" : "No visits yet"}
+                </Badge>
+              </InlineStack>
+              <Text as="p" tone="subdued" variant="bodySm">
+                Confirms the storefront embed is deployed and sending. If this stays empty after a deploy, the
+                theme app embed likely isn&apos;t enabled or the app hasn&apos;t been released with{" "}
+                <b>shopify app deploy</b>.
+              </Text>
+              <InlineStack gap="600" wrap>
+                <BlockStack gap="050">
+                  <Text as="span" variant="bodySm" tone="subdued">Last visit received</Text>
+                  <Text as="span" variant="headingLg">{timeAgo(capture?.lastVisitAt)}</Text>
+                </BlockStack>
+                <BlockStack gap="050">
+                  <Text as="span" variant="bodySm" tone="subdued">Durable visitors (7d)</Text>
+                  <Text as="span" variant="headingLg">{(capture?.minted7d || 0).toLocaleString()}</Text>
+                </BlockStack>
+                <BlockStack gap="050">
+                  <Text as="span" variant="bodySm" tone="subdued">Identified to a customer</Text>
+                  <Text as="span" variant="headingLg">{capture?.identifiedRate || 0}%</Text>
+                  <Text as="span" variant="bodySm" tone="subdued">{(capture?.identified || 0).toLocaleString()} of {(capture?.durableIds || 0).toLocaleString()}</Text>
+                </BlockStack>
               </InlineStack>
             </BlockStack>
           </Card>

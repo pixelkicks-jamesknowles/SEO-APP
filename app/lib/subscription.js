@@ -56,6 +56,49 @@ export function orderHasSubscription(order) {
   return (order?.line_items || []).some(lineIsSubscription);
 }
 
+/** Read Recharge's subscription_order_type off the order, if present. Recharge keys it per Shopify order id
+ *  and surfaces it as a note_attribute (preferred) or on the order tags. Returns the normalized Recharge
+ *  value ("checkout_subscription" | "recurring_subscription") or null if we can't find it. */
+export function rechargeOrderType(order) {
+  const na = (noteAttr(order, "subscription_order_type") || "").toLowerCase();
+  if (na.includes("checkout_subscription")) return "checkout_subscription";
+  if (na.includes("recurring_subscription")) return "recurring_subscription";
+  // Fallback to tags — Recharge also tags orders. Accept its raw values and its human-readable tags.
+  const tags = String(order?.tags || "").toLowerCase();
+  if (/\bcheckout_subscription\b|subscription first order/.test(tags)) return "checkout_subscription";
+  if (/\brecurring_subscription\b|subscription recurring order|autorenew/.test(tags)) return "recurring_subscription";
+  return null;
+}
+
+/**
+ * Classify an order's TYPE for GA4 / reporting: "subscription_checkout" | "renewal" | "one_off".
+ * Recharge's marker wins when present; otherwise a subscription order is a checkout when it's the
+ * customer's FIRST subscription order (isFirstSubscriptionOrder) and a renewal otherwise, and an order
+ * with no subscription line is a one-off. Pure.
+ */
+export function orderTypeOf(order, { isFirstSubscriptionOrder } = {}) {
+  const rc = rechargeOrderType(order);
+  if (rc === "checkout_subscription") return "subscription_checkout";
+  if (rc === "recurring_subscription") return "renewal";
+  if (!orderHasSubscription(order)) return "one_off";
+  // Subscription order with no explicit Recharge marker: first one for the customer = the checkout that
+  // created the subscription; any later one = a renewal.
+  return isFirstSubscriptionOrder ? "subscription_checkout" : "renewal";
+}
+
+/**
+ * Classify the CUSTOMER on an order as "new" | "returning" (or null when unknown). Shopify's
+ * customer.orders_count is authoritative and present on webhook payloads (== 1 → this is their first
+ * order). Falls back to an explicit isFirstOrder signal (our CustomerAttribution.firstOrderId) when the
+ * count is absent (e.g. a client-side pixel event). Pure.
+ */
+export function customerTypeOf(order, { isFirstOrder } = {}) {
+  const oc = Number(order?.customer?.orders_count);
+  if (Number.isFinite(oc) && oc > 0) return oc === 1 ? "new" : "returning";
+  if (typeof isFirstOrder === "boolean") return isFirstOrder ? "new" : "returning";
+  return null;
+}
+
 /** Numeric selling-plan id for a line (REST selling_plan_allocation / GraphQL sellingPlan), or null.
  *  Used to look the line's cadence up in an `intervals` map resolved from the Admin API. */
 export function linePlanId(line) {
@@ -94,11 +137,18 @@ const attach = (params, attribution) => {
   if (attribution?.campaign) params.campaign = attribution.campaign;
 };
 
+// order_type / customer_type custom dimensions (register them in GA4). Kept separate from attach() so the
+// one-off / reconcile / ingest paths can set them without touching first-touch source.
+const attachTypes = (params, { orderType, customerType } = {}) => {
+  if (orderType) params.order_type = orderType;
+  if (customerType) params.customer_type = customerType;
+};
+
 /** Build the GA4 `subscription_purchase` event — SCOPED TO THE SUBSCRIPTION LINE ITEMS ONLY:
  *  items = subscription lines, value = their line-item subtotal (net of line discounts, no order-level
  *  tax/shipping). The regular `purchase` event (buildOrderPurchaseEvent) carries the whole order.
  *  attribution (optional) carries the first-order source so recurring orders keep the original one. */
-export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, sessionId, timestampMicros, attribution, intervals } = {}) {
+export function buildSubscriptionEvent(order, { eventName = "subscription_purchase", monthDays = 28, clientId, sessionId, timestampMicros, attribution, intervals, orderType, customerType } = {}) {
   const subItems = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals)).filter((i) => i.item_subscription);
   const params = {
     transaction_id: String(order?.id ?? ""),
@@ -114,13 +164,14 @@ export function buildSubscriptionEvent(order, { eventName = "subscription_purcha
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
   attach(params, attribution);
+  attachTypes(params, { orderType, customerType });
   return { name: eventName, params, clientId, sessionId, timestampMicros };
 }
 
 /** Build the regular GA4 `purchase` event for a subscription order (fired server-side from
  *  orders/paid so it doesn't depend on the pixel/consent). Carries the WHOLE order — all line items,
  *  full value, tax + shipping — matching a normal purchase. transaction_id = order id. */
-export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDays = 28, clientId, sessionId, timestampMicros, attribution, intervals } = {}) {
+export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDays = 28, clientId, sessionId, timestampMicros, attribution, intervals, orderType, customerType } = {}) {
   const items = (order?.line_items || []).map((l) => toGaLine(l, monthDays, intervals));
   const params = {
     transaction_id: String(order?.id ?? ""),
@@ -133,5 +184,6 @@ export function buildOrderPurchaseEvent(order, { eventName = "purchase", monthDa
   const coupon = order?.discount_codes?.[0]?.code;
   if (coupon) params.coupon = coupon;
   attach(params, attribution);
+  attachTypes(params, { orderType, customerType });
   return { name: eventName, params, clientId, sessionId, timestampMicros };
 }

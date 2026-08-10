@@ -19,7 +19,7 @@ import { buildJobs, deliverOne, numericId } from "./server-side.server";
 import { recordDeliveries, bumpDaily, recordCapture, recordCaptureFromResults, RECONCILED_DESTINATIONS } from "./delivery.server";
 import { enqueueFailures } from "./outbox.server";
 import { fxHooks } from "./fx.server";
-import { noteAttr } from "./subscription";
+import { noteAttr, orderHasSubscription, orderTypeOf, customerTypeOf, rechargeOrderType } from "./subscription";
 import { googleAdsHook } from "./google-ads.server";
 import { cogsEnabled, resolveOrderCost } from "./cogs.server";
 import { encryptSecret, decryptSecret } from "./secrets.server";
@@ -95,12 +95,23 @@ export function orderToTrackingEvent(order) {
       product: { id: l.product_id != null ? String(l.product_id) : undefined, title: l.title },
     },
   }));
+  // order_type / customer_type GA4 custom dimensions on the backfilled purchase. customer_type is
+  // authoritative here (the REST payload carries customer.orders_count). order_type is only attached when
+  // unambiguous from the order alone — a one-off, or a Recharge-marked subscription order — because the
+  // first-checkout-vs-renewal split for an unmarked subscription order is owned by the subscription
+  // pipeline (processOne, which resolves it from CustomerAttribution.firstOrderId); this reconcile path is
+  // a backstop that chiefly recovers one-off purchases the pixel missed. ga4EventFor merges event.params.
+  const typeParams = {};
+  const ct = customerTypeOf(order);
+  if (ct) typeParams.customer_type = ct;
+  if (!orderHasSubscription(order) || rechargeOrderType(order)) typeParams.order_type = orderTypeOf(order);
   return {
     name: "checkout_completed",
     id: `order:${oid}`,
     timestamp: order?.created_at || undefined,
     clientId: gaClientId, // null → buildJobs fills a stable id (stableClientId of event.id)
     sessionId: gaSessionId,
+    params: Object.keys(typeParams).length ? typeParams : undefined,
     // Marketing consent for the backfill: the storefront pixel gates PII destinations (Meta/Google
     // Ads/Reddit/…) on the shopper's Customer Privacy marketing consent, but this webhook path can't see
     // that banner state — so we honour the order's own marketing signal (`buyer_accepts_marketing`).

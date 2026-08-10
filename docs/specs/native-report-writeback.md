@@ -1,5 +1,11 @@
 # Spec: attribution write-back → Shopify native reporting
 
+> **Status: IMPLEMENTED (2026-08-10).** Order + customer metafield write-back (live + historical backfill),
+> definitions provisioner, and the `write_orders`/`write_customers` scope bump are all shipped. Needs a
+> `shopify app deploy` for the scope re-consent to take effect. Code: `app/lib/report-writeback.server.js`,
+> `app/lib/metafield-backfill.server.js`, `webhooks.orders.paid.jsx`, `webhooks.app.scopes_update.jsx`,
+> Attribution page "Write attribution into Shopify's reporting" card.
+
 Scopes a feature that pushes Connect Analytics' resolved attribution onto native Shopify objects (orders,
 optionally customers) as **metafields**, so it becomes queryable inside Shopify's own reporting/analytics
 section, order pages, and customer segments. Planning artifact for sizing and for the client call.

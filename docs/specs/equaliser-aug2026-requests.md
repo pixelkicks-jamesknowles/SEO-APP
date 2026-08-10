@@ -4,6 +4,11 @@ Planning artifact for the client's consolidated Aug 2026 list. Sorts their asks 
 phase-1 deliverable — a diagnosis, no new build)** and **Part 2 (new scope — to quote)**, with **Part 3
 parked**. Sizing here feeds the quote; it does not set price (apply the day rate to the effort).
 
+> **Status: Part 2 IMPLEMENTED (2026-08-10).** `order_type` + `customer_type` now ride every order's GA4
+> events (subscription live/cron, one-off via ingest Admin classify + reconcile), plus an app-side report
+> ("New vs returning, by channel and campaign" on Attribution). Part 1 is a diagnosis (no build); Part 3 is
+> parked. Equaliser still needs to register the two GA4 custom dimensions their side.
+
 Relationship to existing specs:
 - **Supersedes** the `subscription_type` marker in [subscription-attribution-cac.md](subscription-attribution-cac.md)
   item 1 — that single new-vs-renewal flag is now generalised into two orthogonal attributes (order type +

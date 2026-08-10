@@ -5,10 +5,11 @@ import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Butt
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
-import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel } from "../lib/attribution-report";
+import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel, byAcquisition } from "../lib/attribution-report";
 import { creditByModel, MODELS, MODEL_LABELS } from "../lib/multi-touch";
 import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
+import { requestMetafieldBackfill, metafieldBackfillStatus } from "../lib/metafield-backfill.server";
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -18,6 +19,10 @@ export const action = async ({ request }) => {
     // few pages at a time (leased + resumable).
     return await requestBackfill(session.shop, { days: 90 });
   }
+  if (form.get("_action") === "metafield-backfill") {
+    // Same deal: stamps connect_analytics.* metafields onto historical orders, advanced by /cron/tick.
+    return await requestMetafieldBackfill(session.shop);
+  }
   return { ok: true };
 };
 
@@ -26,8 +31,8 @@ export const loader = async ({ request }) => {
   // Defer the report so the page shell paints immediately and the tables stream in — this report scans up
   // to two 5,000-row tables + aggregates, so keeping it off the initial paint is the main LCP lever here.
   // The backfill status is cheap (one row) and drives the card, so it's awaited.
-  const backfill = await backfillStatus(session.shop);
-  return defer({ backfill, report: buildReport(session.shop) });
+  const [backfill, metafieldBackfill] = await Promise.all([backfillStatus(session.shop), metafieldBackfillStatus(session.shop)]);
+  return defer({ backfill, metafieldBackfill, report: buildReport(session.shop) });
 };
 
 // Build the attribution report (all reads in one round-trip group). Kept as a non-awaited promise by the
@@ -38,17 +43,20 @@ async function buildReport(shopDomain) {
   // aggregate as if it were the whole history.
   const SCAN_CAP = 5000;
   const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [visitors, customers, channelRows, identity, lifetimes] = await Promise.all([
+  const [visitors, customers, channelRows, identity, lifetimes, acquisitionRows] = await Promise.all([
     prisma.visitorAttribution.findMany({ where: { shopDomain }, orderBy: { lastSeen: "desc" }, take: SCAN_CAP }),
     prisma.customerAttribution.findMany({ where: { shopDomain }, orderBy: { updatedAt: "desc" }, take: SCAN_CAP }),
     prisma.channelRevenueDaily.findMany({ where: { shopDomain, date: { gte: since90 } } }).catch(() => []),
     identityStats(shopDomain),
     // Per-customer lifetime (backfill-populated) → LTV / retention by acquiring channel.
     prisma.customerLifetime.findMany({ where: { shopDomain }, take: SCAN_CAP }).catch(() => []),
+    // New-vs-returning / subscription-vs-one-off split by channel + campaign (from orders/paid).
+    prisma.acquisitionDaily.findMany({ where: { shopDomain, date: { gte: since90 } } }).catch(() => []),
   ]);
   const revenue = byChannelRevenue(channelRows);
   const channelGroups = byChannelGroup(channelRows);
   const ltv = ltvByChannel(customers, lifetimes).slice(0, 15);
+  const acquisition = byAcquisition(acquisitionRows);
 
   // Multi-touch: read converting visitors' touch paths (last 90d) and pre-compute every model server-side,
   // so the UI can switch models instantly. Results are small (per-channel), so sending all of them is cheap.
@@ -78,6 +86,7 @@ async function buildReport(shopDomain) {
     channels: revenue.channels.slice(0, 15),
     channelGroups,
     ltv,
+    acquisition: { rows: acquisition.rows.slice(0, 20), totalNewCustomers: acquisition.totalNewCustomers, totalNewSubscribers: acquisition.totalNewSubscribers },
     multiTouchModels: multiTouch,
     multiTouchPaths: withPath.length,
     channelTotalRevenue: revenue.totalRevenue,
@@ -168,7 +177,7 @@ function AttributionSkeleton() {
 }
 
 export default function Attribution() {
-  const { report, backfill } = useLoaderData();
+  const { report, backfill, metafieldBackfill } = useLoaderData();
   const revalidator = useRevalidator();
   return (
     <Page
@@ -185,8 +194,56 @@ export default function Attribution() {
           </Await>
         </Suspense>
         <BackfillCard backfill={backfill} />
+        <MetafieldBackfillCard job={metafieldBackfill} />
       </BlockStack>
     </Page>
+  );
+}
+
+/**
+ * Stamp the resolved attribution onto historical orders as connect_analytics.* metafields, so the merchant's
+ * NATIVE Shopify reports (and order pages / segments) show the real channel for their back-catalogue too.
+ * New orders are stamped automatically on every sale; this covers the history. Needs the write_orders scope
+ * (re-consent) — run the order-history backfill above first so each customer's acquiring channel is learned.
+ */
+function MetafieldBackfillCard({ job }) {
+  const fetcher = useFetcher();
+  const running = job?.status === "running" || fetcher.state !== "idle";
+  const done = job?.status === "done";
+  const errored = job?.status === "error";
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <SectionHeading
+          title="Write attribution into Shopify's reporting"
+          description="Stamps each order with its acquisition channel, campaign, order type and customer type as Shopify metafields — so you can group your OWN Shopify reports (Analytics → Reports), order pages and customer segments by the real channel, including the renewals and lost journeys GA4 can't see. New orders are tagged automatically; this fills in your order history."
+        />
+        <Divider />
+        {errored && <Banner tone="critical" title="Write-back failed">{job.detail || "Try again."}</Banner>}
+        {running && (
+          <Banner tone="info" title="Writing attribution to your orders">
+            <p>Stamped {(job?.metafieldsWritten || 0).toLocaleString()} orders so far. It runs in the background a few pages at a time — leave the page and come back.</p>
+          </Banner>
+        )}
+        {done && (
+          <Banner tone="success" title={`Done — ${(job.metafieldsWritten || 0).toLocaleString()} orders stamped`}>
+            <p>In Shopify Analytics → Reports, group any order report by the connect_analytics fields (Acquisition channel, Campaign, Order type, Customer type).</p>
+          </Banner>
+        )}
+        <InlineStack>
+          <fetcher.Form method="post">
+            <input type="hidden" name="_action" value="metafield-backfill" />
+            <Button submit loading={running} disabled={running}>
+              {done ? "Re-stamp order history" : "Write history into Shopify reporting"}
+            </Button>
+          </fetcher.Form>
+        </InlineStack>
+        <Text as="p" variant="bodySm" tone="subdued">
+          Requires the order write permission (you'll be asked to approve it once). If you haven't approved it
+          yet, this will have no effect until you do. New orders are always tagged automatically.
+        </Text>
+      </BlockStack>
+    </Card>
   );
 }
 
@@ -396,7 +453,7 @@ function MultiTouchCard({ multiTouch, paths }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], acquisition = { rows: [] }, multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -512,6 +569,34 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.subscriptionRevenue > 0 ? undefined : "subdued"}>{fmtMoney(r.subscriptionRevenue)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.oneOffRevenue)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{fmtMoney(r.aov)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
+                      </tr>
+                    ))}
+                  />
+                </BlockStack>
+              </Card>
+            )}
+
+            {acquisition.rows.length > 0 && (
+              <Card>
+                <BlockStack gap="300">
+                  <SectionHeading
+                    title="New vs returning, by channel and campaign"
+                    description="Every paid order over the last 90 days split by the channel and campaign that acquired the customer, showing new vs returning customers and new subscribers vs renewals vs one-off orders. This is the view for spend decisions: which channels and campaigns actually win NEW customers and NEW subscribers, not just orders. The same tags are written onto each order as metafields (below), so you can build the identical report inside Shopify's own Analytics."
+                  />
+                  <Divider />
+                  <Table
+                    caption="Orders and revenue by channel and campaign, split by customer type (new/returning) and order type (new subscriber / renewal / one-off)"
+                    head={["Source / Medium", "Campaign", "Orders", "Revenue", "New customers", "New subscribers", "Renewals", "Share"]}
+                    rows={acquisition.rows.map((r) => (
+                      <tr key={`${r.source}/${r.medium}/${r.campaign}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
+                        <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
+                        <td style={th("left")}><Text as="span" variant="bodyMd" tone="subdued">{r.campaign === "(none)" ? "—" : r.campaign}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.orders.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.revenue)}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.newCustomers > 0 ? undefined : "subdued"}>{r.newCustomers.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.newSubscribers > 0 ? undefined : "subdued"}>{r.newSubscribers.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.renewals.toLocaleString()}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
                       </tr>
                     ))}

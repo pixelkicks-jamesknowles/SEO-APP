@@ -242,3 +242,39 @@ export function bySubscriptionSource(rows = []) {
   }
   return [...map.values()].sort((a, b) => b.customers - a.customers);
 }
+
+/**
+ * Aggregate AcquisitionDaily rows into the "new vs returning · subscription vs one-off, by channel and
+ * campaign" report the client asked for. Each input row is a daily bucket keyed by source/medium/campaign +
+ * orderType + customerType; here we roll them up per channel+campaign with the order-type / customer-type
+ * splits broken out. Pure. Sorted by revenue desc.
+ */
+export function byAcquisition(rows = []) {
+  const map = new Map();
+  let totalOrders = 0;
+  let totalRevenue = 0;
+  for (const r of rows) {
+    const key = `${r.source}|${r.medium}|${r.campaign}`;
+    let g = map.get(key);
+    if (!g) {
+      g = { source: r.source, medium: r.medium, campaign: r.campaign, orders: 0, revenue: 0, newCustomers: 0, returningCustomers: 0, newSubscribers: 0, renewals: 0, oneOff: 0 };
+      map.set(key, g);
+    }
+    const o = r.orders || 0;
+    const rev = r.revenue || 0;
+    g.orders += o;
+    g.revenue += rev;
+    if (r.customerType === "new") g.newCustomers += o;
+    else if (r.customerType === "returning") g.returningCustomers += o;
+    if (r.orderType === "subscription_checkout") g.newSubscribers += o;
+    else if (r.orderType === "renewal") g.renewals += o;
+    else g.oneOff += o;
+    totalOrders += o;
+    totalRevenue += rev;
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  const list = [...map.values()]
+    .sort((a, b) => b.revenue - a.revenue)
+    .map((g) => ({ ...g, revenue: round(g.revenue), share: totalRevenue ? Math.round((g.revenue / totalRevenue) * 100) : 0 }));
+  return { rows: list, totalOrders, totalRevenue: round(totalRevenue), totalNewCustomers: list.reduce((s, g) => s + g.newCustomers, 0), totalNewSubscribers: list.reduce((s, g) => s + g.newSubscribers, 0) };
+}

@@ -78,3 +78,32 @@ export async function identityStats(shopDomain) {
   ]);
   return { visitors, identified };
 }
+
+/**
+ * Capture-health snapshot for the observability tile: is the storefront actually sending visits, and are
+ * durable ids minting + stitching to customers? Turns "is it capturing?" into numbers you can point at
+ * (proves the deploy is live; spots a future regression). Every durable-id beacon upserts a VisitorIdentity,
+ * so its lastSeen is the truest "last visit received" signal (VisitorAttribution only fills on UTM visits).
+ */
+export async function captureHealth(shopDomain) {
+  const now = Date.now();
+  const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
+  const [latest, visitors, identified, minted7d] = await Promise.all([
+    prisma.visitorIdentity.findFirst({ where: { shopDomain }, orderBy: { lastSeen: "desc" }, select: { lastSeen: true } }).catch(() => null),
+    prisma.visitorIdentity.count({ where: { shopDomain } }).catch(() => 0),
+    prisma.visitorIdentity.count({ where: { shopDomain, customerKey: { not: null } } }).catch(() => 0),
+    prisma.visitorIdentity.count({ where: { shopDomain, firstSeen: { gte: since7d } } }).catch(() => 0),
+  ]);
+  const lastVisitAt = latest?.lastSeen || null;
+  const minutesSince = lastVisitAt ? Math.round((now - new Date(lastVisitAt).getTime()) / 60000) : null;
+  return {
+    lastVisitAt,
+    minutesSinceLastVisit: minutesSince,
+    // Live if we've seen a visit in the last 24h — the embed is deployed and beaconing.
+    live: minutesSince != null && minutesSince <= 60 * 24,
+    durableIds: visitors,
+    identified,
+    identifiedRate: visitors ? Math.round((identified / visitors) * 100) : 0,
+    minted7d,
+  };
+}

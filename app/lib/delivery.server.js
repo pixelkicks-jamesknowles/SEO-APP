@@ -152,6 +152,32 @@ export async function recordChannelRevenue(shopDomain, { source, medium, revenue
     .catch(() => {});
 }
 
+/**
+ * Acquisition rollup for the richer report: one paid order's revenue bucketed by channel + campaign +
+ * order type + customer type. Written from orders/paid alongside recordChannelRevenue (which keeps its
+ * simpler source/medium shape). Idempotent via the orders/paid ProcessedWebhook gate. Best-effort.
+ */
+export async function recordAcquisition(shopDomain, { source, medium, campaign, orderType, customerType, revenue } = {}) {
+  const rev = Number(revenue) || 0;
+  const date = today();
+  const key = {
+    shopDomain,
+    date,
+    source: source || "(direct)",
+    medium: medium || "(none)",
+    campaign: campaign || "(none)",
+    orderType: orderType || "one_off",
+    customerType: customerType || "(unknown)",
+  };
+  await prisma.acquisitionDaily
+    .upsert({
+      where: { shopDomain_date_source_medium_campaign_orderType_customerType: key },
+      create: { ...key, orders: 1, revenue: rev },
+      update: { orders: { increment: 1 }, revenue: { increment: rev } },
+    })
+    .catch(() => {});
+}
+
 // First-touch attribution: record a visitor's source on an attributable visit (never overwrite the
 // first source - later visits only bump the counter). Keyed on the stable visitor key. Attribution comes
 // from UTMs, else from the (external) referrer — so organic search and referral visits count too, not just

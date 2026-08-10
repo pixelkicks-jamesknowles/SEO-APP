@@ -21,6 +21,7 @@ import { runAlerts } from "../lib/alerting.server";
 import { runConnectionChecks } from "../lib/connection-check.server";
 import { recordTick } from "../lib/heartbeat.server";
 import { processBackfill } from "../lib/backfill.server";
+import { processMetafieldBackfill } from "../lib/metafield-backfill.server";
 
 // Constant-time compare of the presented secret against CRON_SECRET (same pattern as pixel-token).
 // Header-only: a `?key=` query param would land in access logs / referrers, so the secret must be
@@ -65,7 +66,7 @@ async function tick() {
   // ticks (the cron fires frequently) rather than risking a double-send.
   const startedAt = Date.now();
   try {
-    const [outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill] = await Promise.all([
+    const [outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill] = await Promise.all([
       drainOutbox({ limit: 40 }),
       reconcilePending({ graceMinutes: 20, limit: 8 }),
       // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
@@ -82,10 +83,13 @@ async function tick() {
       // Historical revenue-by-channel backfill: advance a few pages of a merchant-requested job. Leased +
       // resumable, so a long history drains over many ticks. Best-effort — it must never wedge delivery.
       processBackfill().catch((e) => ({ ran: 0, error: String(e?.message || e).slice(0, 120) })),
+      // Historical metafield write-back: stamp connect_analytics.* onto past orders for native reporting.
+      // Same leased + resumable pattern; idempotent upserts, so throttle-driven re-runs are safe.
+      processMetafieldBackfill().catch((e) => ({ ran: 0, error: String(e?.message || e).slice(0, 120) })),
     ]);
-    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill };
+    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill };
     // Stamp the heartbeat so the app can tell the worker is alive (dashboard tile + cron_stale alert).
-    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill } });
+    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill } });
     return result;
   } catch (e) {
     // Record the failed run too (the worker is up, just erroring) so it shows as "last run errored" rather

@@ -9,13 +9,14 @@
 // timeout; it now runs AFTER the 200 via processSubscriptionNow (so GA4 sees the conversion in seconds),
 // with /cron/tick's processPendingSubscriptions as the durable backstop if this process dies mid-flight
 // and the outbox retrying any failed send.
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { bumpDaily, recordChannelRevenue } from "../lib/delivery.server";
+import { bumpDaily, recordChannelRevenue, recordAcquisition } from "../lib/delivery.server";
 import { recordPendingPurchase } from "../lib/reconcile.server";
 import { recordPendingSubscription, processSubscriptionNow } from "../lib/subscription-cron.server";
 import { customerKey, parseUtms } from "../lib/attribution";
-import { orderHasSubscription } from "../lib/subscription";
+import { orderHasSubscription, orderTypeOf, customerTypeOf } from "../lib/subscription";
+import { writeOrderAttribution, writeCustomerAttribution, attributionValues } from "../lib/report-writeback.server";
 
 /**
  * Attribute a paid order's revenue to the channel that ACQUIRED the customer.
@@ -33,14 +34,46 @@ async function recordOrderRevenue(shop, order) {
     ? await prisma.customerAttribution.findUnique({ where: { shopDomain_customerKey: { shopDomain: shop, customerKey: key } } }).catch(() => null)
     : null;
   const utms = parseUtms(order);
+  const source = first?.source || utms.source;
+  const medium = first?.medium || utms.medium;
+  const campaign = first?.campaign || utms.campaign;
+  // new vs returning / subscription-checkout vs renewal vs one-off. orders_count on the webhook payload is
+  // authoritative for "first order"; fall back to whether this IS the customer's recorded first order.
+  const isFirstOrder = Number.isFinite(Number(order?.customer?.orders_count))
+    ? Number(order.customer.orders_count) === 1
+    : first?.firstOrderId
+      ? first.firstOrderId === String(order?.id ?? "")
+      : undefined;
+  const orderType = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstOrder });
+  const customerType = customerTypeOf(order, { isFirstOrder });
+  const revenue = Number(order?.current_total_price ?? order?.total_price ?? 0);
   await recordChannelRevenue(shop, {
-    source: first?.source || utms.source,
-    medium: first?.medium || utms.medium,
+    source,
+    medium,
     // Raw order revenue (not the margin/COGS-adjusted conversion value) — this report answers
     // "which channel drove sales", so it must be the real money.
-    revenue: Number(order?.current_total_price ?? order?.total_price ?? 0),
+    revenue,
     isSubscription: orderHasSubscription(order),
   });
+  // Richer split for the new report (channel × campaign × order type × customer type).
+  await recordAcquisition(shop, { source, medium, campaign, orderType, customerType, revenue });
+  // Values for the native-reporting write-back (metafields). acquisitionDate = when we first saw this
+  // customer (their acquiring order), else this order's date for a brand-new customer.
+  return { source, medium, campaign, orderType, customerType, acquisitionDate: first?.createdAt || order?.created_at, customerId: order?.customer?.id };
+}
+
+/**
+ * Stamp the resolved attribution onto the native Shopify order (and customer) as connect_analytics.*
+ * metafields, so it's groupable inside Shopify's own Analytics → Reports and usable in segments. Runs
+ * fire-and-forget AFTER the webhook records (never blocks the ACK); needs write_orders / write_customers
+ * and no-ops cleanly if a store hasn't re-consented yet. Best-effort. metafieldsSet is an upsert, so the
+ * once-per-order ProcessedWebhook gate plus re-run safety mean this can never double-write.
+ */
+async function writeBackAttribution(shop, order, attrib) {
+  const { admin } = await unauthenticated.admin(shop);
+  const values = attributionValues(attrib);
+  await writeOrderAttribution(admin, order?.id, values);
+  if (attrib.customerId) await writeCustomerAttribution(admin, attrib.customerId, values);
 }
 
 export const action = async ({ request }) => {
@@ -68,7 +101,9 @@ export const action = async ({ request }) => {
     // inherits the customer's FIRST-TOUCH source (the channel that acquired the subscriber), which is
     // precisely the number GA4 cannot produce: with no browser session there's no session to take a
     // channel from, so GA4 reports it as Unassigned forever. Guarded by the idempotency gate above.
-    await recordOrderRevenue(shop, payload).catch(() => {});
+    const attrib = await recordOrderRevenue(shop, payload).catch(() => null);
+    // Fire-and-forget the metafield write-back (off the ACK hot path, like processSubscriptionNow below).
+    if (attrib) writeBackAttribution(shop, payload, attrib).catch((e) => console.warn("[orders/paid] writeback:", e?.message || e));
 
     const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: shop } });
 

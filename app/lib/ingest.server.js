@@ -7,6 +7,7 @@ import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
 import { googleAdsHook } from "./google-ads.server";
 import { cogsEnabled, resolveOrderCost } from "./cogs.server";
+import { classifyOrderViaAdmin } from "./report-writeback.server";
 import { visitorKey, eventCustomerKey, linkIdentity, resolveIdentityFirstTouch } from "./identity.server";
 import { redactEvent } from "./redact";
 
@@ -93,6 +94,17 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     // buildJobs sends profit as the conversion value. Purchases are low-volume, so the extra Admin fetch
     // is off the page-view hot path; best-effort (null cost → withValueMode falls back to revenue).
     if (cogsEnabled(settings)) event.orderCost = await resolveOrderCost(shopDomain, event);
+    // order_type / customer_type GA4 dimensions on the LIVE purchase. The pixel event has no orders_count
+    // or selling-plan data, so classify via a best-effort Admin lookup (purchases are low-volume — this is
+    // off the page-view hot path, same as the COGS fetch above). This is the ONLY send GA4 keeps for a
+    // one-off order the pixel captured (the orders/paid server-side purchase would lose the transaction_id
+    // dedup race), so the dimensions must ride THIS event. ga4EventFor merges event.params.
+    const types = await classifyOrderViaAdmin(shopDomain, event.data?.checkout?.order?.id);
+    if (types.orderType || types.customerType) {
+      event.params = { ...(event.params || {}) };
+      if (types.orderType) event.params.order_type = types.orderType;
+      if (types.customerType) event.params.customer_type = types.customerType;
+    }
     // Snapshot the visitor's touch path + order value for the multi-touch models (best-effort, idempotent).
     await recordConversionPath(shopDomain, vkey, event).catch(() => {});
     // NOTE: revenue-by-channel is NOT recorded here any more. It's driven from the orders/paid webhook

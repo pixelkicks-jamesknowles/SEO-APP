@@ -22,6 +22,7 @@ import { logActivity } from "../lib/activity.server";
 import { SectionHeading } from "../components/SectionHeading";
 import { eventLabel } from "../lib/event-labels";
 import { syncWebPixel } from "../lib/web-pixel.server";
+import { provisionDefinitions } from "../lib/report-writeback.server";
 import { readServerSideKeys } from "../lib/secrets.server";
 
 // Build the matrix[platform][event] = boolean map from saved settings.
@@ -216,6 +217,10 @@ export const action = async ({ request }) => {
   if (webPixelId && webPixelId !== existing?.webPixelId) {
     await prisma.trackingSettings.update({ where: { shopDomain }, data: { webPixelId } });
   }
+  // Ensure the connect_analytics.* metafield definitions exist so the attribution write-back is visible in
+  // the merchant's native report builder. Idempotent (TAKEN swallowed) + best-effort; a fallback to the
+  // scopes_update hook that covers fresh installs where the initial grant doesn't fire scopes_update.
+  provisionDefinitions(admin).catch((e) => console.warn("[tracking] provision definitions:", e?.message || e));
   await logActivity(shopDomain, "Saved tracking settings");
   return { ok: true, pixelError };
 };

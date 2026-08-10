@@ -7,7 +7,7 @@
 // ticks can't double-send.
 import crypto from "node:crypto";
 import prisma from "../db.server";
-import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent } from "./subscription";
+import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent, orderTypeOf, customerTypeOf } from "./subscription";
 import { fetchOrderSubscriptions } from "./subscription.server";
 import { parseUtms, customerKey } from "./attribution";
 import { sendGa4Event, withValueMode, ga4TimestampMicros } from "./server-side.server";
@@ -123,7 +123,13 @@ async function processOne(shopDomain, order, settings) {
   // for anything delivered after the session ended lands in a fresh, source-less session ("Unassigned").
   const timestampMicros = ga4TimestampMicros(order?.created_at);
   const attr = attribution ? { source: attribution.source, medium: attribution.medium, campaign: attribution.campaign } : null;
-  const opts = { monthDays, clientId, sessionId, timestampMicros, attribution: attr, intervals };
+  // order_type / customer_type custom dimensions. "First order for this customer" comes from the
+  // first-touch record we just resolved (firstOrderId), which classifies a subscription order as the
+  // checkout vs a renewal and the customer as new vs returning when Shopify's orders_count is absent.
+  const isFirstOrder = attribution?.firstOrderId ? attribution.firstOrderId === String(order?.id ?? "") : undefined;
+  const orderType = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstOrder });
+  const customerType = customerTypeOf(order, { isFirstOrder });
+  const opts = { monthDays, clientId, sessionId, timestampMicros, attribution: attr, intervals, orderType, customerType };
   // Two events per subscription order: the scoped subscription_purchase (subscription lines only) and the
   // regular purchase (whole order). Both server-side so they fire without the pixel/consent.
   const subEvent = buildSubscriptionEvent(order, { eventName: cfg.eventName || "subscription_purchase", ...opts });

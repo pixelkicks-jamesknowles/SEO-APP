@@ -34,8 +34,15 @@ automatically_update_urls_on_dev = true
 #                          the Admin API needs read_customers ("Access denied for customer field"), even
 #                          though the orders/paid WEBHOOK hands us the same id for free. We only ever read
 #                          the customer ID (no PII) — the key is stored as-is; emails are hashed.
-# (Changing scopes triggers merchant re-consent on next deploy / dev restart.)
-scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_customers,read_fulfillments,read_products"
+#   write_orders         — attribution write-back: stamp each order with connect_analytics.* metafields
+#                          (source/medium/channel/campaign/order_type/customer_type) so the resolved channel
+#                          is groupable inside Shopify's own Analytics → Reports, on the order page, and in
+#                          segments. write_orders is what grants order-metafield writes (metafieldsSet).
+#   write_customers      — the customer-level half of the same write-back: acquisition traits on the customer
+#                          record, so native customer SEGMENTS / Marketing / Flow can target "acquired via X".
+# (Changing scopes triggers merchant re-consent on next deploy / dev restart. write_orders + write_customers
+#  are the re-consent for the attribution write-back — see docs/specs/native-report-writeback.md.)
+scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_customers,read_fulfillments,read_products,write_orders,write_customers"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
