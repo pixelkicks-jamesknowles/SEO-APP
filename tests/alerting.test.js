@@ -21,6 +21,38 @@ describe("buildAlertPayload", () => {
     expect(p.text).toContain("outbox_dead body");
     expect(p.content).toBe(p.text); // Discord-compatible
   });
+
+  test("Slack/Discord/generic shape when no URL or an unknown host", () => {
+    const p = buildAlertPayload(SHOP, [alert("x", "warning")], "https://hooks.slack.com/services/T/B/x");
+    expect(p.text).toBeDefined();
+    expect(p.content).toBe(p.text);
+    expect(p.attachments).toBeUndefined();
+  });
+
+  test("Teams Power Automate / Workflows URL → Adaptive Card envelope, not {text}", () => {
+    const url = "https://defaultabc.de.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/x/triggers/manual/paths/invoke?api-version=1&sig=abc";
+    const p = buildAlertPayload(SHOP, [alert("outbox_dead", "critical")], url);
+    expect(p.type).toBe("message");
+    expect(p.attachments[0].contentType).toBe("application/vnd.microsoft.card.adaptive");
+    const card = p.attachments[0].content;
+    expect(card.type).toBe("AdaptiveCard");
+    // the alert title/body must be somewhere in the card body text blocks
+    const blob = JSON.stringify(card.body);
+    expect(blob).toContain("outbox_dead title");
+    expect(blob).toContain("outbox_dead body");
+    expect(p.text).toBeUndefined(); // Teams Workflows ignores {text}; must be a card
+  });
+
+  test("Logic Apps host is also treated as Teams Workflows", () => {
+    const p = buildAlertPayload(SHOP, [alert("x", "warning")], "https://prod-12.westeurope.logic.azure.com:443/workflows/abc/triggers/manual/paths/invoke?sig=x");
+    expect(p.type).toBe("message");
+  });
+
+  test("legacy Teams O365 connector host → MessageCard", () => {
+    const p = buildAlertPayload(SHOP, [alert("x", "warning")], "https://acme.webhook.office.com/webhookb2/abc/IncomingWebhook/def");
+    expect(p["@type"]).toBe("MessageCard");
+    expect(p.text).toContain(SHOP);
+  });
 });
 
 describe("postAlertWebhook", () => {

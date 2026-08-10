@@ -14,11 +14,52 @@ export const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 const EMOJI = { critical: ":rotating_light:", warning: ":warning:" };
 
-/** Build an incoming-webhook payload for a set of alerts. Sends both `text` (Slack/Teams) and `content`
- *  (Discord) so one URL works across the common targets. Pure. */
-export function buildAlertPayload(shopDomain, alerts) {
+// Teams via Power Automate / Logic Apps ("Workflows" app) — the modern replacement for the O365 connector.
+// Its "when a webhook request is received" trigger expects an ADAPTIVE CARD envelope, not a {text} field:
+// a bare {text} POST is accepted (202) but renders nothing, so the message never appears. Detect these hosts.
+function isTeamsWorkflow(host) {
+  return /(^|\.)(powerplatform\.com|powerautomate\.com|logic\.azure\.com|azure-api\.net)$/.test(host) || host.includes("powerplatform");
+}
+
+// Adaptive Card message envelope for Teams Workflows / Logic Apps.
+function teamsAdaptiveCard(shopDomain, alerts) {
+  return {
+    type: "message",
+    attachments: [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: {
+          $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            { type: "TextBlock", size: "Medium", weight: "Bolder", text: `Connect Analytics — ${shopDomain}` },
+            ...alerts.map((a) => ({ type: "TextBlock", wrap: true, text: `**${a.title}**\n\n${a.body}` })),
+          ],
+        },
+      },
+    ],
+  };
+}
+
+/** Build an incoming-webhook payload for a set of alerts, SHAPED FOR THE TARGET (detected from the URL):
+ *  Teams Workflows / Logic Apps → Adaptive Card; legacy Teams O365 connector → MessageCard; Slack, Discord
+ *  and generic → both `text` (Slack) and `content` (Discord) in one body. Pure; url is optional (no url →
+ *  the generic Slack/Discord shape, preserving old behaviour). */
+export function buildAlertPayload(shopDomain, alerts, url = "") {
   const lines = alerts.map((a) => `${EMOJI[a.severity] || "•"} *${a.title}*\n${a.body}`);
   const text = `*Connect Analytics* — ${shopDomain}\n\n${lines.join("\n\n")}`;
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (host && isTeamsWorkflow(host)) return teamsAdaptiveCard(shopDomain, alerts);
+  // Legacy Teams "Incoming Webhook" O365 connector (outlook.office.com / *.webhook.office.com) → MessageCard.
+  if (host.endsWith("office.com") || host.includes("webhook.office")) {
+    return { "@type": "MessageCard", "@context": "https://schema.org/extensions", summary: "Connect Analytics alert", text };
+  }
   return { text, content: text };
 }
 
@@ -51,7 +92,7 @@ export async function notifyHealth(shopDomain, settings, health) {
   const toSend = firing.filter((a) => !onCooldown.has(a.kind));
   if (!toSend.length) return { notified: 0 };
 
-  const r = await postAlertWebhook(url, buildAlertPayload(shopDomain, toSend));
+  const r = await postAlertWebhook(url, buildAlertPayload(shopDomain, toSend, url));
   if (!r.ok) return { notified: 0, error: r.detail };
   await Promise.all(
     toSend.map((a) =>
