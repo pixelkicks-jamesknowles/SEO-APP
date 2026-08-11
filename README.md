@@ -8,6 +8,10 @@
 Conversion & event tracking for any Shopify store — client-side (Web Pixels) **and** server-side
 (GA4 Measurement Protocol / Meta CAPI), including the subscription-purchase event.
 
+> 👉 **New here? Start with [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md)** — the full architecture,
+> data-flow, subsystem map, deploy model (two targets!) and landmines. This README is the feature list;
+> [`DEPLOY.md`](DEPLOY.md) is the production runbook.
+
 ## What it does
 - **Client-side tracking** — GTM / GA4 / Meta / TikTok / Pinterest / Snap / Bing via the Web Pixel
   extension, with a per-platform event matrix, **consent-gated** through the Customer Privacy API.
