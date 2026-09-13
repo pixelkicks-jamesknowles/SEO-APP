@@ -19,6 +19,7 @@ import { processPendingSubscriptions } from "../lib/subscription-cron.server";
 import { refreshFxRates } from "../lib/fx.server";
 import { runAlerts } from "../lib/alerting.server";
 import { runConnectionChecks } from "../lib/connection-check.server";
+import { runPixelConfigChecks } from "../lib/pixel-config-check.server";
 import { recordTick } from "../lib/heartbeat.server";
 import { processBackfill } from "../lib/backfill.server";
 import { processMetafieldBackfill } from "../lib/metafield-backfill.server";
@@ -66,7 +67,7 @@ async function tick() {
   // ticks (the cron fires frequently) rather than risking a double-send.
   const startedAt = Date.now();
   try {
-    const [outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill] = await Promise.all([
+    const [outbox, reconciled, subscriptions, fx, purged, connections, pixelConfig, alerts, backfill, metafieldBackfill] = await Promise.all([
       drainOutbox({ limit: 40 }),
       reconcilePending({ graceMinutes: 20, limit: 8 }),
       // Deferred orders/paid subscription pipeline. No grace window (unlike reconcile): these should deliver
@@ -77,6 +78,10 @@ async function tick() {
       // Scheduled GA4 connection verification (throttled to every ~6h/shop, so most ticks are a no-op). A
       // failure is stored and surfaces as a health alert on the next runAlerts pass. Best-effort.
       runConnectionChecks().catch(() => ({ checked: 0, failing: 0 })),
+      // Web Pixel config drift (stale trackUrl after a host change, or a token invalidated by an app-secret
+      // rotation). /pixel/track answers a bad token with a silent 204, so without this a shop's storefront
+      // tracking can be entirely dark with nothing to show for it. Throttled per shop; best-effort.
+      runPixelConfigChecks().catch(() => ({ checked: 0, failing: 0 })),
       // Push tracking-health alerts to each shop's configured webhook (cooldown-deduped). Best-effort:
       // an alerting failure must never wedge the outbox/reconcile work above.
       runAlerts().catch(() => ({ shops: 0, notified: 0 })),
@@ -87,9 +92,9 @@ async function tick() {
       // Same leased + resumable pattern; idempotent upserts, so throttle-driven re-runs are safe.
       processMetafieldBackfill().catch((e) => ({ ran: 0, error: String(e?.message || e).slice(0, 120) })),
     ]);
-    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill };
+    const result = { ok: true, at: new Date().toISOString(), outbox, reconciled, subscriptions, fx, purged, connections, pixelConfig, alerts, backfill, metafieldBackfill };
     // Stamp the heartbeat so the app can tell the worker is alive (dashboard tile + cron_stale alert).
-    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, connections, alerts, backfill, metafieldBackfill } });
+    await recordTick({ durationMs: Date.now() - startedAt, jobs: { outbox, reconciled, subscriptions, fx, purged, connections, pixelConfig, alerts, backfill, metafieldBackfill } });
     return result;
   } catch (e) {
     // Record the failed run too (the worker is up, just erroring) so it shows as "last run errored" rather

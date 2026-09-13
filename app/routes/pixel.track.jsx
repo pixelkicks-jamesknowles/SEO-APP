@@ -23,6 +23,19 @@ export const action = async ({ request }) => {
   // caller can't fabricate events for an arbitrary shop from its domain alone. Silent 204 (don't leak
   // which shops are installed, and never make a bad beacon retry).
   if (!shopDomain || !verifyPixelToken(shopDomain, body?.token)) {
+    // The 204 is deliberate — a 401 here would let anyone probe which shops have the app installed. But
+    // answering silently ALSO means a shop whose pixel carries a stale token (app secret rotated, or the
+    // pixel was saved against a previous app host) goes completely dark with nothing to show for it: no
+    // error, no counter, no log. That is not hypothetical; it is how a store ran for months on
+    // server-side recovery alone while its storefront pixel was being discarded on every request.
+    //
+    // So: log it. Sampled, because a genuine forgery flood must not become a log flood, and capped to the
+    // shop domain (no token material, nothing an attacker supplied beyond a domain we already print).
+    // The authoritative detection is the scheduled config check (pixel-config-check.server.js) which
+    // raises a proper health alert; this just makes it visible immediately in the server log.
+    if (Math.random() < 0.01) {
+      console.warn(`[pixel/track] rejected beacon for ${shopDomain || "(no shop)"} — token missing or stale. If this shop is installed, re-save its Tracking page to rewrite the pixel config.`);
+    }
     return new Response(null, { status: 204, headers: CORS });
   }
   const clientIp = clientIpFromRequest(request);

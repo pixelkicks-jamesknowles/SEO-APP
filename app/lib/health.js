@@ -79,6 +79,19 @@ export function evaluateHealth(metrics = {}) {
   // (wrong secret, measurement id on the wrong data stream). This is the silent-breakage class the check
   // exists to catch, so it ranks with the other criticals.
   for (const f of m.connectionFailures || []) {
+    // The Web Pixel check is a CONFIG comparison, not a test send, and its failure has its own remedy
+    // (re-save the Tracking page to rewrite the pixel's baked URL + token). The generic copy below talks
+    // about measurement IDs and API secrets, which would send a merchant to entirely the wrong screen.
+    // pixel-config-check already produces a complete, actionable sentence, so use it as the body.
+    if (f.destination === "web_pixel") {
+      alerts.push({
+        kind: "connection_web_pixel",
+        severity: "critical",
+        title: "Storefront events are not reaching this app",
+        body: f.detail || "The Web Pixel's configuration no longer matches this app, so its events are being discarded. Open the Tracking page and press Save to repair it.",
+      });
+      continue;
+    }
     const dest = String(f.destination || "destination").toUpperCase();
     alerts.push({
       kind: `connection_${f.destination}`,
