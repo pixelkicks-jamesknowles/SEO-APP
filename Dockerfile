@@ -47,6 +47,16 @@ COPY prisma ./prisma
 RUN npx prisma generate
 COPY --from=builder /app/build ./build
 
+# The Railway CRON service runs the same image with `npm run cron:tick`, so the script has to be here
+# too. Leaving it out doesn't break the web service at all — it fails only when the cron next fires, and
+# then everything the worker owns (outbox retries, reconciliation, the subscription backstop, FX, purge,
+# health alerts) silently stops.
+COPY scripts ./scripts
+
+# Fail the BUILD if anything a runtime entrypoint needs is missing, rather than discovering it from a
+# crashed cron run in production. Cheap, and it makes the copies above self-checking.
+RUN node -e "const {accessSync}=require('fs');for(const f of ['build/server/index.js','scripts/cron-tick.mjs','prisma/schema.prisma','package.json'])accessSync(f);console.log('runtime files present')"
+
 ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
