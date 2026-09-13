@@ -36,3 +36,13 @@ jobs:
 
       - name: Test (with coverage gate)
         run: npm run test:coverage
+
+      # The unit suite mocks Prisma and fetch, so it can only prove the SOURCE behaves. This builds the
+      # bundle we actually ship and boots it, which is the only thing that catches a production-only
+      # failure (e.g. remix-serve's fetch polyfill having no static Response.json — green in dev and in
+      # tests, 500 in production). No database needed: we assert the server starts and serves HTTP.
+      - name: Build
+        run: npm run build
+
+      - name: Smoke (built server boots)
+        run: npm run smoke
