@@ -87,11 +87,24 @@ export async function resolveIdentityFirstTouch(shopDomain, customerKey, firstTo
 /** Counts for the attribution dashboard: total durable visitors tracked and how many have been stitched
  *  to a customer (identified). Best-effort → zeros. */
 export async function identityStats(shopDomain) {
-  const [visitors, identified] = await Promise.all([
+  const [visitors, identified, withClientId] = await Promise.all([
     prisma.visitorIdentity.count({ where: { shopDomain } }).catch(() => 0),
     prisma.visitorIdentity.count({ where: { shopDomain, customerKey: { not: null } } }).catch(() => 0),
+    // Diagnostic: how many durable visitors carry a GA client id at all.
+    //
+    // The customer↔durable-id stitch joins on clientId — the checkout event brings a customerKey and a
+    // clientId, and we attach it to durable identities recorded against that SAME clientId by the embed.
+    // So "identified = 0" has two very different causes, and this number tells them apart:
+    //   withClientId ≈ 0  → the EMBED isn't capturing _ga (no on-page GA4 tag, consent, or it isn't
+    //                       deployed), so there is nothing for a checkout to match against — the stitch
+    //                       can never work, no matter what checkout sends.
+    //   withClientId high → the embed is fine and the CHECKOUT side is the break: either its events carry
+    //                       no customerKey (guest checkout / PII withheld without marketing consent) or
+    //                       its clientId differs from the one the embed stored (the Web Pixel sandbox
+    //                       reading a different cookie, so the two never join).
+    prisma.visitorIdentity.count({ where: { shopDomain, clientId: { not: null } } }).catch(() => 0),
   ]);
-  return { visitors, identified };
+  return { visitors, identified, withClientId };
 }
 
 /**

@@ -17,6 +17,7 @@
 import crypto from "node:crypto";
 import prisma from "../db.server";
 import { foldOrders, mergeUnattributed, emptyUnattributed } from "./backfill";
+import { isTransientApiError } from "./net.server";
 
 const LEASE_MINUTES = 10;
 // Orders per Shopify page. NOT raised beyond 100: each node also pulls a customer journey + up to 50 line
@@ -46,11 +47,22 @@ const ORDERS_QUERY = `#graphql
         createdAt
         sourceName
         app { name }
+        # Recharge's subscription marker. When Recharge runs on its OWN checkout its orders carry no
+        # Shopify selling plan at all — only these — so without them the backfill cannot tell a renewal
+        # from a one-off and its subscription revenue runs short against the live orders/paid path.
+        tags
+        customAttributes { key value }
         currentTotalPriceSet { shopMoney { amount } }
         customer { id }
         customerJourneySummary {
           firstVisit {
             source
+            # Shopify's own paid-vs-organic classification. Without it every recovered visit was assigned
+            # medium "referral", so a Meta AD click came back as facebook/referral and was reported as
+            # Organic Social instead of Paid Social.
+            sourceType
+            # Carries the auto-tagged click id (gclid / msclkid / …) for clicks that never had any utm_*.
+            landingPage
             referrerUrl
             utmParameters { source medium campaign }
           }
@@ -74,6 +86,10 @@ function toOrder(node) {
     customer: node?.customer ? { id: node.customer.id } : null,
     customerJourneySummary: node?.customerJourneySummary || null,
     lineItems: (node?.lineItems?.nodes || []).map((l) => ({ sellingPlan: l?.sellingPlan || null })),
+    // Normalise the GraphQL shapes onto the REST names the shared subscription helpers expect
+    // (tags as a string, customAttributes as note_attributes), so one Recharge detector serves both paths.
+    tags: Array.isArray(node?.tags) ? node.tags.join(",") : node?.tags || "",
+    note_attributes: (node?.customAttributes || []).map((a) => ({ name: a?.key, value: a?.value })),
   };
 }
 
@@ -131,7 +147,7 @@ async function clearWindow(shopDomain, sinceDate) {
  * advance (see the caller). Errors PROPAGATE — a failed write must roll the page back, not be swallowed,
  * or the increments could land without the cursor moving and double-count on retry.
  */
-async function persist(db, shopDomain, rows, learned, unattributedOrders = [], lifetimeUpdates = []) {
+async function persist(db, shopDomain, rows, learned, unattributedOrders = [], lifetimeUpdates = [], firstSubscriptionOrder = new Map()) {
   // Per-customer lifetime (for LTV / retention by channel). Increment — safe because the page commits
   // atomically with the cursor, and a fresh backfill resets these rows (clearWindow). Backfill is
   // oldest-first, so `create` captures the true firstOrderAt; lastOrderAt is bumped to each page's max.
@@ -188,6 +204,22 @@ async function persist(db, shopDomain, rows, learned, unattributedOrders = [], l
       create: { shopDomain, customerKey: l.customerKey, source: l.source, medium: l.medium, campaign: l.campaign, firstOrderId: l.firstOrderId },
       update: {}, // no-op — an existing first touch always wins
     });
+  }
+  // Seed the customer's FIRST SUBSCRIPTION order (distinct from their first order — they may have bought a
+  // one-off first). Without this seed, order_type has no history to judge against and an established
+  // subscriber's next renewal reads as a new subscription exactly once. Separate from `learned` above
+  // because that only covers customers whose acquiring order carried a journey; this applies to every
+  // subscriber. FILL-IN ONLY (`firstSubscriptionOrderId: null` guard) so a live value is never clobbered,
+  // and the scan is oldest-first so the earliest subscription order wins.
+  for (const [customerKey, orderId] of firstSubscriptionOrder || []) {
+    if (!orderId) continue;
+    const updated = await db.customerAttribution
+      .updateMany({ where: { shopDomain, customerKey, firstSubscriptionOrderId: null }, data: { firstSubscriptionOrderId: String(orderId) } })
+      .catch(() => ({ count: 0 }));
+    if (updated?.count) continue;
+    await db.customerAttribution
+      .create({ data: { shopDomain, customerKey, firstSubscriptionOrderId: String(orderId) } })
+      .catch(() => {}); // row exists and already carries one → it wins
   }
 }
 
@@ -274,7 +306,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
 
       const orders = (conn.nodes || []).map(toOrder);
       // revenueSince gates REVENUE only — first touch is still learned from every order we scan.
-      const { rows, learned, unattributed: pageUnattributed, unattributedOrders, lifetimeUpdates } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
+      const { rows, learned, unattributed: pageUnattributed, unattributedOrders, lifetimeUpdates, firstSubscriptionOrder } = foldOrders(orders, firstTouch, { revenueSince: job.sinceDate });
 
       // Next-page state, held in locals until the write commits — so a failure leaves cursor/processed at
       // their last committed values and the page simply re-runs next tick.
@@ -289,7 +321,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       try {
         await prisma.$transaction(
           async (tx) => {
-            await persist(tx, shopDomain, rows, learned, unattributedOrders, lifetimeUpdates);
+            await persist(tx, shopDomain, rows, learned, unattributedOrders, lifetimeUpdates, firstSubscriptionOrder);
             await tx.backfillJob.updateMany({
               where: { shopDomain, leaseToken: token },
               data: { cursor: nextCursor, ordersProcessed: nextProcessed, breakdown: JSON.stringify(nextBreakdown) },
@@ -328,14 +360,22 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       .catch(() => {});
     return { ran: 1, shop: shopDomain, processed, done };
   } catch (e) {
-    // A backfill failure must never wedge the tick — record it and release the lease.
+    // A backfill failure must never wedge the tick — record it and release the lease. A TRANSIENT failure
+    // (Shopify 5xx/502, throttling, a network blip) keeps status "running" so the next tick resumes from
+    // the saved cursor: pages commit atomically with the cursor advance, so the work already done stands
+    // and nothing is double-counted. Only a genuine fault (bad input, missing scope, revoked token) is
+    // terminal — otherwise one momentary Bad Gateway ends a multi-hour history scan.
+    const transient = isTransientApiError(e);
+    const detail = String(e?.message || e).slice(0, 300);
     await prisma.backfillJob
       .updateMany({
         where: { shopDomain, leaseToken: token },
-        data: { status: "error", detail: String(e?.message || e).slice(0, 300), leaseToken: null, leasedUntil: null, finishedAt: new Date() },
+        data: transient
+          ? { status: "running", detail: `Paused, will retry: ${detail}`.slice(0, 300), leaseToken: null, leasedUntil: null }
+          : { status: "error", detail, leaseToken: null, leasedUntil: null, finishedAt: new Date() },
       })
       .catch(() => {});
-    return { ran: 1, shop: shopDomain, error: String(e?.message || e).slice(0, 200) };
+    return { ran: 1, shop: shopDomain, [transient ? "retrying" : "error"]: detail.slice(0, 200) };
   }
 }
 

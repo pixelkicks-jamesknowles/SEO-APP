@@ -5,6 +5,7 @@ import { Page, Card, BlockStack, InlineStack, Text, Banner, Divider, Badge, Butt
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { SectionHeading } from "../components/SectionHeading";
+import { Stat } from "../components/Stat";
 import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel, byAcquisition } from "../lib/attribution-report";
 import { creditByModel, MODELS, MODEL_LABELS } from "../lib/multi-touch";
 import { identityStats } from "../lib/identity.server";
@@ -100,19 +101,6 @@ async function buildReport(shopDomain) {
 // Compact money formatting for the revenue table (the merchant's own store currency; no symbol assumed).
 const fmtMoney = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function Stat({ title, value, sub }) {
-  return (
-    <div style={{ flex: "1 1 200px" }}>
-      <Card>
-        <BlockStack gap="200">
-          <Text as="span" variant="bodySm" tone="subdued">{title}</Text>
-          <Text as="span" variant="heading2xl">{value}</Text>
-          {sub && <Text as="span" variant="bodySm" tone="subdued">{sub}</Text>}
-        </BlockStack>
-      </Card>
-    </div>
-  );
-}
 
 const cell = { padding: "var(--p-space-150) var(--p-space-300)" };
 const th = (align = "left") => ({ ...cell, textAlign: align });
@@ -482,7 +470,22 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                 sub={`${channelSubscriptionOrders.toLocaleString()} renewals — GA4 reports these as Unassigned`}
               />
               <Stat title="Tracked visitors" value={totalVisitors.toLocaleString()} sub="With a known first-touch source" />
-              <Stat title="Identified" value={identity.identified.toLocaleString()} sub={`of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`} />
+              <Stat
+                title="Identified"
+                value={identity.identified.toLocaleString()}
+                // When nothing is stitched, say WHICH half of the join is failing rather than just
+                // showing a zero. The stitch matches a checkout's GA client id against the one the theme
+                // embed recorded, so no client ids recorded = the embed side; client ids recorded but
+                // nothing identified = the checkout side.
+                sub={
+                  identity.identified > 0
+                    ? `of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`
+                    : identity.withClientId === 0
+                      ? `0 of ${identity.visitors.toLocaleString()} visitors have a GA client id — the theme embed isn't capturing one, so there's nothing for a checkout to match. Check the app embed is enabled and an on-page GA4 tag is present.`
+                      : `${identity.withClientId.toLocaleString()} of ${identity.visitors.toLocaleString()} visitors have a GA client id, but no checkout has matched one — checkout events are arriving without a customer email, or with a different client id.`
+                }
+                tone={identity.identified === 0 && identity.visitors > 0 ? "warning" : undefined}
+              />
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
             </InlineStack>
 
@@ -582,12 +585,12 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                 <BlockStack gap="300">
                   <SectionHeading
                     title="New vs returning, by channel and campaign"
-                    description="Every paid order over the last 90 days split by the channel and campaign that acquired the customer, showing new vs returning customers and new subscribers vs renewals vs one-off orders. This is the view for spend decisions: which channels and campaigns actually win NEW customers and NEW subscribers, not just orders. The same tags are written onto each order as metafields (below), so you can build the identical report inside Shopify's own Analytics."
+                    description="Every paid order over the last 90 days split by the channel and campaign that acquired the customer, showing new vs returning customers and new subscribers vs reactivations vs renewals vs one-off orders. A reactivation is a subscriber who lapsed and came back — inferred from the gap since their last subscription order, so treat it as indicative (a long pause looks the same). This is the view for spend decisions: which channels and campaigns actually win NEW customers and NEW subscribers, not just orders. The same tags are written onto each order as metafields (below), so you can build the identical report inside Shopify's own Analytics."
                   />
                   <Divider />
                   <Table
-                    caption="Orders and revenue by channel and campaign, split by customer type (new/returning) and order type (new subscriber / renewal / one-off)"
-                    head={["Source / Medium", "Campaign", "Orders", "Revenue", "New customers", "New subscribers", "Renewals", "Share"]}
+                    caption="Orders and revenue by channel and campaign, split by customer type (new/returning) and order type (new subscriber / reactivation / renewal / one-off)"
+                    head={["Source / Medium", "Campaign", "Orders", "Revenue", "New customers", "New subscribers", "Reactivations", "Renewals", "Share"]}
                     rows={acquisition.rows.map((r) => (
                       <tr key={`${r.source}/${r.medium}/${r.campaign}`} style={{ borderTop: "1px solid var(--p-color-border-subdued)" }}>
                         <th scope="row" style={rowHead}><Text as="span" variant="bodyMd">{r.source} / {r.medium}</Text></th>
@@ -596,6 +599,7 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                         <td style={th("right")}><Text as="span" variant="bodyMd">{fmtMoney(r.revenue)}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.newCustomers > 0 ? undefined : "subdued"}>{r.newCustomers.toLocaleString()}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.newSubscribers > 0 ? undefined : "subdued"}>{r.newSubscribers.toLocaleString()}</Text></td>
+                        <td style={th("right")}><Text as="span" variant="bodyMd" tone={r.reactivations > 0 ? undefined : "subdued"}>{r.reactivations.toLocaleString()}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.renewals.toLocaleString()}</Text></td>
                         <td style={th("right")}><Text as="span" variant="bodyMd" tone="subdued">{r.share}%</Text></td>
                       </tr>

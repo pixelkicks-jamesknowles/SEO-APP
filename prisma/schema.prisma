@@ -206,6 +206,16 @@ model CustomerAttribution {
   medium       String?
   campaign     String?
   firstOrderId String?
+  // The customer's FIRST SUBSCRIPTION order, which is NOT the same as their first order: a shopper can
+  // buy a one-off and subscribe later. Without this, order_type was derived from "is this their first
+  // order at all", so that shopper's genuine subscription checkout was reported as a `renewal` and new
+  // subscribers were undercounted. Seeded oldest-first by the backfill, then maintained live.
+  firstSubscriptionOrderId String?
+  // The customer's most recent subscription order and its billing cadence, so the next one can be told
+  // apart from a renewal: a gap far longer than the cadence means the subscription lapsed and they came
+  // back. See subscription.js subscriptionLifecycleOf() for the limits of inferring this from orders.
+  lastSubscriptionOrderAt  DateTime?
+  lastSubscriptionIntervalDays Int?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -230,6 +240,10 @@ model TrackingDaily {
   // capture numbers can be read in the light of how many shoppers accept your cookie banner.
   consentGranted     Int      @default(0)
   consentDenied      Int      @default(0)
+  // Events that carried NO analytics-consent signal at all (Consent mode off, or no CMP on the storefront).
+  // Counted separately rather than folded into `consentGranted`, which is what made the consent rate read
+  // a meaningless 100% on a store that was never sending consent state. See consent.js consentState().
+  consentUnknown     Int      @default(0)
   // Same split but scoped to PURCHASES (checkout_completed) — so the Accuracy page can show how many ORDERS
   // came from shoppers who declined analytics tracking (the merchant's tracking blind spot), not just events.
   purchaseConsentGranted Int  @default(0)

@@ -1,7 +1,7 @@
 import prisma from "../db.server";
 import { fanOutServerSide, isBot, sha256Hex, metaUserData, metaIdentifierKeys } from "./server-side.server";
 import { recordDeliveries, recordVisit, getFirstTouch, pruneCap, bumpMatchQuality, recordConversionPath, bumpDaily } from "./delivery.server";
-import { analyticsConsented } from "./consent";
+import { consentState } from "./consent";
 import { enqueueFailures } from "./outbox.server";
 import { recordCaptureFromResults, numericId } from "./reconcile.server";
 import { fxHooks } from "./fx.server";
@@ -67,7 +67,10 @@ export async function ingestEvent(shopDomain, body, clientIp) {
   // Consent-rate counter (Accuracy): every ingested storefront event is classified granted/denied by its
   // analytics-consent state, so the merchant can read the capture numbers against how many shoppers accept
   // their cookie banner. Best-effort.
-  await bumpDaily(shopDomain, analyticsConsented(body.event.consent) ? { consentGranted: 1 } : { consentDenied: 1 });
+  // Three-way, NOT analyticsConsented(): that helper folds "no signal" into granted, which is right for
+  // delivery but made this tile read 100% on a store that never sends consent state at all.
+  const CONSENT_FIELD = { granted: "consentGranted", denied: "consentDenied", unknown: "consentUnknown" };
+  await bumpDaily(shopDomain, { [CONSENT_FIELD[consentState(body.event.consent)]]: 1 });
 
   const event = { ...body.event, clientIp: body.event.clientIp || clientIp };
   // Durable first-party id (ITP-proof cookie minted by the app proxy): use it as the stable client id
@@ -132,6 +135,8 @@ export async function ingestEvent(shopDomain, body, clientIp) {
     await bumpMatchQuality(shopDomain, metaIdentifierKeys(metaUserData(event)));
     // Order-level consent split (for the Accuracy "orders opted out of tracking" tile): count this order
     // by whether the shopper granted analytics consent, so the merchant can see their tracking blind spot.
-    await bumpDaily(shopDomain, analyticsConsented(event.consent) ? { purchaseConsentGranted: 1 } : { purchaseConsentDenied: 1 });
+    // NOTE: the order-level consent split is NOT counted here. It is owned by orders/paid, which sees
+    // every paid order and reads the embed's captured consent note attribute; counting it in both places
+    // would double it for every checkout the pixel did manage to see.
   }
 }

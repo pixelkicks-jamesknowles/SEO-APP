@@ -7,6 +7,7 @@ import prisma from "../db.server";
 import { computeHealth } from "../lib/health.server";
 import { getMatchQuality } from "../lib/delivery.server";
 import { SectionHeading } from "../components/SectionHeading";
+import { Stat } from "../components/Stat";
 
 // Human labels for the Meta identifier columns, ordered by match-quality impact (email/phone move EMQ
 // the most). Reconciliation-backfilled purchases carry no browser cookies, so fbp/fbc read lower — the
@@ -60,6 +61,7 @@ async function buildAccuracy(shopDomain) {
       revenueRecovered: rows.reduce((t, r) => t + (r.revenueRecovered || 0), 0),
       consentGranted: sum("consentGranted"),
       consentDenied: sum("consentDenied"),
+      consentUnknown: sum("consentUnknown"),
       purchaseConsentGranted: sum("purchaseConsentGranted"),
       purchaseConsentDenied: sum("purchaseConsentDenied"),
     },
@@ -73,20 +75,6 @@ async function buildAccuracy(shopDomain) {
 
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : null);
 
-function Stat({ title, value, sub, progress, tone }) {
-  return (
-    <div style={{ flex: "1 1 220px" }}>
-      <Card>
-        <BlockStack gap="200">
-          <Text as="span" variant="bodySm" tone="subdued">{title}</Text>
-          <Text as="span" variant="heading2xl">{value}</Text>
-          {progress != null && <ProgressBar progress={Math.min(100, progress)} tone={tone} size="small" />}
-          {sub && <Text as="span" variant="bodySm" tone="subdued">{sub}</Text>}
-        </BlockStack>
-      </Card>
-    </div>
-  );
-}
 
 // Format a recovered-revenue amount. Uses the shop's reporting currency when set; otherwise shows a
 // plain number (mixed-currency stores have no single symbol to show).
@@ -152,10 +140,18 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
   const matchRate = pct(totals.purchasesDelivered, totals.ordersPaid);
   const sends = totals.eventsSent + totals.eventsFailed;
   const deliveryRate = pct(totals.eventsSent, sends);
+  // Rate over events that carried a REAL consent signal. Events with no signal (Consent mode off, or no
+  // CMP on the storefront) are reported separately instead of counting as acceptance — otherwise a store
+  // that never sends consent state reads a meaningless 100%.
   const consentSeen = (totals.consentGranted || 0) + (totals.consentDenied || 0);
   const consentRate = pct(totals.consentGranted || 0, consentSeen);
+  const consentUnknown = totals.consentUnknown || 0;
   const optedOutOrders = totals.purchaseConsentDenied || 0;
   const purchaseConsentSeen = (totals.purchaseConsentGranted || 0) + optedOutOrders;
+  // Every paid order is the honest denominator. Only purchases the storefront pixel actually saw carry a
+  // consent signal, so the rest are orders we simply have no answer for — shown as such rather than
+  // leaving the tile stuck on "no data" when the pixel misses checkout (which is the normal case).
+  const ordersNoConsentSignal = Math.max(0, (totals.ordersPaid || 0) - purchaseConsentSeen);
   const hasData = totals.ordersPaid > 0 || sends > 0;
   const recovered = totals.purchasesRecovered || 0;
   // GA4 gap: revenue this app makes visible that GA4 alone would miss — pixel-missed purchases we
@@ -211,14 +207,14 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
             )}
 
             <InlineStack gap="400" wrap>
-              <Stat
+              <Stat basis="220px"
                 title="Purchase capture (30d)"
                 value={matchRate == null ? "-" : `${matchRate}%`}
                 sub={`${totals.purchasesDelivered} purchase events / ${totals.ordersPaid} paid orders`}
                 progress={matchRate ?? 0}
                 tone={matchRate != null && matchRate < 90 ? "critical" : "success"}
               />
-              <Stat
+              <Stat basis="220px"
                 title="Revenue recovered (30d)"
                 value={recovered === 0 ? formatMoney(0, recoveredCurrency) : formatMoney(totals.revenueRecovered, recoveredCurrency)}
                 sub={
@@ -228,32 +224,42 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 }
                 tone="success"
               />
-              <Stat
+              <Stat basis="220px"
                 title="Delivery success (30d)"
                 value={deliveryRate == null ? "-" : `${deliveryRate}%`}
                 sub={`${totals.eventsSent} delivered / ${totals.eventsFailed} failed`}
                 progress={deliveryRate ?? 0}
                 tone={deliveryRate != null && deliveryRate < 98 ? "critical" : "success"}
               />
-              <Stat title="Events sent (30d)" value={totals.eventsSent.toLocaleString()} sub="Server-side deliveries" />
-              <Stat
+              <Stat basis="220px" title="Events sent (30d)" value={totals.eventsSent.toLocaleString()} sub="Server-side deliveries" />
+              <Stat basis="220px"
                 title="Consent rate (30d)"
                 value={consentRate == null ? "-" : `${consentRate}%`}
-                sub={consentRate == null ? "Share of shoppers who accept analytics" : `${(totals.consentGranted || 0).toLocaleString()} of ${consentSeen.toLocaleString()} events had analytics consent`}
+                sub={
+                  consentRate == null
+                    ? consentUnknown > 0
+                      ? `No consent signal on ${consentUnknown.toLocaleString()} events — turn on Consent mode, or check your cookie banner is wired to Shopify's Customer Privacy API`
+                      : "Share of shoppers who accept analytics"
+                    : `${(totals.consentGranted || 0).toLocaleString()} of ${consentSeen.toLocaleString()} events had analytics consent` +
+                      (consentUnknown > 0 ? ` · ${consentUnknown.toLocaleString()} sent no signal` : "")
+                }
                 progress={consentRate ?? 0}
-                tone={consentRate != null && consentRate < 50 ? "critical" : undefined}
+                tone={consentRate == null ? (consentUnknown > 0 ? "warning" : undefined) : consentRate < 50 ? "critical" : undefined}
               />
-              <Stat
+              <Stat basis="220px"
                 title="Orders opted out of tracking (30d)"
                 value={optedOutOrders.toLocaleString()}
                 sub={
                   purchaseConsentSeen === 0
-                    ? "No checkout consent data yet"
-                    : `of ${purchaseConsentSeen.toLocaleString()} orders — shoppers who declined analytics consent, so their journey isn't tracked`
+                    ? ordersNoConsentSignal > 0
+                      ? `No consent signal captured on any of ${ordersNoConsentSignal.toLocaleString()} paid orders — enable the app embed in your theme so shopper consent is recorded on the order`
+                      : "No checkout consent data yet"
+                    : `of ${purchaseConsentSeen.toLocaleString()} orders with a consent signal` +
+                      (ordersNoConsentSignal > 0 ? ` · ${ordersNoConsentSignal.toLocaleString()} more had none captured` : "")
                 }
                 tone={optedOutOrders > 0 ? "warning" : undefined}
               />
-              <Stat
+              <Stat basis="220px"
                 title="Retry queue"
                 value={(outboxPending || 0).toLocaleString()}
                 sub={outboxDead > 0 ? `${outboxDead} gave up after retries` : "Failed sends awaiting retry"}

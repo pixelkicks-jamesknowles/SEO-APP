@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import prisma from "../db.server";
 import { numericId } from "./server-side.server";
 import { orderTypeOf, customerTypeOf } from "./subscription";
+import { isTransientApiError } from "./net.server";
 import { writeOrderAttribution, writeCustomerAttribution, attributionValues } from "./report-writeback.server";
 
 const PAGE_SIZE = 25; // each order costs one metafieldsSet mutation, so keep pages small vs the leaky bucket
@@ -195,12 +196,21 @@ export async function processMetafieldBackfill({ pages = MAX_PAGES_PER_TICK, bud
       .catch(() => {});
     return { ran: 1, shop: shopDomain, processed, written, done };
   } catch (e) {
+    // A TRANSIENT Admin-API failure (Shopify 5xx/502, throttling, a network blip) must not kill the job:
+    // it is leased and cursor-resumable, the saved cursor still points at the last COMPLETED page, and
+    // every write is an idempotent metafieldsSet — so the right response is to drop the lease and let the
+    // next tick carry on. Marking it `error` here is what turned a momentary Shopify Bad Gateway into a
+    // permanent "Write-back failed" banner that only a manual re-run could clear.
+    const transient = isTransientApiError(e);
+    const detail = String(e?.message || e).slice(0, 300);
     await prisma.metafieldBackfillJob
       .updateMany({
         where: { shopDomain, leaseToken: token },
-        data: { status: "error", detail: String(e?.message || e).slice(0, 300), leaseToken: null, leasedUntil: null, finishedAt: new Date() },
+        data: transient
+          ? { status: "running", detail: `Paused, will retry: ${detail}`.slice(0, 300), leaseToken: null, leasedUntil: null }
+          : { status: "error", detail, leaseToken: null, leasedUntil: null, finishedAt: new Date() },
       })
       .catch(() => {});
-    return { ran: 1, shop: shopDomain, error: String(e?.message || e).slice(0, 200) };
+    return { ran: 1, shop: shopDomain, [transient ? "retrying" : "error"]: detail.slice(0, 200) };
   }
 }

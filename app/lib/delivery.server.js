@@ -289,3 +289,47 @@ export async function getFirstTouch(shopDomain, clientId) {
     touchCount: row.visits,
   };
 }
+
+/**
+ * Remember the customer's FIRST subscription order, so a later subscription order can be told apart from
+ * their acquiring checkout. Fill-in only: `update: {}` means the earliest id we ever learn wins, so the
+ * backfill's oldest-first seed is never clobbered by a renewal the live path sees first. Best-effort.
+ */
+export async function recordFirstSubscriptionOrder(shopDomain, customerKey, orderId) {
+  const id = orderId == null ? null : String(orderId);
+  if (!shopDomain || !customerKey || !id) return;
+  // Guarded on `firstSubscriptionOrderId: null` so this can only ever FILL IN, never overwrite — an
+  // upsert's `update` would let a renewal the live path happens to see first replace the backfill's
+  // older, correct id, which would flip that customer's acquiring checkout to a renewal.
+  const updated = await prisma.customerAttribution
+    .updateMany({ where: { shopDomain, customerKey, firstSubscriptionOrderId: null }, data: { firstSubscriptionOrderId: id } })
+    .catch(() => ({ count: 0 }));
+  if (updated?.count) return;
+  // Nothing updated: either there's no row yet, or one already carries an id. Try a create for the
+  // former; a unique-constraint failure means the latter (or a race), and the stored value rightly wins.
+  await prisma.customerAttribution
+    .create({ data: { shopDomain, customerKey, firstSubscriptionOrderId: id } })
+    .catch(() => {});
+}
+
+/**
+ * Stamp the customer's MOST RECENT subscription order and its billing cadence, which is what lets the
+ * next one be read as a reactivation rather than an ordinary renewal (see subscriptionLifecycleOf).
+ * Unlike recordFirstSubscriptionOrder this deliberately OVERWRITES — the newest order is the one a future
+ * gap is measured from — but only ever moves forward, so an out-of-order webhook can't rewind it.
+ * Best-effort.
+ */
+export async function recordLastSubscriptionOrder(shopDomain, customerKey, { at, intervalDays } = {}) {
+  const when = at ? new Date(at) : null;
+  if (!shopDomain || !customerKey || !when || Number.isNaN(when.getTime())) return;
+  const data = { lastSubscriptionOrderAt: when, ...(Number(intervalDays) > 0 ? { lastSubscriptionIntervalDays: Number(intervalDays) } : {}) };
+  const moved = await prisma.customerAttribution
+    .updateMany({
+      // Only ever forward: OR(null, older) so a redelivered or late webhook never drags the marker back.
+      where: { shopDomain, customerKey, OR: [{ lastSubscriptionOrderAt: null }, { lastSubscriptionOrderAt: { lt: when } }] },
+      data,
+    })
+    .catch(() => ({ count: 0 }));
+  if (moved?.count) return;
+  await prisma.customerAttribution.create({ data: { shopDomain, customerKey, ...data } }).catch(() => {});
+}

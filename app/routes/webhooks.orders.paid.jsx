@@ -11,11 +11,12 @@
 // and the outbox retrying any failed send.
 import { authenticate, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { bumpDaily, recordChannelRevenue, recordAcquisition } from "../lib/delivery.server";
+import { bumpDaily, recordChannelRevenue, recordAcquisition, recordFirstSubscriptionOrder, recordLastSubscriptionOrder } from "../lib/delivery.server";
 import { recordPendingPurchase } from "../lib/reconcile.server";
 import { recordPendingSubscription, processSubscriptionNow } from "../lib/subscription-cron.server";
-import { customerKey, parseUtms } from "../lib/attribution";
-import { orderHasSubscription, orderTypeOf, customerTypeOf } from "../lib/subscription";
+import { customerKey, orderChannel, orderHasJourney } from "../lib/attribution";
+import { orderConsentState } from "../lib/consent";
+import { orderHasSubscription, customerTypeOf, isFirstSubscriptionOrder, subscriptionLifecycleOf, parseIntervalDays, linePlanName } from "../lib/subscription";
 import { writeOrderAttribution, writeCustomerAttribution, attributionValues } from "../lib/report-writeback.server";
 
 /**
@@ -33,10 +34,19 @@ async function recordOrderRevenue(shop, order) {
   const first = key
     ? await prisma.customerAttribution.findUnique({ where: { shopDomain_customerKey: { shopDomain: shop, customerKey: key } } }).catch(() => null)
     : null;
-  const utms = parseUtms(order);
-  const source = first?.source || utms.source;
-  const medium = first?.medium || utms.medium;
-  const campaign = first?.campaign || utms.campaign;
+  // This order's own channel: UTMs, else an auto-tagged click id (gclid/msclkid/…), else the referring
+  // site. The customer's stored first touch still wins — a renewal has no journey of its own, and
+  // replaying the channel that acquired them is the whole point of the report.
+  const own = orderChannel(order) || {};
+  const source = first?.source || own.source;
+  const medium = first?.medium || own.medium;
+  const campaign = first?.campaign || own.campaign;
+  // With no channel at all, WHICH empty bucket this belongs in depends on whether we saw a journey. An
+  // order with a landing/referring site that carried no marketing signal genuinely was direct; one with
+  // neither (an API or imported order, a renewal) is unknowable. The backfill already keeps
+  // "(unattributed)" as its own honest bucket rather than inflating Direct — this makes the live path
+  // agree, so the two can be read side by side and a backfill doesn't appear to move revenue between them.
+  const fallbackSource = orderHasJourney(order) ? "(direct)" : "(unattributed)";
   // new vs returning / subscription-checkout vs renewal vs one-off. orders_count on the webhook payload is
   // authoritative for "first order"; fall back to whether this IS the customer's recorded first order.
   const isFirstOrder = Number.isFinite(Number(order?.customer?.orders_count))
@@ -44,11 +54,33 @@ async function recordOrderRevenue(shop, order) {
     : first?.firstOrderId
       ? first.firstOrderId === String(order?.id ?? "")
       : undefined;
-  const orderType = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstOrder });
+  // order_type needs the customer's first SUBSCRIPTION order, not their first order of any kind — a
+  // shopper who bought a one-off and subscribes later has orders_count > 1 on their genuine subscription
+  // checkout, and feeding that in reported it as a renewal. Read the stored marker, classify against it,
+  // then fill it in if this is the first subscription order we've seen for them.
+  const isFirstSub = isFirstSubscriptionOrder(order, first?.firstSubscriptionOrderId);
+  // order_type, now including "reactivation" — a lapsed subscriber who came back, which is otherwise
+  // indistinguishable from an ordinary renewal. Inferred from the gap since their last subscription
+  // order against its cadence, so it's indicative: a PAUSED subscription resuming looks the same.
+  const orderType = subscriptionLifecycleOf(order, {
+    firstSubscriptionOrderId: first?.firstSubscriptionOrderId,
+    lastSubscriptionOrderAt: first?.lastSubscriptionOrderAt,
+    lastSubscriptionIntervalDays: first?.lastSubscriptionIntervalDays,
+  });
   const customerType = customerTypeOf(order, { isFirstOrder });
+  if (key && isFirstSub && !first?.firstSubscriptionOrderId) {
+    await recordFirstSubscriptionOrder(shop, key, order?.id);
+  }
+  // Move the "last subscription order" marker forward so the NEXT one can be measured against it. The
+  // cadence comes from the selling-plan name on the order; the Admin-resolved interval is only available
+  // on the deferred subscription pipeline, and this needs to stay off the webhook's hot path.
+  if (key && orderHasSubscription(order)) {
+    const planDays = (order?.line_items || []).map((l) => parseIntervalDays(linePlanName(l))).find((d) => d > 0);
+    await recordLastSubscriptionOrder(shop, key, { at: order?.created_at, intervalDays: planDays });
+  }
   const revenue = Number(order?.current_total_price ?? order?.total_price ?? 0);
   await recordChannelRevenue(shop, {
-    source,
+    source: source || fallbackSource,
     medium,
     // Raw order revenue (not the margin/COGS-adjusted conversion value) — this report answers
     // "which channel drove sales", so it must be the real money.
@@ -56,7 +88,7 @@ async function recordOrderRevenue(shop, order) {
     isSubscription: orderHasSubscription(order),
   });
   // Richer split for the new report (channel × campaign × order type × customer type).
-  await recordAcquisition(shop, { source, medium, campaign, orderType, customerType, revenue });
+  await recordAcquisition(shop, { source: source || fallbackSource, medium, campaign, orderType, customerType, revenue });
   // Values for the native-reporting write-back (metafields). acquisitionDate = when we first saw this
   // customer (their acquiring order), else this order's date for a brand-new customer.
   return { source, medium, campaign, orderType, customerType, acquisitionDate: first?.createdAt || order?.created_at, customerId: order?.customer?.id };
@@ -94,6 +126,16 @@ export const action = async ({ request }) => {
     // Count every paid order (Shopify's source of truth) for the Accuracy match-rate, regardless of
     // whether subscription tracking is on.
     await bumpDaily(shop, { ordersPaid: 1 });
+
+    // Order-level analytics consent, from the note attribute the theme embed writes. Counted HERE rather
+    // than on the pixel path because orders/paid sees EVERY paid order — the pixel only reports consent
+    // for checkouts it observed, which is why this tile read zero. Orders with no attribute stay
+    // uncounted and are derived as (ordersPaid - granted - denied) on the Accuracy page, so "we don't
+    // know" stays visible instead of being silently scored as acceptance.
+    const consent = orderConsentState(payload);
+    if (consent !== "unknown") {
+      await bumpDaily(shop, consent === "granted" ? { purchaseConsentGranted: 1 } : { purchaseConsentDenied: 1 });
+    }
 
     // Revenue-by-channel for the Attribution report. Done HERE, not on the pixel path, because orders/paid
     // is the only thing that sees recurring subscription renewals — they never fire a storefront checkout,

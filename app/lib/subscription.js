@@ -51,9 +51,17 @@ export function orderHasAnalyticsConsent(order) {
   return order?.buyer_accepts_marketing === true;
 }
 
-/** True if any line on the order is a subscription line. */
+/** True if the order is subscription revenue.
+ *
+ *  A Shopify selling plan on a line is the primary signal. The Recharge marker is a REQUIRED second
+ *  signal: when Recharge runs on its OWN checkout (rather than Shopify Checkout Integration) it creates
+ *  Shopify orders with no selling plan at all, marked only by its note attribute / tags. Without this
+ *  fallback those renewals were classified `renewal` by orderTypeOf (which does read the marker) but
+ *  recorded with isSubscription=false by orders/paid — so their revenue never landed in
+ *  subscriptionRevenue and the app's subscription totals ran structurally short against Recharge. */
 export function orderHasSubscription(order) {
-  return (order?.line_items || []).some(lineIsSubscription);
+  if ((order?.line_items || []).some(lineIsSubscription)) return true;
+  return rechargeOrderType(order) !== null;
 }
 
 /** Read Recharge's subscription_order_type off the order, if present. Recharge keys it per Shopify order id
@@ -68,6 +76,64 @@ export function rechargeOrderType(order) {
   if (/\bcheckout_subscription\b|subscription first order/.test(tags)) return "checkout_subscription";
   if (/\brecurring_subscription\b|subscription recurring order|autorenew/.test(tags)) return "recurring_subscription";
   return null;
+}
+
+/**
+ * True when this order is the customer's FIRST subscription order — the checkout that created the
+ * subscription, as opposed to a renewal.
+ *
+ * This is deliberately NOT "is this their first order". A shopper can buy a one-off and subscribe later,
+ * and a reactivated subscriber has plenty of prior orders; both have orders_count > 1 on a genuine
+ * subscription checkout, which is why deriving this from orders_count reported them as renewals.
+ *
+ * `recordedId` is the firstSubscriptionOrderId stored against the customer — seeded oldest-first by the
+ * attribution backfill from their real order history, then maintained by the live orders/paid path. When
+ * nothing is recorded this is the first subscription order we have ever seen for them, so it counts as
+ * the checkout; that is why the backfill seed matters, or an established subscriber's next renewal reads
+ * as a new subscription exactly once. Pure.
+ */
+export function isFirstSubscriptionOrder(order, recordedId) {
+  if (!orderHasSubscription(order)) return false;
+  if (!recordedId) return true;
+  return String(recordedId) === String(order?.id ?? "");
+}
+
+/**
+ * How many billing cycles a subscription may be late before we call it a REACTIVATION rather than a
+ * renewal. 2.5x the interval: a monthly subscriber who orders 40 days later is a late renewal, one who
+ * orders 90 days later lapsed and came back. Deliberately generous, because over-calling reactivation is
+ * the worse error — it would inflate "new subscribers" with people who were merely late.
+ */
+export const REACTIVATION_CYCLE_MULTIPLIER = 2.5;
+/** Floor for the gap, for subscriptions with no resolvable cadence (defaults to a ~28-day cycle). */
+export const DEFAULT_INTERVAL_DAYS = 28;
+
+/**
+ * Subscription lifecycle for an order: "subscription_checkout" | "reactivation" | "renewal" | "one_off".
+ *
+ * This is order_type plus one extra distinction — a subscriber who lapsed and came back, which
+ * orderTypeOf reports as a plain "renewal" because from a single order the two are identical.
+ *
+ * ⚠️ INFERRED, NOT OBSERVED. The app subscribes to no subscription-contract webhooks and stores no
+ * contract state, so all it has is the gap between a customer's subscription orders measured against
+ * their billing cadence. That means a PAUSED subscription which later resumes is indistinguishable from
+ * a cancelled one that restarts, and both report as a reactivation. Exact separation needs contract-level
+ * data (Shopify subscription_contracts/* or the Recharge API). Treat this number as indicative.
+ *
+ *   prior = { lastSubscriptionOrderAt, lastSubscriptionIntervalDays, firstSubscriptionOrderId }
+ * Pure.
+ */
+export function subscriptionLifecycleOf(order, prior = {}, { now } = {}) {
+  const base = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstSubscriptionOrder(order, prior?.firstSubscriptionOrderId) });
+  if (base !== "renewal") return base;
+  const last = prior?.lastSubscriptionOrderAt ? new Date(prior.lastSubscriptionOrderAt).getTime() : NaN;
+  if (!Number.isFinite(last)) return "renewal"; // no history to measure a gap against
+  const at = order?.created_at ? new Date(order.created_at).getTime() : now ?? Date.now();
+  if (!Number.isFinite(at)) return "renewal";
+  const gapDays = (at - last) / 86_400_000;
+  if (!(gapDays > 0)) return "renewal"; // out-of-order delivery — never guess from a negative gap
+  const interval = Number(prior?.lastSubscriptionIntervalDays) > 0 ? Number(prior.lastSubscriptionIntervalDays) : DEFAULT_INTERVAL_DAYS;
+  return gapDays > interval * REACTIVATION_CYCLE_MULTIPLIER ? "reactivation" : "renewal";
 }
 
 /**

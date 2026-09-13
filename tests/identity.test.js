@@ -114,12 +114,24 @@ describe("resolveIdentityFirstTouch (cross-device / cross-session)", () => {
 });
 
 describe("identityStats", () => {
-  test("reports total visitors + identified count", async () => {
-    prisma.visitorIdentity.count.mockResolvedValueOnce(120).mockResolvedValueOnce(34);
-    expect(await identityStats(SHOP)).toEqual({ visitors: 120, identified: 34 });
+  test("reports total visitors + identified + the client-id diagnostic", async () => {
+    prisma.visitorIdentity.count.mockResolvedValueOnce(120).mockResolvedValueOnce(34).mockResolvedValueOnce(98);
+    expect(await identityStats(SHOP)).toEqual({ visitors: 120, identified: 34, withClientId: 98 });
   });
+
+  test("withClientId tells the two causes of 'identified: 0' apart", async () => {
+    // Nothing stitched AND no client ids recorded → the EMBED side is broken (nothing to match against).
+    prisma.visitorIdentity.count.mockResolvedValueOnce(500).mockResolvedValueOnce(0).mockResolvedValueOnce(0);
+    expect(await identityStats(SHOP)).toEqual({ visitors: 500, identified: 0, withClientId: 0 });
+
+    // Nothing stitched but client ids ARE recorded → the CHECKOUT side is broken (no customer key, or a
+    // different client id), which is a completely different fix.
+    prisma.visitorIdentity.count.mockResolvedValueOnce(500).mockResolvedValueOnce(0).mockResolvedValueOnce(480);
+    expect(await identityStats(SHOP)).toEqual({ visitors: 500, identified: 0, withClientId: 480 });
+  });
+
   test("best-effort: a count failure resolves to zeros, never throws", async () => {
     prisma.visitorIdentity.count.mockRejectedValue(new Error("db down"));
-    await expect(identityStats(SHOP)).resolves.toEqual({ visitors: 0, identified: 0 });
+    await expect(identityStats(SHOP)).resolves.toEqual({ visitors: 0, identified: 0, withClientId: 0 });
   });
 });

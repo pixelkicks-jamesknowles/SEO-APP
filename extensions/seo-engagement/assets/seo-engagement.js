@@ -1,4 +1,55 @@
-/* Connect Analytics — scroll depth + engaged-content views.
+  // Carries two things onto the cart, which arrive on the order as note attributes:
+  //
+  //   1. The shopper's ANALYTICS CONSENT STATE. Written whether consent is granted or denied, because
+  //      "denied" is exactly the value the reporting needs and it is only ever knowable here — the
+  //      orders/paid webhook has no consent signal of its own, and the Web Pixel only reports one when it
+  //      manages to see the checkout, which is the case that most often fails. It records a preference,
+  //      not behaviour, and carries no personal data.
+  //   2. The GA4 client + session ids, ONLY with consent, so a server-side purchase can join the
+  //      shopper's real session and inherit its traffic source.
+  //
+  // One request either way. Re-fires when the consent state or the ids change (the stamp covers both), so
+  // a shopper who accepts the banner after landing is picked up.
+  function syncCartIds() {
+    try {
+      if (!window.fetch) return;
+      var allowed = analyticsAllowed();
+      var attrs = { pxp_analytics_consent: allowed ? "granted" : "denied" };
+      var cid = null;
+      var sid = null;
+      if (allowed) {
+        cid = gaClientId();
+        sid = cid ? gaSessionId() : null; // a session id is meaningless without its own client id
+        if (cid) {
+          attrs.ga_client_id = cid;
+          if (sid) attrs.ga_session_id = sid;
+        }
+      }
+      var stamp = (allowed ? "1" : "0") + "|" + (cid || "") + "|" + (sid || "");
+      try {
+        if (window.sessionStorage && sessionStorage.getItem("pxp_cart_ids") === stamp) return;
+      } catch (e) {
+        /* private mode — just re-send */
+      }
+      fetch("/cart/update.js", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attributes: attrs }),
+        credentials: "same-origin",
+        keepalive: true
+      })
+        .then(function () {
+          try {
+            if (window.sessionStorage) sessionStorage.setItem("pxp_cart_ids", stamp);
+          } catch (e) {
+            /* ignore */
+          }
+        })
+        .catch(function () {});
+    } catch (e) {
+      /* never throw on the storefront */
+    }
+  }/* Connect Analytics — scroll depth + engaged-content views.
  * Runs in the storefront DOM (the Web Pixel sandbox can't see scroll), detects milestones, and
  * beacons them to the app proxy /track, which forwards them server-side to GA4 / sGTM as
  * `scroll` / `engaged_view` events. Consent-gated; never throws. ~1KB, no dependencies. */

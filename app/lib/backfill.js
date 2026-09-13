@@ -14,6 +14,9 @@
 // "(direct)". Folding unknowns into direct would silently inflate the best-looking channel and mislead
 // exactly the person reading this report.
 
+import { clickIdChannel } from "./click-ids";
+import { rechargeOrderType } from "./subscription";
+
 export const UNATTRIBUTED = "(unattributed)";
 
 // Data-migration tools create orders in bulk with no customer journey — the acquiring visit happened on the
@@ -52,19 +55,61 @@ export function channelFromJourney(journey) {
   if (utm?.source || utm?.medium) {
     return { source: utm.source || null, medium: utm.medium || null, campaign: utm.campaign || null };
   }
+  // Auto-tagged paid click on the landing page (gclid / msclkid / …) — the same recovery the live
+  // orders/paid path does, so a Google Ads order reads as Paid Search in both.
+  const click = clickIdChannel(fv.landingPage);
+  if (click) return click;
   if (fv.source) {
-    // Shopify classifies the visit's source; it has no medium, so mark it as referral-grade traffic
-    // rather than inventing one.
-    return { source: fv.source, medium: "referral", campaign: null };
+    // Shopify classifies the visit's SOURCE but gives no medium. This used to hardcode "referral", which
+    // meant a recovered Meta AD click came back as facebook/referral and the channel grouper — seeing a
+    // social source with a non-paid medium — filed it under Organic Social. Paid Social therefore looked
+    // empty while Organic Social was inflated. sourceType is Shopify's own paid-vs-organic signal.
+    return { source: fv.source, medium: mediumFromSourceType(fv.sourceType), campaign: null };
   }
   const host = hostOf(fv.referrerUrl);
   if (host) return { source: host, medium: "referral", campaign: null };
   return null;
 }
 
+/**
+ * Shopify's CustomerVisit.sourceType (the MarketingTactic enum) → a GA4-style medium.
+ *
+ * AD and RETARGETING are the ones that matter: they are how Shopify says "this visit came from an
+ * advert". Mapping them to a paid medium is what moves recovered Meta ad revenue out of Organic Social
+ * and into Paid Social — both values satisfy isPaidMedium in attribution-report's channel grouper.
+ *
+ * The enum is closed, so this is an explicit map rather than pattern-matching. Anything absent or
+ * unrecognised (a value Shopify adds later) falls back to "referral", which is what this path returned
+ * for every visit before — so a surprise value is never worse than the old behaviour. Pure.
+ */
+const MEDIUM_BY_TACTIC = {
+  AD: "cpc", // "An ad, such as a Facebook ad."
+  RETARGETING: "retargeting", // "A retargeting ad."
+  SEO: "organic", // "Search engine optimization."
+  NEWSLETTER: "email",
+  ABANDONED_CART: "email", // "An abandoned cart recovery email."
+  TRANSACTIONAL: "email",
+  MESSAGE: "social", // "A messaging app, such as Facebook Messenger."
+  POST: "referral", // "A blog post."
+  AFFILIATE: "referral",
+  LINK: "referral",
+  LOYALTY: "referral",
+  NOTIFICATION: "referral", // "A notification in the Shopify admin."
+  STOREFRONT_APP: "referral", // "A popup on the online store."
+};
+
+export function mediumFromSourceType(sourceType) {
+  return MEDIUM_BY_TACTIC[String(sourceType || "").toUpperCase()] || "referral";
+}
+
 /** True if any line on the order carries a selling plan (i.e. it's subscription revenue). */
 export function orderIsSubscription(order) {
-  return (order?.lineItems || []).some((l) => !!l?.sellingPlan);
+  if ((order?.lineItems || []).some((l) => !!l?.sellingPlan)) return true;
+  // Parity with the live orders/paid path (subscription.js orderHasSubscription): a Recharge-on-its-own-
+  // checkout renewal has no selling plan and is identified only by its tag / note attribute. Without this
+  // the backfill would report less subscription revenue than the live path for the same store, and the two
+  // windows of the report would not reconcile.
+  return rechargeOrderType(order) !== null;
 }
 
 /** Numeric id out of a Shopify GID ("gid://shopify/Customer/123" → "123"), else the value as-is. */
@@ -126,6 +171,10 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   // Per-customer lifetime deltas for THIS page — counts EVERY scanned order (all history), NOT just the
   // revenue window, because LTV is a lifetime figure. Aggregated per customer so the caller does one write.
   const lifetime = new Map();
+  // customerKey -> the id of the EARLIEST subscription order seen. The scan is oldest-first, so the first
+  // subscription order we meet for a customer is their acquiring checkout. Seeding this is what stops an
+  // established subscriber's next renewal being misread as a new subscription (see isFirstSubscriptionOrder).
+  const firstSubscriptionOrder = new Map();
 
   for (const order of orders) {
     const date = dayOf(order?.createdAt);
@@ -141,6 +190,9 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
       if (date < lt.firstOrderAt) lt.firstOrderAt = date;
       if (date > lt.lastOrderAt) lt.lastOrderAt = date;
       lifetime.set(key, lt);
+      if (orderIsSubscription(order) && !firstSubscriptionOrder.has(key)) {
+        firstSubscriptionOrder.set(key, numericGid(order?.id));
+      }
     }
 
     // The channel this order can see for itself (a renewal sees nothing).
@@ -217,7 +269,7 @@ export function foldOrders(orders = [], firstTouch = new Map(), { revenueSince =
   unattributed.revenue = round2(unattributed.revenue);
   unattributed.subscriptionRevenue = round2(unattributed.subscriptionRevenue);
   const lifetimeUpdates = [...lifetime.entries()].map(([customerKey, v]) => ({ customerKey, ...v }));
-  return { rows: out, firstTouch, learned, unattributed, unattributedOrders, lifetimeUpdates };
+  return { rows: out, firstTouch, learned, unattributed, unattributedOrders, lifetimeUpdates, firstSubscriptionOrder };
 }
 
 export function emptyUnattributed() {

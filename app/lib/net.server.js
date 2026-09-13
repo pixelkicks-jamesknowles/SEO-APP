@@ -25,7 +25,7 @@ function isPrivateHost(hostname) {
 // Default outbound-request deadline. Every server-side send goes through fetchWithTimeout so a hung or
 // slow-loris destination can't hold a request open indefinitely — which matters most in the SEQUENTIAL
 // outbox drain, where one stalled send would otherwise freeze the whole cron tick. Kept well under the
-// 5-minute outbox lease so a send can never outlive its lease and get re-selected + re-sent.
+// 10-minute outbox/reconcile lease so a send can never outlive its lease and get re-selected + re-sent.
 export const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** fetch() with an AbortController deadline. On timeout the abort makes fetch reject; callers already
@@ -52,4 +52,28 @@ export function isSafePublicHttpsUrl(value) {
   if (!u.hostname) return { ok: false, reason: "missing host" };
   if (isPrivateHost(u.hostname)) return { ok: false, reason: "points at a private, loopback or internal address" };
   return { ok: true };
+}
+
+/**
+ * True when a thrown Admin-API error looks TRANSIENT — worth resuming on the next cron tick rather than
+ * failing a long-running job terminally.
+ *
+ * Shopify's GraphQL client throws on 5xx (a 502 "Bad Gateway" during one of their deploys or incidents is
+ * routine), on 429, and on network/timeout aborts. None of those mean the job is wrong, only that now was
+ * a bad moment — and a leased, cursor-resumable job can simply pick up where it stopped. A 4xx other than
+ * 429 (bad input, missing scope, revoked token) IS terminal: retrying that forever would hide a real
+ * misconfiguration behind an endlessly "running" job. Pure.
+ */
+export function isTransientApiError(err) {
+  const status = Number(err?.networkStatusCode ?? err?.status ?? err?.response?.status ?? err?.response?.statusCode);
+  if (Number.isFinite(status) && status > 0) {
+    if (status === 429 || status >= 500) return true;
+    if (status >= 400) return false;
+  }
+  if (err?.name === "AbortError") return true;
+  // Fall back to the message: the Shopify client stringifies the status into it
+  // ("Shopify internal error: { networkStatusCode: 502, message: 'GraphQL Client: Bad Gateway' }").
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (/\b(429|50[0234])\b/.test(msg)) return true;
+  return /bad gateway|gateway time|service unavailable|temporarily unavailable|throttl|econnreset|etimedout|enotfound|socket hang up|network error|fetch failed|timeout|timed out|aborted/.test(msg);
 }

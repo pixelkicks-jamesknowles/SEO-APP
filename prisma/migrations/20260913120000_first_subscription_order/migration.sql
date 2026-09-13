@@ -1,0 +1,12 @@
+-- Track the customer's FIRST SUBSCRIPTION order separately from their first order.
+--
+-- Why: order_type (subscription_checkout | renewal | one_off) was derived from "is this the customer's
+-- first order at all" (customer.orders_count == 1). That conflates two different things — a shopper who
+-- buys a one-off and subscribes later has orders_count > 1 on their genuine subscription checkout, so it
+-- was reported as a `renewal`. On a store selling both one-offs and subscriptions that undercounts new
+-- subscribers and overcounts renewals, which is the headline number the report exists to give.
+--
+-- Additive and nullable, so it is safe on a live table: existing rows read NULL until the attribution
+-- backfill seeds them (oldest-first, so the earliest subscription order wins) or the live orders/paid
+-- path fills one in.
+ALTER TABLE "CustomerAttribution" ADD COLUMN IF NOT EXISTS "firstSubscriptionOrderId" TEXT;

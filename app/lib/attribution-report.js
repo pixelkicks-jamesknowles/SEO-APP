@@ -59,6 +59,17 @@ export function visitAttribution(utm = null, referrer = null) {
   const medium = utm?.utm_medium || null;
   const campaign = utm?.utm_campaign || null;
   if (source || medium || campaign) return { source, medium, campaign };
+  return referrerChannel(referrer);
+}
+
+/**
+ * Classify a referrer URL into { source, medium, campaign } — a known search engine → organic, a known
+ * social network → social, anything else → referral. Null when there's no usable referrer.
+ *
+ * Exported so the ORDER-side paths can classify `referring_site` the same way the visit beacon classifies
+ * a browser referrer, instead of each re-implementing the engine/network lists and drifting apart. Pure.
+ */
+export function referrerChannel(referrer) {
   const host = referrerHost(referrer);
   if (!host) return null;
   const labels = host.split("."); // match a known engine/network anywhere in the host (search.yahoo.com, l.facebook.com)
@@ -257,7 +268,7 @@ export function byAcquisition(rows = []) {
     const key = `${r.source}|${r.medium}|${r.campaign}`;
     let g = map.get(key);
     if (!g) {
-      g = { source: r.source, medium: r.medium, campaign: r.campaign, orders: 0, revenue: 0, newCustomers: 0, returningCustomers: 0, newSubscribers: 0, renewals: 0, oneOff: 0 };
+      g = { source: r.source, medium: r.medium, campaign: r.campaign, orders: 0, revenue: 0, newCustomers: 0, returningCustomers: 0, newSubscribers: 0, reactivations: 0, renewals: 0, oneOff: 0 };
       map.set(key, g);
     }
     const o = r.orders || 0;
@@ -267,6 +278,10 @@ export function byAcquisition(rows = []) {
     if (r.customerType === "new") g.newCustomers += o;
     else if (r.customerType === "returning") g.returningCustomers += o;
     if (r.orderType === "subscription_checkout") g.newSubscribers += o;
+    // A lapsed subscriber who came back. Its own bucket, not folded into newSubscribers (they were won
+    // once already, so counting them as new acquisition overstates what the channel achieved) and not
+    // into renewals (the subscription had stopped). Falling through to oneOff would be plainly wrong.
+    else if (r.orderType === "reactivation") g.reactivations += o;
     else if (r.orderType === "renewal") g.renewals += o;
     else g.oneOff += o;
     totalOrders += o;
@@ -276,5 +291,12 @@ export function byAcquisition(rows = []) {
   const list = [...map.values()]
     .sort((a, b) => b.revenue - a.revenue)
     .map((g) => ({ ...g, revenue: round(g.revenue), share: totalRevenue ? Math.round((g.revenue / totalRevenue) * 100) : 0 }));
-  return { rows: list, totalOrders, totalRevenue: round(totalRevenue), totalNewCustomers: list.reduce((s, g) => s + g.newCustomers, 0), totalNewSubscribers: list.reduce((s, g) => s + g.newSubscribers, 0) };
+  return {
+    rows: list,
+    totalOrders,
+    totalRevenue: round(totalRevenue),
+    totalNewCustomers: list.reduce((s, g) => s + g.newCustomers, 0),
+    totalNewSubscribers: list.reduce((s, g) => s + g.newSubscribers, 0),
+    totalReactivations: list.reduce((s, g) => s + g.reactivations, 0),
+  };
 }

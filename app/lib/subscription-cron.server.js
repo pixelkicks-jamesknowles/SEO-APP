@@ -7,7 +7,7 @@
 // ticks can't double-send.
 import crypto from "node:crypto";
 import prisma from "../db.server";
-import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent, orderTypeOf, customerTypeOf } from "./subscription";
+import { buildSubscriptionEvent, buildOrderPurchaseEvent, orderHasSubscription, syntheticClientId, noteAttr, orderHasAnalyticsConsent, orderTypeOf, customerTypeOf, isFirstSubscriptionOrder } from "./subscription";
 import { fetchOrderSubscriptions } from "./subscription.server";
 import { parseUtms, customerKey } from "./attribution";
 import { sendGa4Event, withValueMode, ga4TimestampMicros } from "./server-side.server";
@@ -106,6 +106,9 @@ async function processOne(shopDomain, order, settings) {
               medium: utms.medium,
               campaign: utms.campaign,
               firstOrderId: String(order?.id ?? ""),
+              // processOne only ever runs for subscription orders, so the row it creates is also the
+              // earliest subscription order we know of for this customer.
+              firstSubscriptionOrderId: String(order?.id ?? ""),
             },
           })
           .catch(() => null)) || { clientId: cookieClientId, ...utms };
@@ -127,7 +130,10 @@ async function processOne(shopDomain, order, settings) {
   // first-touch record we just resolved (firstOrderId), which classifies a subscription order as the
   // checkout vs a renewal and the customer as new vs returning when Shopify's orders_count is absent.
   const isFirstOrder = attribution?.firstOrderId ? attribution.firstOrderId === String(order?.id ?? "") : undefined;
-  const orderType = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstOrder });
+  // order_type keys off the first SUBSCRIPTION order, not the first order of any kind — see
+  // isFirstSubscriptionOrder. processOne only ever sees subscription orders, so when nothing is recorded
+  // yet this is the earliest one we know of and counts as the acquiring checkout.
+  const orderType = orderTypeOf(order, { isFirstSubscriptionOrder: isFirstSubscriptionOrder(order, attribution?.firstSubscriptionOrderId) });
   const customerType = customerTypeOf(order, { isFirstOrder });
   const opts = { monthDays, clientId, sessionId, timestampMicros, attribution: attr, intervals, orderType, customerType };
   // Two events per subscription order: the scoped subscription_purchase (subscription lines only) and the

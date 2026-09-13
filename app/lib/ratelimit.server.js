@@ -21,6 +21,18 @@
 // 429-ing legitimate traffic.) A shared store would be exact; this keeps the abuse guard zero-DB.
 const REPLICAS = Math.max(1, Math.round(Number(process.env.RATE_LIMIT_REPLICAS) || 1));
 
+// Fail LOUD rather than silently degrading. The per-shop ceiling is enforced per process, so scaling the
+// web service without setting RATE_LIMIT_REPLICAS lets roughly N x the intended traffic through — and
+// nothing about that is visible: the limiter still "works", it is just no longer the limit you configured.
+// A one-line boot warning is what turns that into something someone notices.
+if (process.env.NODE_ENV === "production" && !process.env.RATE_LIMIT_REPLICAS) {
+  console.warn(
+    "[ratelimit] RATE_LIMIT_REPLICAS is not set, so the per-shop ingest ceiling is enforced as if this " +
+      "were a single process. If the web service runs more than one replica, set it to the replica count " +
+      "or the effective shop-wide limit is multiplied by that number.",
+  );
+}
+
 /** Per-process share of a global per-window ceiling given the replica count. Pure. */
 export function scaledShopLimit(base, replicas = REPLICAS) {
   return Math.max(1, Math.round(base / Math.max(1, replicas)));

@@ -149,10 +149,33 @@ describe("orders/paid → revenue by channel", () => {
     expect(call.create).toMatchObject({ orders: 1, revenue: 20, subscriptionOrders: 0, subscriptionRevenue: 0 });
   });
 
-  test("an unknown customer falls back to the order's own UTMs, then (direct)", async () => {
+  test("an unknown customer with a browser visit but no marketing signal is (direct)", async () => {
     prisma.customerAttribution.findUnique.mockResolvedValue(null);
-    await deliver({ id: 5003, currency: "USD", current_total_price: "10.00", line_items: [{ sku: "X", price: "10.00", quantity: 1 }] }, "wh-rev-3");
+    await deliver(
+      { id: 5003, currency: "USD", current_total_price: "10.00", landing_site: "/products/x", line_items: [{ sku: "X", price: "10.00", quantity: 1 }] },
+      "wh-rev-3",
+    );
     const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
     expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "(direct)", medium: "(none)" });
+  });
+
+  test("an order with NO journey at all is (unattributed), not (direct)", async () => {
+    // No landing_site and no referring_site: an API/imported order or a renewal, which never involved a
+    // browser visit. Calling that "direct" inflates the best-looking channel; the backfill has always used
+    // its own honest bucket and the live path now agrees, so the two reconcile.
+    prisma.customerAttribution.findUnique.mockResolvedValue(null);
+    await deliver({ id: 5004, currency: "USD", current_total_price: "10.00", line_items: [{ sku: "X", price: "10.00", quantity: 1 }] }, "wh-rev-4");
+    const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+    expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "(unattributed)", medium: "(none)" });
+  });
+
+  test("an auto-tagged Google Ads click is recorded as paid, not direct", async () => {
+    prisma.customerAttribution.findUnique.mockResolvedValue(null);
+    await deliver(
+      { id: 5005, currency: "USD", current_total_price: "10.00", landing_site: "/collections/all?gclid=abc", line_items: [{ sku: "X", price: "10.00", quantity: 1 }] },
+      "wh-rev-5",
+    );
+    const call = prisma.channelRevenueDaily.upsert.mock.calls[0][0];
+    expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "google", medium: "cpc" });
   });
 });
