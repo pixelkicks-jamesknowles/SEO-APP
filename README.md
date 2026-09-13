@@ -134,9 +134,9 @@ app/lib/{server-side,subscription,subscription-cron,activity}.server.js · exten
 ## Free — billing defined but not enforced
 Every feature is available with no Pro gate. A `Pro` plan is **defined** (`app/lib/billing.server.js`,
 wired into `shopify.server.js`) so it's ready to charge later, but nothing calls `billing.require` until
-`BILLING_ENFORCED=true` — flipping that is the only change needed to start gating. Unused SEO tables
-(SeoSettings, Redirect404Log, …) remain in the schema but are dormant — left in place to avoid a
-destructive migration (drop later if desired).
+`BILLING_ENFORCED=true` — flipping that is the only change needed to start gating. The unused SEO tables (SeoSettings,
+Redirect404Log, ResourceHandle, AuditSnapshot) were dropped in migration
+`20260703170000_drop_archived_seo_tables` — no app code read or wrote them.
 
 ## First run
 ```bash
