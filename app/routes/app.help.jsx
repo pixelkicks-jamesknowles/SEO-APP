@@ -235,7 +235,16 @@ const SECTIONS = [
           reports and Explore</b> after you register them as <b>Custom dimensions</b> (GA4 Admin → Custom
           definitions). That takes ~24-48h and is <b>not retroactive</b> - so a blank parameter dropdown on
           the standard Events report usually just means it is not registered yet, not that the data is
-          missing. Standard fields (value, currency, transaction_id, items) need no setup. Worth
+          missing. Standard fields (value, currency, transaction_id, items) need no setup.
+          {" "}
+          <b>
+            Register <code>order_type</code> and <code>customer_type</code> first
+          </b>{" "}
+          - these two are what let GA4 report new subscribers vs renewals, and new vs returning customers,
+          by channel and campaign. Every order carries them already, but until they are registered GA4
+          cannot group by them, so the whole new-customer / new-subscriber breakdown looks like it was
+          never built. Both are <b>event-scoped</b>; the parameter name and the dimension name must match
+          exactly. Also worth
           registering: <b>subscription_interval</b>, <b>subscription</b>, <b>first_source</b>,
           {" "}<b>last_source</b>, <b>last_medium</b>, <b>last_campaign</b>, <b>touch_count</b>,
           {" "}<b>revenue</b> (raw revenue when margin mode is on), <b>original_value</b> /{" "}

@@ -37,6 +37,9 @@ Planning artifact for the two items in Chris's email of Sept 2026:
 > - **Contract-level reactivation** — the heuristic shipped instead; it cannot tell a PAUSE from a
 >   cancel-and-restart. Upgrading needs Shopify `subscription_contracts/*` or the Recharge API (4-6 days).
 > - **GA4 custom dimensions** — Equaliser's own admin step; nothing is visible to them until it is done.
+>   Hand them [`docs/ga4-custom-dimensions-setup.md`](../ga4-custom-dimensions-setup.md) — it is written for
+>   their GA4 admin and covers the exact names, the event scope, and the two properties that catch people
+>   out (24-48h lag, and it is NOT retroactive, so every day it waits is data that can never be grouped).
 
 ---
 

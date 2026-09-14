@@ -17,9 +17,8 @@ jest.mock("../app/lib/subscription-cron.server.js", () => ({
 }));
 
 import prisma from "../app/db.server.js";
-import { authenticate } from "../app/shopify.server.js";
+import { authenticate, unauthenticated } from "../app/shopify.server.js";
 import { recordPendingSubscription, processSubscriptionNow } from "../app/lib/subscription-cron.server.js";
-import { unauthenticated } from "../app/shopify.server.js";
 import { action as ordersPaid } from "../app/routes/webhooks.orders.paid.jsx";
 
 const SHOP = "s.myshopify.com";
