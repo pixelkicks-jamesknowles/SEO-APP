@@ -121,14 +121,7 @@ export async function resolveIdentityFirstTouch(shopDomain, customerKey, firstTo
 }
 
 /** Counts for the attribution dashboard: total durable visitors tracked and how many have been stitched
- *  to a customer (identified). Best-effort → zeros.
- *
- *  NOT RENDERED IN THE ADMIN. The Attribution page used to show an "Identified" tile from this; it was
- *  removed because the ratio is inherently low (most visitors never buy), so it read as a fault even when
- *  the stitch was healthy, and a merchant could not act on it. Retained as an OPERATOR diagnostic —
- *  `withClientId` is what separates the two causes of "identified: 0", and it is how the dead pixel-only
- *  stitch was actually diagnosed. Call it from a console/one-off when investigating; don't assume any UI
- *  depends on it. */
+ *  to a customer (identified). Best-effort → zeros. */
 export async function identityStats(shopDomain) {
   const [visitors, identified, withClientId] = await Promise.all([
     prisma.visitorIdentity.count({ where: { shopDomain } }).catch(() => 0),
