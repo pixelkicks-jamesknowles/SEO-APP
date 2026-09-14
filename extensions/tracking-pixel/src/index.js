@@ -87,7 +87,7 @@ const hashNum = (s) => {
   return String(h);
 };
 
-register(({ analytics, browser, settings, init }) => {
+register(({ analytics, browser, settings, init, customerPrivacy }) => {
   // All config travels in one JSON field (settings.config) — Shopify requires every declared
   // web-pixel field to be non-blank, so per-platform fields can't be left empty.
   const s = safeParse(settings.config) || {};
@@ -113,9 +113,30 @@ register(({ analytics, browser, settings, init }) => {
   // (ViewContent / AddToCart) carry an em/external_id and match better in Meta.
   const customer = init?.data?.customer || null;
 
-  // Current Customer-Privacy consent state, or null if the API isn't available.
+  // Customer-Privacy consent, kept CURRENT.
+  //
+  // `init.customerPrivacy` is, per Shopify's docs, the INITIAL permission state at page render. On any
+  // store with a cookie banner the pixel loads BEFORE the shopper answers it, so that snapshot says
+  // "analytics denied" — and reading only the snapshot meant the pixel went on believing that for the
+  // whole session even after they accepted. Every event then took the no-consent branch below, which
+  // returns before the GA client id and the customer identifiers are attached. The result was checkout
+  // events arriving with neither a client id nor an email, so the customer could never be stitched to
+  // their visit and "Identified" was structurally pinned at 0.
+  //
+  // visitorConsentCollected is the documented way to hear about the change; it fires only when consent
+  // actually changes, so the init value remains the correct starting point.
+  let currentPrivacy = init?.customerPrivacy || null;
+  try {
+    customerPrivacy?.subscribe?.("visitorConsentCollected", (event) => {
+      if (event?.customerPrivacy) currentPrivacy = event.customerPrivacy;
+    });
+  } catch {
+    /* sandbox: never throw */
+  }
+
+  /** Consent as of NOW, or null if the API isn't available at all. */
   const consentState = () => {
-    const c = init?.customerPrivacy;
+    const c = currentPrivacy;
     if (!c) return null;
     return { analytics: Boolean(c.analyticsProcessingAllowed), marketing: Boolean(c.marketingAllowed) };
   };
