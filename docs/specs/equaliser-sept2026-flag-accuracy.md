@@ -21,7 +21,19 @@ Planning artifact for the two items in Chris's email of Sept 2026:
 > (uncommitted) and still dependent on the client actions listed at the bottom. What remains genuinely
 > outstanding:
 >
-> - **The Recharge payload check (2c)** — still not done, still determines how much 2a/2b change in practice.
+> - ~~**The Recharge payload check (2c)**~~ — **DONE 2026-09-14. Verdict: the classifiers are correct on
+>   real Naturaw data.** Ten consecutive live orders were run through the shipped `orderTypeOf` /
+>   `customerTypeOf`; all ten classified correctly, including a customer with **30 prior orders placing
+>   their first subscription** (`#NATS0295003` → `subscription_checkout`/`returning`), which naive
+>   `orders_count > 1` logic would have called a renewal. What the payload actually carries:
+>     - `subscription_order_type` note attribute: **absent**. The "preferred route" does not exist on this
+>       store — the **tag fallback is what carries it**, and Naturaw's tags (`Subscription Recurring Order`,
+>       `Subscription First Order`) match our patterns exactly.
+>     - Shopify **selling plans are present** on subscription lines, so the primary line-item route works
+>       too — the two routes are genuinely belt-and-braces here, not one propping up the other.
+>     - `customer.numberOfOrders` is populated in GraphQL. NOTE this does **not** prove REST
+>       `customer.orders_count` (deprecated) is in the webhook body, so `customer_type` now falls back to
+>       an Admin lookup when the payload can't answer — see below.
 > - **Contract-level reactivation** — the heuristic shipped instead; it cannot tell a PAUSE from a
 >   cancel-and-restart. Upgrading needs Shopify `subscription_contracts/*` or the Recharge API (4-6 days).
 > - **GA4 custom dimensions** — Equaliser's own admin step; nothing is visible to them until it is done.
@@ -35,7 +47,7 @@ Both attributes are emitted on **every** order path, not just the subscription o
 | GA4 event param | Values | Source of truth |
 |---|---|---|
 | `order_type` | `subscription_checkout` \| `renewal` \| `one_off` | Recharge `subscription_order_type` marker, else line-item selling-plan scan |
-| `customer_type` | `new` \| `returning` | Shopify `customer.orders_count` (`== 1` → new), else `CustomerAttribution.firstOrderId` |
+| `customer_type` | `new` \| `returning` | Shopify `customer.orders_count` (`== 1` → new), else `CustomerAttribution.firstOrderId`, else an Admin `customer.numberOfOrders` lookup (added 2026-09-14, because `orders_count` is deprecated on the REST Customer resource and may be absent from the webhook body) |
 
 Coverage, verified in code:
 

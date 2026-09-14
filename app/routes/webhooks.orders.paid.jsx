@@ -17,7 +17,7 @@ import { recordPendingSubscription, processSubscriptionNow } from "../lib/subscr
 import { customerKey, orderChannel, orderHasJourney } from "../lib/attribution";
 import { orderConsentState } from "../lib/consent";
 import { orderHasSubscription, customerTypeOf, isFirstSubscriptionOrder, subscriptionLifecycleOf, parseIntervalDays, linePlanName } from "../lib/subscription";
-import { writeOrderAttribution, writeCustomerAttribution, attributionValues } from "../lib/report-writeback.server";
+import { writeOrderAttribution, writeCustomerAttribution, attributionValues, classifyOrderViaAdmin } from "../lib/report-writeback.server";
 import { stitchIdentityFromOrder } from "../lib/identity.server";
 
 /**
@@ -68,7 +68,21 @@ async function recordOrderRevenue(shop, order) {
     lastSubscriptionOrderAt: first?.lastSubscriptionOrderAt,
     lastSubscriptionIntervalDays: first?.lastSubscriptionIntervalDays,
   });
-  const customerType = customerTypeOf(order, { isFirstOrder });
+  let customerType = customerTypeOf(order, { isFirstOrder });
+  // Fallback when the payload could not answer it. `customer.orders_count` is DEPRECATED on the REST
+  // Customer resource, so it may be absent from the webhook body — and with no stored firstOrderId either
+  // (a customer the backfill hasn't seeded), customerTypeOf returns null and the order is recorded as
+  // "(unknown)" forever. GraphQL `customer.numberOfOrders` is the supported field and is confirmed
+  // populated on this store, so resolve it from the Admin API instead of giving up.
+  //
+  // Deliberately conditional: when orders_count IS present this costs nothing, keeping the Admin call off
+  // the webhook's hot path in the normal case (the 5s ACK budget is why the rest of this handler avoids
+  // Admin lookups). When it is absent, one round trip is worth far more than permanently mislabelling the
+  // row — customer_type is written once, on this order, and never revisited.
+  if (!customerType) {
+    const viaAdmin = await classifyOrderViaAdmin(shop, order?.id).catch(() => ({}));
+    customerType = viaAdmin?.customerType || null;
+  }
   if (key && isFirstSub && !first?.firstSubscriptionOrderId) {
     await recordFirstSubscriptionOrder(shop, key, order?.id);
   }

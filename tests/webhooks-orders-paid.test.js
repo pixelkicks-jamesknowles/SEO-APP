@@ -19,6 +19,7 @@ jest.mock("../app/lib/subscription-cron.server.js", () => ({
 import prisma from "../app/db.server.js";
 import { authenticate } from "../app/shopify.server.js";
 import { recordPendingSubscription, processSubscriptionNow } from "../app/lib/subscription-cron.server.js";
+import { unauthenticated } from "../app/shopify.server.js";
 import { action as ordersPaid } from "../app/routes/webhooks.orders.paid.jsx";
 
 const SHOP = "s.myshopify.com";
@@ -208,6 +209,62 @@ describe("orders/paid → identity stitch", () => {
   test("a stitch failure never breaks the webhook — it still ACKs 200", async () => {
     prisma.visitorIdentity.updateMany.mockRejectedValue(new Error("db down"));
     const res = await deliver(subOrder({ note_attributes: [{ name: "ga_client_id", value: "111.222" }] }), "wh-paid-stitch-fail");
+    expect(res.status).toBe(200);
+  });
+});
+
+// customer_type resolution. `customer.orders_count` is DEPRECATED on the REST Customer resource, so it can
+// be absent from the webhook body — and with no stored firstOrderId either, the order was recorded as
+// "(unknown)" permanently. Verified against a real Naturaw order: GraphQL `customer.numberOfOrders` IS
+// populated, so the Admin API can answer what the payload could not.
+describe("orders/paid → customer_type fallback", () => {
+  const acquisitionArgs = () => prisma.acquisitionDaily.upsert.mock.calls[0][0].create;
+
+  const adminReturning = (numberOfOrders) =>
+    unauthenticated.admin.mockResolvedValue({
+      admin: {
+        graphql: jest.fn(async () => ({
+          json: async () => ({ data: { order: { tags: [], customAttributes: [], customer: { numberOfOrders }, lineItems: { nodes: [] } } } }),
+        })),
+      },
+    });
+
+  test("the payload's orders_count wins — the fallback does not run when it can be answered", async () => {
+    // Admin is primed with a CONTRADICTORY answer (30 = returning). If the fallback ran despite the
+    // payload carrying orders_count, this would come back "returning". It must stay "new".
+    // That matters beyond correctness: the fallback is conditional precisely so the common case adds no
+    // Admin round trip to the webhook's 5s ACK budget. (Can't assert on unauthenticated.admin directly —
+    // the fire-and-forget metafield write-back calls it too.)
+    adminReturning("30");
+    await deliver(subOrder({ customer: { id: 7, orders_count: 1 } }), "wh-ct-payload");
+
+    expect(acquisitionArgs().customerType).toBe("new");
+  });
+
+  test("falls back to the Admin API when orders_count is missing from the payload", async () => {
+    adminReturning("1");
+    await deliver(subOrder({ customer: { id: 7 } }), "wh-ct-admin-new");
+
+    expect(unauthenticated.admin).toHaveBeenCalled();
+    expect(acquisitionArgs().customerType).toBe("new");
+  });
+
+  test("the fallback distinguishes returning customers too", async () => {
+    adminReturning("30"); // the real #NATS0295003 case: 30 orders, first SUBSCRIPTION order
+    await deliver(subOrder({ customer: { id: 7 } }), "wh-ct-admin-returning");
+    expect(acquisitionArgs().customerType).toBe("returning");
+  });
+
+  test("records (unknown) rather than guessing when neither source can answer", async () => {
+    unauthenticated.admin.mockRejectedValue(new Error("no session"));
+    await deliver(subOrder({ customer: { id: 7 } }), "wh-ct-unknown");
+    // The schema default. Honest absence beats a wrong new/returning label.
+    expect(acquisitionArgs().customerType).toBe("(unknown)");
+  });
+
+  test("an Admin failure never breaks the webhook — it still ACKs 200", async () => {
+    unauthenticated.admin.mockRejectedValue(new Error("boom"));
+    const res = await deliver(subOrder({ customer: { id: 7 } }), "wh-ct-admin-fail");
     expect(res.status).toBe(200);
   });
 });
