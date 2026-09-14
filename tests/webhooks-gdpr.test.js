@@ -8,6 +8,7 @@ jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./
 import prisma from "../app/db.server.js";
 import { authenticate } from "../app/shopify.server.js";
 import { sha256Hex } from "../app/lib/server-side.server.js";
+import { linkIdentity } from "../app/lib/identity.server.js";
 import { action as customersRedact } from "../app/routes/webhooks.customers.redact.jsx";
 import { action as shopRedact } from "../app/routes/webhooks.shop.redact.jsx";
 import { action as dataRequest } from "../app/routes/webhooks.customers.data_request.jsx";
@@ -53,24 +54,74 @@ describe("customers/redact", () => {
     expect(prisma.customerAttribution.deleteMany).not.toHaveBeenCalled();
   });
 
-  test("also purges VisitorAttribution via the client_id captured in CustomerAttribution", async () => {
-    // The customer's first-checkout client_id lives in CustomerAttribution — resolve it and delete the
-    // matching visitor row(s), so the redacted customer's client_id + UTMs don't survive the request.
-    prisma.customerAttribution.findMany.mockResolvedValue([{ clientId: "111.222" }]);
+  test("purges VisitorAttribution via the visitor keys in VisitorIdentity (durableId AND clientId)", async () => {
+    // VisitorAttribution is keyed on the VISITOR KEY (visitorKey() = durableId || clientId), so a given
+    // customer's rows may be filed under EITHER. Both identifiers from each identity row must therefore be
+    // used as selectors, or the rows filed under the other one survive the erasure.
+    prisma.visitorIdentity.findMany.mockResolvedValue([
+      { durableId: "pxp_abc", clientId: "111.222" },
+      { durableId: "pxp_def", clientId: null },
+    ]);
     authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123, email: "a@b.com" } } });
 
     await customersRedact(req);
 
-    expect(prisma.visitorAttribution.deleteMany).toHaveBeenCalledWith({ where: { shopDomain: SHOP, clientId: { in: ["111.222"] } } });
+    // Resolved from the identity graph, keyed on customerKey — NOT from CustomerAttribution, whose
+    // `clientId` column was never written by any code path (see the drop migration).
+    const lookup = prisma.visitorIdentity.findMany.mock.calls[0][0];
+    expect(lookup.where.customerKey.in).toEqual(["123", "e:" + sha256Hex("a@b.com")]);
+
+    expect(prisma.visitorAttribution.deleteMany).toHaveBeenCalledWith({
+      where: { shopDomain: SHOP, clientId: { in: ["pxp_abc", "111.222", "pxp_def"] } },
+    });
     // The mapping row itself is still deleted afterwards.
     expect(prisma.customerAttribution.deleteMany).toHaveBeenCalledTimes(1);
   });
 
-  test("no stored client_id → nothing to purge from VisitorAttribution", async () => {
-    prisma.customerAttribution.findMany.mockResolvedValue([{ clientId: null }]);
+  test("deletes the VisitorIdentity rows themselves (durableId <-> clientId <-> customerKey)", async () => {
+    // The graph row is not just a lookup table: its customerKey can be the RAW Shopify customer id, so
+    // leaving it behind keeps a directly-identifying link to the visitor's browser identifiers. Nothing
+    // TTL-purges this table, so a miss here persists until the shop uninstalls.
+    authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123, email: "a@b.com" } } });
+    await customersRedact(req);
+    expect(prisma.visitorIdentity.deleteMany).toHaveBeenCalledWith({
+      where: { shopDomain: SHOP, customerKey: { in: ["123", "e:" + sha256Hex("a@b.com")] } },
+    });
+  });
+
+  test("no identity rows → nothing to purge from VisitorAttribution", async () => {
+    prisma.visitorIdentity.findMany.mockResolvedValue([]);
     authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123 } } });
     await customersRedact(req);
     expect(prisma.visitorAttribution.deleteMany).not.toHaveBeenCalled();
+    // The identity table is still swept by customerKey even when the lookup found nothing to resolve.
+    expect(prisma.visitorIdentity.deleteMany).toHaveBeenCalled();
+  });
+
+  // REGRESSION GUARD for the bug this file previously hid. The old test mocked
+  // `CustomerAttribution.clientId` to "111.222" and asserted the purge ran — but NO code path ever wrote
+  // that column, so in production it was always NULL, the purge was always skipped, and the test passed
+  // against a premise the system could not produce.
+  //
+  // The fix is not just "mock a different table": it is to tie the READER to the WRITER, so the lookup
+  // field can never again drift away from what production actually populates. This calls the real
+  // linkIdentity() and asserts the field it writes is the same field customers/redact queries on.
+  test("the field customers/redact looks up is one linkIdentity actually writes", async () => {
+    await linkIdentity(SHOP, { durableId: "pxp_abc", clientId: "111.222", customerKey: "123" });
+
+    const written = prisma.visitorIdentity.upsert.mock.calls[0][0];
+    expect(written.create.customerKey).toBe("123");
+    expect(written.create.clientId).toBe("111.222");
+    expect(written.create.durableId).toBe("pxp_abc");
+
+    jest.clearAllMocks();
+    authenticate.webhook.mockResolvedValue({ shop: SHOP, topic: "customers/redact", payload: { customer: { id: 123 } } });
+    await customersRedact(req);
+
+    // Same model, same field, and the selectors it reads back are the ones linkIdentity populates.
+    const lookup = prisma.visitorIdentity.findMany.mock.calls[0][0];
+    expect(Object.keys(lookup.where)).toContain("customerKey");
+    expect(Object.keys(lookup.select).sort()).toEqual(["clientId", "durableId"]);
   });
 
   test("purges the customer-keyed lifetime + order-keyed path/unattributed rows", async () => {

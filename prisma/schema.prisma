@@ -201,7 +201,10 @@ model AlertDismissal {
 model CustomerAttribution {
   shopDomain   String
   customerKey  String // customer gid/id, or hashed email when no customer is attached
-  clientId     String? // GA4 client_id captured at first checkout (ga_client_id / cookie)
+  // NOTE: there was a `clientId` column here ("GA4 client_id captured at first checkout"). No code path
+  // ever wrote it, but customers/redact READ it to find this customer's VisitorAttribution rows — so that
+  // purge silently never ran. Dropped in 20260914120000_drop_dead_customerattribution_clientid; the
+  // redact path now resolves visitor keys from VisitorIdentity, which actually carries them.
   source       String?
   medium       String?
   campaign     String?

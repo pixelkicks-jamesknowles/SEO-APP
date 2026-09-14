@@ -1,0 +1,18 @@
+-- Drop CustomerAttribution."clientId" -- a dead column that caused a silent GDPR gap.
+--
+-- The column was declared and documented as "GA4 client_id captured at first checkout", but NO code path
+-- ever wrote it. It had exactly one reader: webhooks/customers/redact, which used it to resolve which
+-- VisitorAttribution rows belonged to the customer being erased. Because the column was always NULL, that
+-- resolve always returned an empty set, the delete was skipped, and VisitorAttribution (UTMs + the capped
+-- 25-touch journey path) was never purged on a customer redaction. Neither VisitorAttribution nor
+-- VisitorIdentity is TTL-purged by the cron, so those rows persisted until the shop uninstalled.
+--
+-- The unit test covering that branch mocked the column to a non-null value, so it passed against a
+-- premise production could not produce.
+--
+-- The redact path now resolves visitor keys from VisitorIdentity (durableId + clientId, indexed on
+-- (shopDomain, customerKey)) and deletes the VisitorIdentity rows too. Dropping the column removes the
+-- trap rather than leaving a never-populated field for the next reader to trust.
+--
+-- Safe: the column is NULL in every row by construction, and nothing reads it after this release.
+ALTER TABLE "CustomerAttribution" DROP COLUMN IF EXISTS "clientId";

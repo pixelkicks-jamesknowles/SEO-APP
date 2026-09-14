@@ -380,7 +380,16 @@ and verify end-to-end on a real dev store after deploy (`DEPLOY.md` Step 7).
 2. `npx prisma generate` locally (the client is regenerated on Railway too, but keep local in sync).
 3. If the table is **customer/order-keyed**, add it to **both** GDPR redact webhooks (landmine #6).
 4. If shop-scoped, add it to `shop.redact.jsx`'s `byShopDomain` list.
-5. Deploy = **subtree push**.
+5. **If redaction has to RESOLVE one table's key from another, test the writer, not just the reader.**
+   `CustomerAttribution.clientId` was declared, documented, and read by `customers/redact` to find a
+   customer's `VisitorAttribution` rows — but nothing ever wrote it, so that purge silently never ran for
+   the life of the column. The unit test mocked the column to a non-null value, so it passed against a
+   premise production could not produce. Two tables with no TTL (`VisitorAttribution`, `VisitorIdentity`)
+   therefore survived every customer erasure. Fixed in `20260914120000_drop_dead_customerattribution_clientid`;
+   the lookup now goes through `VisitorIdentity`, and `tests/webhooks-gdpr.test.js` has a contract test
+   asserting the field `customers/redact` queries is one `linkIdentity()` actually writes. When you mock a
+   column in a redaction test, ask what writes it — if the answer is "nothing", the test is fiction.
+6. Deploy = **subtree push**.
 
 ### Add a scope
 1. Append to `access_scopes.scopes` in `shopify.app.toml` **and** the `SCOPES` env note in `DEPLOY.md`.
