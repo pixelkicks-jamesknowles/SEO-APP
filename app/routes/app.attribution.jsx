@@ -187,7 +187,7 @@ export default function Attribution() {
             backfill tool sits below it: useful, but a setup action, not the thing you look at daily. */}
         <Suspense fallback={<AttributionSkeleton />}>
           <Await resolve={report} errorElement={<Banner tone="critical" title="Couldn't load attribution data">Refresh to try again.</Banner>}>
-            {(resolved) => <AttributionBody {...resolved} />}
+            {(resolved) => <AttributionBody {...resolved} backfill={backfill} />}
           </Await>
         </Suspense>
         <BackfillCard backfill={backfill} />
@@ -481,7 +481,7 @@ function MultiTouchCard({ multiTouch, paths }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], acquisition = { rows: [] }, multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], acquisition = { rows: [] }, multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity, backfill = null }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -496,6 +496,24 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
           </Banner>
         ) : (
           <>
+            {/* A running backfill does not just ADD to this report — it CLEARS the revenue window first
+                (clearWindow) and refills it, so while it runs these totals are not merely incomplete, they
+                are actively wrong. And because the scan is oldest-first while revenue only accrues for the
+                last 90 days, the revenue window is the LAST thing it reaches: subscription revenue in
+                particular sits at zero for almost the whole run and then lands in one lump at the end.
+                Without this warning the tables read as finished numbers — the backfill's own progress
+                banner is at the bottom of the page, below everything it invalidates. */}
+            {backfill?.status === "running" && (
+              <Banner tone="warning" title="Rebuilding from your order history — these totals are incomplete">
+                <p>
+                  Processed {(backfill.ordersProcessed || 0).toLocaleString()} orders so far. The scan runs
+                  oldest-first and only the last 90 days count towards revenue, so the revenue and
+                  subscription figures below fill in near the END of the run — expect them to read low, or
+                  zero, until it finishes. Lifetime value is rebuilt from scratch too, so "active" rates stay
+                  at 0% until recent orders are reached.
+                </p>
+              </Banner>
+            )}
             {capped && (
               <Banner tone="warning">
                 This report reflects your most recent {scanCap.toLocaleString()} tracked visitors — older
