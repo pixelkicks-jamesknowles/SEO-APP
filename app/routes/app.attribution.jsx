@@ -8,7 +8,6 @@ import { SectionHeading } from "../components/SectionHeading";
 import { Stat } from "../components/Stat";
 import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, bySubscriptionSource, byChannelRevenue, byChannelGroup, ltvByChannel, byAcquisition } from "../lib/attribution-report";
 import { creditByModel, MODELS, MODEL_LABELS } from "../lib/multi-touch";
-import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
 import { requestMetafieldBackfill, metafieldBackfillStatus } from "../lib/metafield-backfill.server";
 
@@ -44,11 +43,10 @@ async function buildReport(shopDomain) {
   // aggregate as if it were the whole history.
   const SCAN_CAP = 5000;
   const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [visitors, customers, channelRows, identity, lifetimes, acquisitionRows] = await Promise.all([
+  const [visitors, customers, channelRows, lifetimes, acquisitionRows] = await Promise.all([
     prisma.visitorAttribution.findMany({ where: { shopDomain }, orderBy: { lastSeen: "desc" }, take: SCAN_CAP }),
     prisma.customerAttribution.findMany({ where: { shopDomain }, orderBy: { updatedAt: "desc" }, take: SCAN_CAP }),
     prisma.channelRevenueDaily.findMany({ where: { shopDomain, date: { gte: since90 } } }).catch(() => []),
-    identityStats(shopDomain),
     // Per-customer lifetime (backfill-populated) → LTV / retention by acquiring channel.
     prisma.customerLifetime.findMany({ where: { shopDomain }, take: SCAN_CAP }).catch(() => []),
     // New-vs-returning / subscription-vs-one-off split by channel + campaign (from orders/paid).
@@ -94,7 +92,6 @@ async function buildReport(shopDomain) {
     channelTotalOrders: revenue.totalOrders,
     channelSubscriptionRevenue: revenue.totalSubscriptionRevenue,
     channelSubscriptionOrders: revenue.totalSubscriptionOrders,
-    identity,
   };
 }
 
@@ -441,7 +438,7 @@ function MultiTouchCard({ multiTouch, paths }) {
   );
 }
 
-function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], acquisition = { rows: [] }, multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders, identity }) {
+function AttributionBody({ totalVisitors, topSources, touches, shifted, subSources, capped, scanCap, channels, channelGroups = [], ltv = [], acquisition = { rows: [] }, multiTouchModels = null, multiTouchPaths = 0, channelTotalRevenue, channelTotalOrders, channelSubscriptionRevenue, channelSubscriptionOrders }) {
   const hasData = totalVisitors > 0 || channels.length > 0;
 
   return (
@@ -470,22 +467,12 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
                 sub={`${channelSubscriptionOrders.toLocaleString()} renewals — GA4 reports these as Unassigned`}
               />
               <Stat title="Tracked visitors" value={totalVisitors.toLocaleString()} sub="With a known first-touch source" />
-              <Stat
-                title="Identified"
-                value={identity.identified.toLocaleString()}
-                // When nothing is stitched, say WHICH half of the join is failing rather than just
-                // showing a zero. The stitch matches a checkout's GA client id against the one the theme
-                // embed recorded, so no client ids recorded = the embed side; client ids recorded but
-                // nothing identified = the checkout side.
-                sub={
-                  identity.identified > 0
-                    ? `of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`
-                    : identity.withClientId === 0
-                      ? `0 of ${identity.visitors.toLocaleString()} visitors have a GA client id — the theme embed isn't capturing one, so there's nothing for a checkout to match. Check the app embed is enabled and an on-page GA4 tag is present.`
-                      : `${identity.withClientId.toLocaleString()} of ${identity.visitors.toLocaleString()} visitors have a GA client id, but no checkout has matched one — checkout events are arriving without a customer email, or with a different client id.`
-                }
-                tone={identity.identified === 0 && identity.visitors > 0 ? "warning" : undefined}
-              />
+              {/* The "Identified" tile (durable visitors stitched to a customer) is deliberately NOT
+                  rendered. The ratio is inherently low — most visitors never buy — so it reads as a
+                  problem even when the stitch is working correctly, and a merchant can't act on it.
+                  identityStats() is kept in identity.server.js as an operator diagnostic: its
+                  `withClientId` counter is what tells the two causes of "identified: 0" apart (embed
+                  side vs checkout side). Re-add this tile if it's ever wanted. */}
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
             </InlineStack>
 
