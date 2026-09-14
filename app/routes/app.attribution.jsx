@@ -473,18 +473,31 @@ function AttributionBody({ totalVisitors, topSources, touches, shifted, subSourc
               <Stat
                 title="Identified"
                 value={identity.identified.toLocaleString()}
-                // When nothing is stitched, say WHICH half of the join is failing rather than just
-                // showing a zero. The stitch matches a checkout's GA client id against the one the theme
-                // embed recorded, so no client ids recorded = the embed side; client ids recorded but
-                // nothing identified = the checkout side.
+                // When nothing is stitched, say WHICH half of the join is missing rather than just showing
+                // a zero. The stitch is driven by orders/paid: it joins the ORDER's customer key to the
+                // visitor identities holding that order's `ga_client_id` note attribute, which the theme
+                // embed writes onto the cart. So: no client ids recorded at all = the embed side; client
+                // ids recorded but no order matched = the orders aren't carrying the attribute.
+                //
+                // (This used to blame the Web Pixel's checkout event, which was the only stitch path
+                //  before the orders/paid one existed — and which could almost never supply both halves.)
                 sub={
                   identity.identified > 0
                     ? `of ${identity.visitors.toLocaleString()} durable visitors stitched to a customer`
                     : identity.withClientId === 0
-                      ? `0 of ${identity.visitors.toLocaleString()} visitors have a GA client id — the theme embed isn't capturing one, so there's nothing for a checkout to match. Check the app embed is enabled and an on-page GA4 tag is present.`
-                      : `${identity.withClientId.toLocaleString()} of ${identity.visitors.toLocaleString()} visitors have a GA client id, but no checkout has matched one — checkout events are arriving without a customer email, or with a different client id.`
+                      ? `0 of ${identity.visitors.toLocaleString()} visitors have a GA client id — the theme embed isn't recording one, so there's nothing for an order to match against. Check the app embed is enabled, an on-page GA4 tag is present, and shoppers are granting analytics consent.`
+                      : channelTotalOrders === 0
+                        ? `${identity.withClientId.toLocaleString()} visitors have a GA client id — waiting on a paid order to match one against.`
+                        : `${identity.withClientId.toLocaleString()} of ${identity.visitors.toLocaleString()} visitors have a GA client id, but no paid order has matched one. Orders carry it as a ga_client_id note attribute (written by the embed when analytics consent is granted) — check a recent order's note attributes, and run the backfill to match historical orders.`
                 }
-                tone={identity.identified === 0 && identity.visitors > 0 ? "warning" : undefined}
+                // Only a warning when it's actually a fault: either the embed side is dead, or orders ARE
+                // arriving and still nothing matches. A store with client ids but no orders yet is simply
+                // waiting, and shouldn't be shown a red flag for it.
+                tone={
+                  identity.identified === 0 && identity.visitors > 0 && (identity.withClientId === 0 || channelTotalOrders > 0)
+                    ? "warning"
+                    : undefined
+                }
               />
               <Stat title="Journeys shifted" value={shifted.toLocaleString()} sub="First source ≠ latest source" />
             </InlineStack>
