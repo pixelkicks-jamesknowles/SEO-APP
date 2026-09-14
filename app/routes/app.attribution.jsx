@@ -10,7 +10,7 @@ import { byFirstTouch, touchDistribution, multiTouchShare, firstVsLastShift, byS
 import { creditByModel, MODELS, MODEL_LABELS } from "../lib/multi-touch";
 import { identityStats } from "../lib/identity.server";
 import { requestBackfill, backfillStatus } from "../lib/backfill.server";
-import { requestMetafieldBackfill, metafieldBackfillStatus } from "../lib/metafield-backfill.server";
+import { requestMetafieldBackfill, metafieldBackfillStatus, cancelMetafieldBackfill, resumeMetafieldBackfill } from "../lib/metafield-backfill.server";
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -23,6 +23,15 @@ export const action = async ({ request }) => {
   if (form.get("_action") === "metafield-backfill") {
     // Same deal: stamps connect_analytics.* metafields onto historical orders, advanced by /cron/tick.
     return await requestMetafieldBackfill(session.shop);
+  }
+  // Stop a run in progress. Takes effect within one page — the in-flight tick sees the status change and
+  // bails, and its cleared lease stops it writing the row back to "running".
+  if (form.get("_action") === "metafield-backfill-stop") {
+    return await cancelMetafieldBackfill(session.shop);
+  }
+  // Pick a stopped run back up from its saved cursor, rather than re-walking the whole history.
+  if (form.get("_action") === "metafield-backfill-resume") {
+    return await resumeMetafieldBackfill(session.shop);
   }
   return { ok: true };
 };
@@ -196,9 +205,13 @@ export default function Attribution() {
  */
 function MetafieldBackfillCard({ job }) {
   const fetcher = useFetcher();
-  const running = job?.status === "running" || fetcher.state !== "idle";
+  // `busy` covers the in-flight form post; `running` is the job's own state. They're separate so the Stop
+  // button can stay clickable while the job runs, and only spin while its own submit is in flight.
+  const busy = fetcher.state !== "idle";
+  const running = job?.status === "running";
   const done = job?.status === "done";
   const errored = job?.status === "error";
+  const stopped = job?.status === "cancelled";
   return (
     <Card>
       <BlockStack gap="300">
@@ -213,18 +226,45 @@ function MetafieldBackfillCard({ job }) {
             <p>Stamped {(job?.metafieldsWritten || 0).toLocaleString()} orders so far. It runs in the background a few pages at a time — leave the page and come back.</p>
           </Banner>
         )}
+        {stopped && (
+          <Banner tone="warning" title={`Stopped — ${(job?.metafieldsWritten || 0).toLocaleString()} orders stamped`}>
+            <p>
+              Resume picks up where it stopped. Starting over re-walks your whole order history — every write is an
+              idempotent upsert, so it's safe either way, just slower.
+            </p>
+          </Banner>
+        )}
         {done && (
           <Banner tone="success" title={`Done — ${(job.metafieldsWritten || 0).toLocaleString()} orders stamped`}>
             <p>In Shopify Analytics → Reports, group any order report by the connect_analytics fields (Acquisition channel, Campaign, Order type, Customer type).</p>
           </Banner>
         )}
-        <InlineStack>
-          <fetcher.Form method="post">
-            <input type="hidden" name="_action" value="metafield-backfill" />
-            <Button submit loading={running} disabled={running}>
-              {done ? "Re-stamp order history" : "Write history into Shopify reporting"}
-            </Button>
-          </fetcher.Form>
+        <InlineStack gap="200">
+          {running ? (
+            <fetcher.Form method="post">
+              <input type="hidden" name="_action" value="metafield-backfill-stop" />
+              <Button submit tone="critical" loading={busy}>
+                Stop
+              </Button>
+            </fetcher.Form>
+          ) : (
+            <>
+              {stopped && (
+                <fetcher.Form method="post">
+                  <input type="hidden" name="_action" value="metafield-backfill-resume" />
+                  <Button submit variant="primary" loading={busy}>
+                    Resume
+                  </Button>
+                </fetcher.Form>
+              )}
+              <fetcher.Form method="post">
+                <input type="hidden" name="_action" value="metafield-backfill" />
+                <Button submit loading={busy} disabled={busy}>
+                  {done ? "Re-stamp order history" : stopped ? "Start over" : "Write history into Shopify reporting"}
+                </Button>
+              </fetcher.Form>
+            </>
+          )}
         </InlineStack>
         <Text as="p" variant="bodySm" tone="subdued">
           Requires the order write permission (you'll be asked to approve it once). If you haven't approved it

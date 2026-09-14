@@ -57,6 +57,44 @@ export async function requestMetafieldBackfill(shopDomain, { historyDays = HISTO
   return { queued: true };
 }
 
+/**
+ * Stop a running metafield backfill.
+ *
+ * Clearing `leaseToken` is what actually makes this safe against a tick that is mid-flight right now:
+ * every write that tick performs is scoped `where: { shopDomain, leaseToken: token }`, so once the token
+ * is gone NONE of them match — including the terminal one that would otherwise set the row back to
+ * "running" and undo the stop. processMetafieldBackfill only ever claims `status: "running"`, so no later
+ * tick picks it up either.
+ *
+ * `cursor` and the counters are deliberately KEPT, so the run can be resumed from where it stopped rather
+ * than re-walking a 60k-order history. Guarded on `status: "running"` so stopping an already-finished job
+ * can't rewrite its outcome.
+ */
+export async function cancelMetafieldBackfill(shopDomain) {
+  const res = await prisma.metafieldBackfillJob
+    .updateMany({
+      where: { shopDomain, status: "running" },
+      data: { status: "cancelled", leaseToken: null, leasedUntil: null, finishedAt: new Date(), detail: "Stopped" },
+    })
+    .catch(() => ({ count: 0 }));
+  return { stopped: (res?.count ?? 0) > 0 };
+}
+
+/**
+ * Resume a stopped run from its saved cursor. Distinct from requestMetafieldBackfill, which starts over
+ * (cursor: null) — with 60k orders behind it, re-walking from the top is hours of needless Admin API
+ * calls. Only resumes a "cancelled" row; anything else is left alone.
+ */
+export async function resumeMetafieldBackfill(shopDomain) {
+  const res = await prisma.metafieldBackfillJob
+    .updateMany({
+      where: { shopDomain, status: "cancelled" },
+      data: { status: "running", detail: null, finishedAt: null, leaseToken: null, leasedUntil: null },
+    })
+    .catch(() => ({ count: 0 }));
+  return { resumed: (res?.count ?? 0) > 0 };
+}
+
 export async function metafieldBackfillStatus(shopDomain) {
   return prisma.metafieldBackfillJob.findUnique({ where: { shopDomain } }).catch(() => null);
 }
@@ -121,9 +159,22 @@ export async function processMetafieldBackfill({ pages = MAX_PAGES_PER_TICK, bud
     let hasNext = true;
     let pagesRun = 0;
     let stalled = false;
+    let cancelled = false;
     const deadline = Date.now() + budgetMs;
 
-    while (hasNext && pagesRun < pages && Date.now() < deadline && !stalled) {
+    while (hasNext && pagesRun < pages && Date.now() < deadline && !stalled && !cancelled) {
+      // Stop check, once per page. The cleared lease already makes a cancelled run impossible to resurrect,
+      // but without this the tick would keep burning its budget writing metafields nobody asked for — up to
+      // PAGE_SIZE Admin writes per page. One indexed single-row read next to that is free, and it makes the
+      // Stop button take effect within a page instead of at the end of the tick.
+      const live = await prisma.metafieldBackfillJob
+        .findUnique({ where: { shopDomain }, select: { status: true } })
+        .catch(() => null);
+      if (live && live.status !== "running") {
+        cancelled = true;
+        break;
+      }
+
       const res = await admin.graphql(ORDERS_QUERY, { variables: { cursor, query } });
       const jsonRes = await res.json();
       const conn = jsonRes?.data?.orders;
@@ -179,7 +230,7 @@ export async function processMetafieldBackfill({ pages = MAX_PAGES_PER_TICK, bud
         .catch(() => {});
     }
 
-    const done = !hasNext && !stalled;
+    const done = !hasNext && !stalled && !cancelled;
     await prisma.metafieldBackfillJob
       .updateMany({
         where: { shopDomain, leaseToken: token },
@@ -194,7 +245,7 @@ export async function processMetafieldBackfill({ pages = MAX_PAGES_PER_TICK, bud
         },
       })
       .catch(() => {});
-    return { ran: 1, shop: shopDomain, processed, written, done };
+    return { ran: 1, shop: shopDomain, processed, written, done, ...(cancelled ? { cancelled: true } : {}) };
   } catch (e) {
     // A TRANSIENT Admin-API failure (Shopify 5xx/502, throttling, a network blip) must not kill the job:
     // it is leased and cursor-resumable, the saved cursor still points at the last COMPLETED page, and
