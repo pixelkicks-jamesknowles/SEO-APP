@@ -179,3 +179,35 @@ describe("orders/paid → revenue by channel", () => {
     expect(call.where.shopDomain_date_source_medium).toMatchObject({ source: "google", medium: "cpc" });
   });
 });
+
+// The identity stitch. This is the ONLY path that reliably identifies a visitor: the Web Pixel supplies a
+// customer key only for a logged-in shopper with marketing consent, and its client id can differ from the
+// one the theme embed stored — which is why a live store sat at `identified: 0` with ~24k visitors that
+// all carried a client id. The order carries the real customer key and the embed's OWN ga_client_id.
+describe("orders/paid → identity stitch", () => {
+  test("links the customer to visitor identities holding the order's ga_client_id", async () => {
+    await deliver(subOrder({ note_attributes: [{ name: "ga_client_id", value: "111.222" }] }));
+
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith({
+      where: { shopDomain: SHOP, clientId: "111.222", customerKey: null },
+      data: { customerKey: "7" }, // the order's customer id, not anything the pixel had to supply
+    });
+  });
+
+  test("no ga_client_id on the order → no stitch attempted (the embed never ran for them)", async () => {
+    await deliver(subOrder(), "wh-paid-no-cid");
+    expect(prisma.visitorIdentity.updateMany).not.toHaveBeenCalled();
+  });
+
+  test("a redelivered webhook cannot re-stitch (idempotency gate short-circuits first)", async () => {
+    prisma.processedWebhook.findUnique.mockResolvedValue({ webhookId: "wh-paid-dupe" });
+    await deliver(subOrder({ note_attributes: [{ name: "ga_client_id", value: "111.222" }] }), "wh-paid-dupe");
+    expect(prisma.visitorIdentity.updateMany).not.toHaveBeenCalled();
+  });
+
+  test("a stitch failure never breaks the webhook — it still ACKs 200", async () => {
+    prisma.visitorIdentity.updateMany.mockRejectedValue(new Error("db down"));
+    const res = await deliver(subOrder({ note_attributes: [{ name: "ga_client_id", value: "111.222" }] }), "wh-paid-stitch-fail");
+    expect(res.status).toBe(200);
+  });
+});

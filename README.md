@@ -32,7 +32,14 @@ Conversion & event tracking for any Shopify store — client-side (Web Pixels) *
   > cookie if one ever lands, so that upgrade is drop-in.
 - **Identity stitching** — a graph links the durable id ↔ GA4 client id ↔ customer, so a conversion
   inherits its visitor's original first-touch across sessions/devices instead of looking direct
-  (`app/lib/identity.server.js`).
+  (`app/lib/identity.server.js`). Driven primarily from **`orders/paid`**, not the pixel: the Web Pixel's
+  checkout event carries a customer identifier only for a LOGGED-IN shopper WITH marketing consent
+  (otherwise it falls back to `data.checkout.email`, which Shopify redacts without field-level protected-
+  customer-data access), and its client id can differ from the one the embed stored. The order carries the
+  real customer key AND the embed's own `ga_client_id` note attribute, so the join is against our own id
+  and cannot mismatch (`stitchIdentityFromOrder`). The **backfill replays it over historical orders**, so
+  visitors captured before this existed get identified retroactively. Left on the pixel alone, a live store
+  sat at 23,895 visitors with a client id and **0 identified**.
 - **Session stitching (GA4 channel)** — the SEO-engagement embed writes the shopper's real GA4 `client_id`
   (`_ga`) **and `session_id`** (`_ga_<container>`) into cart attributes, which arrive on the order as note
   attributes. `orders/paid` + the reconcile backfill then send the server-side purchase with that **same

@@ -11,6 +11,8 @@
 // attribution.customerKey). Links only ever fill in (clientId/customerKey are never nulled back out).
 import prisma from "../db.server";
 import { sha256Hex } from "./server-side.server";
+import { customerKey as orderCustomerKey } from "./attribution";
+import { noteAttr } from "./subscription";
 
 /** Stable per-visitor attribution key: the durable first-party id when present (survives _ga/ITP churn),
  *  else the GA4 client id. This is what first-touch (VisitorAttribution) is keyed on so a returning
@@ -48,11 +50,45 @@ export async function linkIdentity(shopDomain, { durableId, clientId, customerKe
   }
   // Stitch the customer onto durable identities that share this GA client id but haven't been identified yet
   // (covers the durable-id-less checkout event, and back-links earlier anonymous sessions on the same _ga).
+  // Returns how many identities this stitched, so callers that report progress (the order backfill) can
+  // show a real number rather than "done".
   if (customerKey && clientId) {
-    await prisma.visitorIdentity
+    const res = await prisma.visitorIdentity
       .updateMany({ where: { shopDomain, clientId, customerKey: null }, data: { customerKey } })
-      .catch(() => {});
+      .catch(() => ({ count: 0 }));
+    return res?.count ?? 0;
   }
+  return 0;
+}
+
+/**
+ * Stitch a visitor to a customer from a PAID ORDER, rather than from the storefront pixel.
+ *
+ * Why this exists: the pixel path can only identify a visitor when its `checkout_completed` event carries
+ * BOTH a customer identifier and a client id matching the one the embed stored — and it frequently carries
+ * neither. `eventCustomerKey` reads `externalId`/`email` only for a LOGGED-IN customer WITH marketing
+ * consent, so a guest checkout falls back to `data.checkout.email`, which Shopify redacts unless the app
+ * has field-level protected-customer-data access. And even with an email, the Web Pixel sandbox may read a
+ * different `_ga` than the embed did, so the join misses. The net effect on a live store was 23,895
+ * visitors carrying a client id and ZERO identified.
+ *
+ * The order is immune to both failure modes:
+ *   - the customer key comes from the order itself (Shopify hands us `customer.id` / `email` under the
+ *     app's granted scopes — no pixel-level redaction applies), and
+ *   - `ga_client_id` is the note attribute the THEME EMBED wrote onto the cart, i.e. the very same value
+ *     stored in VisitorIdentity.clientId — so the join is against our own id and cannot mismatch.
+ *
+ * Fill-in only (linkIdentity guards on `customerKey: null`), so re-running over the same orders is safe and
+ * a value the live pipeline already captured is never clobbered. Returns the number of identities stitched.
+ *
+ * Accepts either shape of order: the orders/paid REST webhook payload, or a backfill row (backfill.server
+ * normalizes GraphQL `customAttributes` into `note_attributes` for exactly this reason).
+ */
+export async function stitchIdentityFromOrder(shopDomain, order) {
+  const key = orderCustomerKey(order);
+  const clientId = noteAttr(order, "ga_client_id");
+  if (!key || !clientId) return 0;
+  return await linkIdentity(shopDomain, { clientId, customerKey: key });
 }
 
 /** The customerKey a durable id is linked to (cross-device: whichever session of this visitor identified),

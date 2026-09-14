@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import prisma from "../db.server";
 import { foldOrders, mergeUnattributed, emptyUnattributed } from "./backfill";
 import { isTransientApiError } from "./net.server";
+import { stitchIdentityFromOrder } from "./identity.server";
 
 const LEASE_MINUTES = 10;
 // Orders per Shopify page. NOT raised beyond 100: each node also pulls a customer journey + up to 50 line
@@ -281,6 +282,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
 
     let hasNext = true;
     let pagesRun = 0;
+    let identityStitched = 0;
     const deadline = Date.now() + budgetMs;
 
     // Page until we run out of orders, pages, or clock. Stopping early is always safe: the cursor is
@@ -335,6 +337,14 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
         break;
       }
 
+      // Identity stitch for this page, deliberately OUTSIDE the transaction above: it is best-effort
+      // repair of a separate table and must never roll back a page of revenue that already committed.
+      // Fill-in only and keyed on the embed's own ga_client_id, so re-running a page is harmless.
+      // This is what retro-identifies the visitors the pixel path never could (see stitchIdentityFromOrder).
+      for (const o of orders) {
+        identityStitched += await stitchIdentityFromOrder(shopDomain, o).catch(() => 0);
+      }
+
       // Committed — advance in-memory state to match what's now persisted.
       cursor = nextCursor;
       processed = nextProcessed;
@@ -358,7 +368,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
         },
       })
       .catch(() => {});
-    return { ran: 1, shop: shopDomain, processed, done };
+    return { ran: 1, shop: shopDomain, processed, done, identityStitched };
   } catch (e) {
     // A backfill failure must never wedge the tick — record it and release the lease. A TRANSIENT failure
     // (Shopify 5xx/502, throttling, a network blip) keeps status "running" so the next tick resumes from

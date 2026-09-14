@@ -18,6 +18,7 @@ import { customerKey, orderChannel, orderHasJourney } from "../lib/attribution";
 import { orderConsentState } from "../lib/consent";
 import { orderHasSubscription, customerTypeOf, isFirstSubscriptionOrder, subscriptionLifecycleOf, parseIntervalDays, linePlanName } from "../lib/subscription";
 import { writeOrderAttribution, writeCustomerAttribution, attributionValues } from "../lib/report-writeback.server";
+import { stitchIdentityFromOrder } from "../lib/identity.server";
 
 /**
  * Attribute a paid order's revenue to the channel that ACQUIRED the customer.
@@ -143,6 +144,16 @@ export const action = async ({ request }) => {
     // inherits the customer's FIRST-TOUCH source (the channel that acquired the subscriber), which is
     // precisely the number GA4 cannot produce: with no browser session there's no session to take a
     // channel from, so GA4 reports it as Unassigned forever. Guarded by the idempotency gate above.
+    // Identity stitch: attach this customer to the durable visitor identities the theme embed recorded
+    // against their GA client id. Done HERE, not (only) on the pixel path, because the pixel can rarely
+    // supply both halves — its checkout event carries a customer identifier only for a LOGGED-IN shopper
+    // with marketing consent, and its client id may differ from the one the embed stored. The order
+    // carries the real customer key AND the embed's OWN `ga_client_id` note attribute, so this join is
+    // against our own id and cannot mismatch. Without it, `identified` sat at 0 on a store with ~24k
+    // visitors that all had a client id. Cheap (one guarded updateMany) and fill-in only, so it stays
+    // inline ahead of the ACK. Best-effort, like everything else here.
+    await stitchIdentityFromOrder(shop, payload).catch(() => 0);
+
     const attrib = await recordOrderRevenue(shop, payload).catch(() => null);
     // Fire-and-forget the metafield write-back (off the ACK hot path, like processSubscriptionNow below).
     if (attrib) writeBackAttribution(shop, payload, attrib).catch((e) => console.warn("[orders/paid] writeback:", e?.message || e));

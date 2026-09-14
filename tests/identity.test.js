@@ -2,7 +2,7 @@
 jest.mock("../app/db.server.js", () => ({ __esModule: true, default: require("./helpers/prisma-mock").makePrismaMock() }));
 
 import prisma from "../app/db.server.js";
-import { visitorKey, eventCustomerKey, linkIdentity, resolveCustomerKey, resolveIdentityFirstTouch, identityStats } from "../app/lib/identity.server.js";
+import { visitorKey, eventCustomerKey, linkIdentity, resolveCustomerKey, resolveIdentityFirstTouch, identityStats, stitchIdentityFromOrder } from "../app/lib/identity.server.js";
 import { sha256Hex } from "../app/lib/server-side.server.js";
 
 const SHOP = "s.myshopify.com";
@@ -133,5 +133,64 @@ describe("identityStats", () => {
   test("best-effort: a count failure resolves to zeros, never throws", async () => {
     prisma.visitorIdentity.count.mockRejectedValue(new Error("db down"));
     await expect(identityStats(SHOP)).resolves.toEqual({ visitors: 0, identified: 0, withClientId: 0 });
+  });
+});
+
+// The order-driven identity stitch. This exists because the PIXEL path could not identify anyone on a
+// live store: 23,895 visitors carried a GA client id and `identified` was 0, because the pixel's
+// checkout event supplies a customer key only for a logged-in shopper with marketing consent, and its
+// client id can differ from the one the embed stored. The order carries both halves reliably.
+describe("stitchIdentityFromOrder", () => {
+  const order = (over = {}) => ({
+    customer: { id: 4242 },
+    note_attributes: [{ name: "ga_client_id", value: "111.222" }],
+    ...over,
+  });
+
+  test("joins the order's customer key to identities holding the embed's ga_client_id", async () => {
+    prisma.visitorIdentity.updateMany.mockResolvedValue({ count: 3 });
+
+    const stitched = await stitchIdentityFromOrder(SHOP, order());
+
+    expect(stitched).toBe(3);
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith({
+      // customerKey: null → FILL-IN ONLY, so a value the live pipeline already captured is never clobbered
+      // and re-running the backfill over the same orders is safe.
+      where: { shopDomain: SHOP, clientId: "111.222", customerKey: null },
+      data: { customerKey: "4242" },
+    });
+  });
+
+  test("falls back to the hashed order email when there is no customer record (guest checkout)", async () => {
+    await stitchIdentityFromOrder(SHOP, order({ customer: undefined, email: "a@b.com" }));
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { customerKey: "e:" + sha256Hex("a@b.com") } }),
+    );
+  });
+
+  test("reads the backfill's normalized note_attributes shape too", async () => {
+    // backfill.server maps GraphQL `customAttributes {key value}` → `note_attributes {name value}`, so the
+    // same helper serves the live webhook and the historical backfill.
+    prisma.visitorIdentity.updateMany.mockResolvedValue({ count: 1 });
+    const fromBackfill = { customer: { id: "gid://shopify/Customer/77" }, note_attributes: [{ name: "ga_client_id", value: "999.888" }] };
+    expect(await stitchIdentityFromOrder(SHOP, fromBackfill)).toBe(1);
+    expect(prisma.visitorIdentity.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ clientId: "999.888" }) }),
+    );
+  });
+
+  test("no-ops without a ga_client_id — nothing to join against", async () => {
+    expect(await stitchIdentityFromOrder(SHOP, order({ note_attributes: [] }))).toBe(0);
+    expect(prisma.visitorIdentity.updateMany).not.toHaveBeenCalled();
+  });
+
+  test("no-ops without a customer key — the embed saw them but the order is anonymous", async () => {
+    expect(await stitchIdentityFromOrder(SHOP, order({ customer: undefined }))).toBe(0);
+    expect(prisma.visitorIdentity.updateMany).not.toHaveBeenCalled();
+  });
+
+  test("never writes a durable-id row — an order has no durableId to key one on", async () => {
+    await stitchIdentityFromOrder(SHOP, order());
+    expect(prisma.visitorIdentity.upsert).not.toHaveBeenCalled();
   });
 });
