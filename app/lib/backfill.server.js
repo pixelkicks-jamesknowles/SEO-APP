@@ -214,13 +214,30 @@ async function persist(db, shopDomain, rows, learned, unattributedOrders = [], l
   // and the scan is oldest-first so the earliest subscription order wins.
   for (const [customerKey, orderId] of firstSubscriptionOrder || []) {
     if (!orderId) continue;
-    const updated = await db.customerAttribution
-      .updateMany({ where: { shopDomain, customerKey, firstSubscriptionOrderId: null }, data: { firstSubscriptionOrderId: String(orderId) } })
-      .catch(() => ({ count: 0 }));
-    if (updated?.count) continue;
-    await db.customerAttribution
-      .create({ data: { shopDomain, customerKey, firstSubscriptionOrderId: String(orderId) } })
-      .catch(() => {}); // row exists and already carries one → it wins
+    // Ensure the row exists WITHOUT clobbering a first touch the live pipeline already captured: an upsert
+    // with an empty `update` creates it when absent and is a no-op when present.
+    //
+    // This must NOT be a create-and-catch. It used to be — `create(...).catch(() => {})`, on the reasoning
+    // that a conflict meant the stored value rightly wins. That is true OUTSIDE a transaction and fatal
+    // inside one: in Postgres a failed INSERT aborts the ENTIRE transaction (SQLSTATE 25P02
+    // "current transaction is aborted"), and catching the JavaScript error does not undo that. Every
+    // later statement in the same transaction then fails too — including the cursor advance — so the page
+    // could never commit, never advanced, and was retried identically on every tick, forever.
+    //
+    // It is deterministic, not a race: it fires the first time a page contains a customer who ALREADY has
+    // a firstSubscriptionOrderId. That is why a live run scanned 230,100 orders happily and then wedged on
+    // the same page for a day. An upsert cannot conflict, so the page commits.
+    await db.customerAttribution.upsert({
+      where: { shopDomain_customerKey: { shopDomain, customerKey } },
+      create: { shopDomain, customerKey, firstSubscriptionOrderId: String(orderId) },
+      update: {},
+    });
+    // Row already existed but never learned one: fill it in. Guarded on null so the earliest id wins and a
+    // later subscription order can't overwrite it (the scan is oldest-first).
+    await db.customerAttribution.updateMany({
+      where: { shopDomain, customerKey, firstSubscriptionOrderId: null },
+      data: { firstSubscriptionOrderId: String(orderId) },
+    });
   }
 }
 
