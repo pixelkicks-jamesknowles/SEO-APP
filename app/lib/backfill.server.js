@@ -283,6 +283,7 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
     let hasNext = true;
     let pagesRun = 0;
     let identityStitched = 0;
+    let pageCommitFailed = null;
     const deadline = Date.now() + budgetMs;
 
     // Page until we run out of orders, pages, or clock. Stopping early is always safe: the cursor is
@@ -329,11 +330,28 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
               data: { cursor: nextCursor, ordersProcessed: nextProcessed, breakdown: JSON.stringify(nextBreakdown) },
             });
           },
-          { timeout: 20_000, maxWait: 10_000 },
+          // 60s, not 20s. persist() does hundreds of SEQUENTIAL upserts per page (up to PAGE_SIZE each of
+          // CustomerLifetime, UnattributedOrder, CustomerAttribution and firstSubscriptionOrder, plus the
+          // revenue rows), and they get slower as those tables grow. A page that outgrows the timeout rolls
+          // back, commits nothing, and -- because the cursor never advances -- is retried forever.
+          { timeout: 60_000, maxWait: 15_000 },
         );
-      } catch {
-        // Nothing committed. Stop the loop without advancing; the next tick resumes from the stored cursor.
-        // Better than marking the whole job errored on a transient DB blip.
+      } catch (e) {
+        // Nothing committed, so don't advance; the next tick resumes from the stored cursor. A genuine
+        // transient DB blip recovers on its own, which is why this isn't fatal.
+        //
+        // But it MUST be visible. This used to be a bare `catch { break }`: no log, no detail, no counter.
+        // A page that fails EVERY time (the transaction timing out on a large page, most likely) then span
+        // forever with ordersProcessed frozen and the UI still showing a cheerful "Backfill running" --
+        // indistinguishable from healthy progress. That is exactly how a run sat stuck on 230,100 orders
+        // for a day. Record it on the job (outside the rolled-back transaction) and log it, so a stall
+        // announces itself instead of looking like slow progress.
+        const why = String(e?.message || e).slice(0, 200);
+        pageCommitFailed = why;
+        console.warn(`[backfill] page commit failed for ${shopDomain} at ${processed} orders — ${why}`);
+        await prisma.backfillJob
+          .updateMany({ where: { shopDomain, leaseToken: token }, data: { detail: `Stalled: a page of orders could not be saved (${why}). Retrying.`.slice(0, 300) } })
+          .catch(() => {});
         break;
       }
 
@@ -368,7 +386,11 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
         },
       })
       .catch(() => {});
-    return { ran: 1, shop: shopDomain, processed, done, identityStitched };
+    // A run that recovered must not keep showing the stall message.
+    if (!pageCommitFailed && pagesRun > 0) {
+      await prisma.backfillJob.updateMany({ where: { shopDomain, detail: { startsWith: "Stalled:" } }, data: { detail: null } }).catch(() => {});
+    }
+    return { ran: 1, shop: shopDomain, processed, done, identityStitched, ...(pageCommitFailed ? { pageCommitFailed } : {}) };
   } catch (e) {
     // A backfill failure must never wedge the tick — record it and release the lease. A TRANSIENT failure
     // (Shopify 5xx/502, throttling, a network blip) keeps status "running" so the next tick resumes from

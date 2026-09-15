@@ -396,6 +396,8 @@ function DownloadUnattributed() {
 function BackfillCard({ backfill }) {
   const fetcher = useFetcher();
   const running = backfill?.status === "running" || fetcher.state !== "idle";
+  // Set by backfill.server when a page fails to commit and the cursor can't advance.
+  const stalled = typeof backfill?.detail === "string" && backfill.detail.startsWith("Stalled:");
   const done = backfill?.status === "done";
   const errored = backfill?.status === "error";
 
@@ -408,7 +410,21 @@ function BackfillCard({ backfill }) {
         />
         <Divider />
         {errored && <Banner tone="critical" title="Backfill failed">{backfill.detail || "Try again."}</Banner>}
-        {running && (
+        {/* A stalled run is still `status: "running"`, so without this it shows the ordinary progress banner
+            with a frozen count and looks like healthy-but-slow progress. `detail` starts with "Stalled:"
+            only when a page has failed to commit (backfill.server.js), so switch tone and say so. */}
+        {running && stalled && (
+          <Banner tone="warning" title="Backfill has stalled">
+            <p>
+              Stopped at {(backfill?.ordersProcessed || 0).toLocaleString()} orders. {backfill.detail}
+            </p>
+            <p>
+              It keeps retrying the same page, so the count will not move until it clears. If this persists,
+              stop the run — the totals above stay incomplete for as long as it is stuck.
+            </p>
+          </Banner>
+        )}
+        {running && !stalled && (
           <Banner tone="info" title="Backfill running">
             <p>
               Processed {(backfill?.ordersProcessed || 0).toLocaleString()} orders so far. It pages through
