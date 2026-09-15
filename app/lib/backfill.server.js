@@ -26,8 +26,18 @@ const LEASE_MINUTES = 10;
 // start tripping the per-query cost ceiling. 100 is the known-good size; we get throughput from more PAGES
 // per tick instead, which costs the same per order but pipelines better against the leaky bucket.
 const PAGE_SIZE = 100;
-// Max pages per cron tick — the hard ceiling. The real limiter is TIME_BUDGET_MS below.
-const MAX_PAGES_PER_TICK = 30;
+// Max pages per cron tick — a SAFETY ceiling, not the intended limiter. TIME_BUDGET_MS below is meant to
+// be what stops a tick.
+//
+// It was 30, which at PAGE_SIZE 100 caps a tick at exactly 3,000 orders — and a live run was landing on
+// precisely that figure every tick, meaning the page count, not the clock, was ending it. That inverts the
+// design: the tick stopped early and then sat idle for the rest of the 5-minute cron interval. Raised so
+// the wall-clock budget binds first and a tick uses the time it actually has.
+//
+// Deliberately NOT paired with a bigger TIME_BUDGET_MS: that number is capped by Cloudflare's ~100s cut-off
+// on the cron request (see below), and overrunning it would kill the tick mid-flight AND leave the job
+// leased for 10 minutes before anything could pick it up — slower, not faster.
+const MAX_PAGES_PER_TICK = 120;
 // Wall-clock budget for one tick's paging. This is the safety-critical number, bounded by THREE things:
 //   • Cloudflare cuts the cron HTTP request at ~100s, and the tick's other jobs share that budget.
 //   • The job lease is 10 min; the budget must stay far below it or an overlapping tick could re-claim the
