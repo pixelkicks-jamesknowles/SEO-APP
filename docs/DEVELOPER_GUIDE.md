@@ -84,7 +84,6 @@ app/pixelify-seo/                 ← THE APP (this is what deploys to Railway v
     seo-engagement/               ← the theme app embed (main-page context: durable id, /visit beacon)
   docs/
     DEVELOPER_GUIDE.md            ← you are here
-    specs/                        ← design/planning docs for features (read before touching that feature)
     app-listing/                  ← store listing, privacy policy, reviewer notes
   scripts/cron-tick.mjs           ← the external cron caller (Railway cron service hits /cron/tick)
   README.md, DEPLOY.md
@@ -167,7 +166,7 @@ Both channels funnel into [`app/lib/ingest.server.js`](../app/lib/ingest.server.
 - `durable-id.server.js` — mint/read the `pxp_id` first-party cookie. **Caveat:** App Proxy doesn't pass
   `Set-Cookie` to the browser, so the embed persists the id from the response body as a *script-written*
   cookie (subject to ITP's 7-day cap). A true fix needs a first-party subdomain (see
-  `specs/first-party-subdomain.md`).
+  the README's durable-id caveat).
 - `identity.server.js` — the identity **graph**: links `durableId ↔ GA4 clientId ↔ customerKey`.
   `linkIdentity()` is the key function. **The cross-channel stitch** (a checkout event has the customer +
   client id but no durable id) attaches the customer to durable identities sharing that client id — this is
@@ -215,7 +214,7 @@ Both channels funnel into [`app/lib/ingest.server.js`](../app/lib/ingest.server.
   `metafieldsSet`; `provisionDefinitions` creates the metafield definitions (so they're report-builder
   columns); `classifyOrderViaAdmin` (best-effort order-type/customer-type lookup for the live one-off path).
 - `metafield-backfill.server.js` — stamp metafields onto **historical** orders (leased + resumable, cron).
-  See `specs/native-report-writeback.md`.
+
 
 ### Alerting & health
 - `health.js` (pure) + `health.server.js` — compute a shop's ranked health alerts + the data-quality score.
@@ -414,12 +413,21 @@ Deploy = subtree push.
 
 ## 14. Specs & roadmap
 
-Design docs live in [`docs/specs/`](./specs/). Read the relevant one before touching a feature:
-- `native-report-writeback.md` — the metafield write-back to native Shopify reporting.
-- `equaliser-aug2026-requests.md` — order/customer-type GA4 dims + diagnosis (supersedes the CAC spec's item 1).
-- `subscription-attribution-cac.md` — CAC-by-channel/campaign (parts parked).
-- `first-party-subdomain.md` — the ITP-proof durable-id upgrade (needs a merchant DNS CNAME).
-- `tracking-features-roadmap.md` — the broader roadmap.
+`docs/specs/` was removed on 2026-09-16; the design docs that lived there are in git history if you need
+them (`git log --diff-filter=D -- docs/specs/`). What survives in the working tree:
+- [`docs/ga4-custom-dimensions-setup.md`](../ga4-custom-dimensions-setup.md) — the GA4 Admin steps a
+  merchant's analytics owner must complete before `order_type` / `customer_type` are reportable. Written
+  for them, not for us.
+
+Two facts the removed specs carried that are worth keeping in front of you, because they are not derivable
+from the code:
+- **The Recharge payload check is done** (2026-09-14). This store has no `subscription_order_type` note
+  attribute at all — the TAG fallback in `rechargeOrderType()` is what actually classifies its orders, and
+  Shopify selling plans are present as a second independent route. Ten live orders were run through the
+  classifiers and all ten were correct.
+- **The durable id is not ITP-proof.** The App Proxy does not pass `Set-Cookie`, so the embed writes it
+  client-side and Safari caps it at 7 days. A real fix needs a first-party subdomain (CNAME to the app
+  host). See the caveat in README.
 
 ---
 

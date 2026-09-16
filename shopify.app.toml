@@ -41,7 +41,7 @@ automatically_update_urls_on_dev = true
 #   write_customers      — the customer-level half of the same write-back: acquisition traits on the customer
 #                          record, so native customer SEGMENTS / Marketing / Flow can target "acquired via X".
 # (Changing scopes triggers merchant re-consent on next deploy / dev restart. write_orders + write_customers
-#  are the re-consent for the attribution write-back — see docs/specs/native-report-writeback.md.)
+#  are the re-consent for the attribution write-back.)
 scopes = "write_pixels,read_customer_events,read_orders,read_all_orders,read_customers,read_fulfillments,read_products,write_orders,write_customers"
 optional_scopes = [ ]
 use_legacy_install_flow = false
