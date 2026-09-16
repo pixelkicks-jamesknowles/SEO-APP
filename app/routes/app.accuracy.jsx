@@ -4,6 +4,7 @@ import { defer } from "@remix-run/node";
 import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider, SkeletonBodyText, SkeletonDisplayText, Button } from "@shopify/polaris";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { runConsentAudit } from "../lib/consent-audit.server";
+import { diagnoseGa4Attribution } from "../lib/ga4-diagnose.server";
 import prisma from "../db.server";
 import { computeHealth } from "../lib/health.server";
 import { getMatchQuality } from "../lib/delivery.server";
@@ -25,8 +26,13 @@ const ID_LABELS = [
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const form = await request.formData();
-  if (form.get("_action") !== "consent-audit") return { ok: true };
+  const what = form.get("_action");
+  if (what !== "consent-audit" && what !== "ga4-diagnose") return { ok: true };
   const { admin } = await unauthenticated.admin(session.shop);
+  if (what === "ga4-diagnose") {
+    const settings = await prisma.trackingSettings.findUnique({ where: { shopDomain: session.shop } }).catch(() => null);
+    return { diagnose: await diagnoseGa4Attribution(admin, settings, { days: 7 }) };
+  }
   return await runConsentAudit(admin, { days: 28 });
 };
 
@@ -279,6 +285,7 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
             </InlineStack>
 
             <ConsentAudit />
+            <Ga4Diagnose />
 
             <Card>
               <BlockStack gap="300">
@@ -474,6 +481,77 @@ function ConsentAudit() {
             <input type="hidden" name="_action" value="consent-audit" />
             <Button submit loading={running} disabled={running}>
               {r ? "Check again" : "Check last 28 days"}
+            </Button>
+          </fetcher.Form>
+        </InlineStack>
+      </BlockStack>
+    </Card>
+  );
+}
+
+/**
+ * Ask GA4 what it makes of a real purchase payload.
+ *
+ * The consent audit ruled out the two obvious explanations for Unassigned: consent was granted (61% of
+ * subscription checkouts carry a client id) and the session id lands at exactly the same rate, so the
+ * measurement ID matches too. Reading the send path confirms both ids and the real timestamp are sent.
+ * Beyond that only GA4 can say why it will not honour the session join — so this posts the exact payload to
+ * its debug endpoint and prints the reply verbatim rather than paraphrasing it.
+ */
+function Ga4Diagnose() {
+  const fetcher = useFetcher();
+  const d = fetcher.data?.diagnose;
+  const running = fetcher.state !== "idle";
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <SectionHeading
+          title="Ask GA4 why a purchase isn't attributed"
+          description="Takes your most recent order that carries both a GA client id and session id, rebuilds the exact payload we send for it, and asks Google to validate it. Uses GA4's debug endpoint, which checks the payload without recording anything, so it cannot create a conversion."
+        />
+        <Divider />
+        {d?.error && <Banner tone="critical" title="Couldn't run the check">{d.error}</Banner>}
+        {d && !d.error && (
+          <BlockStack gap="200">
+            <Banner tone={d.ok ? "success" : "critical"} title={d.ok ? "Google accepts the payload" : "Google rejected the payload"}>
+              {d.ok ? (
+                <p>
+                  GA4 reports no problems with what we send for order {d.order?.name}, including the session
+                  id. If those sales still show as Unassigned, the payload is not the cause and the next place
+                  to look is the GA4 property itself — check this order in DebugView.
+                </p>
+              ) : (
+                <BlockStack gap="100">
+                  {d.messages.map((m, i) => (
+                    <Text as="p" key={i}>{m}</Text>
+                  ))}
+                </BlockStack>
+              )}
+            </Banner>
+            <Text as="p" variant="bodySm" tone="subdued">
+              Order {d.order?.name} · client id {d.clientId} · session id {d.sessionId}
+              {d.minutesAfterSessionStart != null ? ` · placed ${d.minutesAfterSessionStart} min after that session began` : ""}
+            </Text>
+            {d.minutesAfterSessionStart != null && d.minutesAfterSessionStart > 30 && (
+              <Banner tone="warning" title="The session had probably already ended">
+                <p>
+                  GA4 closes a session after 30 minutes of inactivity and will not join an event to one that
+                  has ended — it starts a fresh, source-less session instead, which reports as Unassigned.
+                  This order was placed {d.minutesAfterSessionStart} minutes after its session began, so the
+                  id we send may point at a session GA4 has already closed.
+                </p>
+              </Banner>
+            )}
+            <Text as="p" variant="bodySm" tone="subdued">
+              Payload sent: <code>{JSON.stringify(d.body)}</code>
+            </Text>
+          </BlockStack>
+        )}
+        <InlineStack>
+          <fetcher.Form method="post">
+            <input type="hidden" name="_action" value="ga4-diagnose" />
+            <Button submit loading={running} disabled={running}>
+              {d ? "Check again" : "Validate a real purchase"}
             </Button>
           </fetcher.Form>
         </InlineStack>

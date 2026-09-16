@@ -1126,6 +1126,43 @@ export async function validateGa4Event(settings, { name, params = {}, clientId }
   }
 }
 
+/**
+ * Validate the EXACT payload sendGa4Event would post, against GA4's debug endpoint.
+ *
+ * Distinct from validateGa4Event above, which only checks a name + params with a throwaway client id. This
+ * one mirrors the real body byte-for-byte — client_id, session_id, timestamp_micros, consent block, the
+ * engagement_time_msec default — because the question it exists to answer is whether GA4 ACCEPTS the
+ * session join, and dropping those fields is exactly what would hide the answer.
+ *
+ * /debug/mp/collect validates without ingesting, so this is safe to run against production credentials and
+ * cannot create phantom conversions. Returns GA4's own messages verbatim plus the body that was sent, so
+ * the payload can be read rather than guessed at. The api_secret lives in the URL and is never returned.
+ */
+export async function validateGa4Payload(settings, { name, params = {}, clientId, sessionId, timestampMicros } = {}, { consent } = {}) {
+  const keys = readServerSideKeys(settings);
+  if (!settings?.ga4Id) return { ok: false, messages: ["No GA4 measurement ID set on the Tracking page."], body: null };
+  if (!keys.ga4ApiSecret) return { ok: false, messages: ["No GA4 Measurement Protocol secret saved on the Settings page."], body: null };
+
+  // Mirrors sendGa4Event + sendGa4 exactly. Kept adjacent to them on purpose: if their body changes and
+  // this does not, the diagnostic starts validating a payload the app never actually sends.
+  const resolvedClientId = clientId || stableClientId(params.transaction_id);
+  const withSession = sessionId && !params.session_id ? { session_id: String(sessionId), ...params } : params;
+  const body = { client_id: resolvedClientId, events: [{ name, params: { engagement_time_msec: 1, ...withSession } }] };
+  if (timestampMicros) body.timestamp_micros = timestampMicros;
+  const consentBlock = ga4Consent(consent);
+  if (consentBlock) body.consent = consentBlock;
+
+  const url = `https://www.google-analytics.com/debug/mp/collect?measurement_id=${encodeURIComponent(settings.ga4Id)}&api_secret=${encodeURIComponent(keys.ga4ApiSecret)}`;
+  try {
+    const res = await fetchWithTimeout(url, { method: "POST", body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    const messages = (json.validationMessages || []).map((m) => m.description || m.validationCode || JSON.stringify(m));
+    return { ok: messages.length === 0, messages, body };
+  } catch (e) {
+    return { ok: false, messages: [e?.message || "Request to GA4 failed."], body };
+  }
+}
+
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
