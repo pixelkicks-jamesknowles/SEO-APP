@@ -211,44 +211,13 @@
     return m ? m[1] : null;
   }
 
-  // Carry the visitor's REAL GA4 client_id + session_id onto the cart, so they arrive on the order as
-  // note attributes. orders/paid then sends the server-side purchase with the SAME pair, letting GA4 join
-  // it to this browser session and inherit its traffic source. Without them a webhook conversion opens a
-  // fresh, source-less session and lands in "Unassigned" — losing the channel.
-  // Analytics-consent gated, once per session (and again if the session rolls), best-effort.
-  function syncCartIds() {
-    try {
-      if (!analyticsAllowed() || !window.fetch) return;
-      var cid = gaClientId();
-      var sid = gaSessionId();
-      if (!cid) return; // the session id is only meaningful paired with its own client id
-      var stamp = cid + "|" + (sid || "");
-      try {
-        if (window.sessionStorage && sessionStorage.getItem("pxp_cart_ids") === stamp) return;
-      } catch (e) {
-        /* private mode — just re-send */
-      }
-      var attrs = { ga_client_id: cid };
-      if (sid) attrs.ga_session_id = sid;
-      fetch("/cart/update.js", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attributes: attrs }),
-        credentials: "same-origin",
-        keepalive: true
-      })
-        .then(function () {
-          try {
-            if (window.sessionStorage) sessionStorage.setItem("pxp_cart_ids", stamp);
-          } catch (e) {
-            /* ignore */
-          }
-        })
-        .catch(function () {});
-    } catch (e) {
-      /* never throw on the storefront */
-    }
-  }
+  // NOTE: there used to be a SECOND `function syncCartIds()` here, an older version that wrote only the
+  // GA ids and bailed early on `!analyticsAllowed()`. Because a later function declaration overwrites an
+  // earlier one of the same name, THAT is the one that ran — the consent-capturing version above was dead
+  // code from the day it was added. Orders carried ga_client_id and ga_session_id but never
+  // pxp_analytics_consent, so "orders opted out of tracking" read 0 of 6,067 and the app blamed a missing
+  // theme embed that was enabled all along. Keep exactly one definition; tests/embed-no-duplicate-
+  // functions.test.js now fails the build if a duplicate reappears.
   // gtag may not have written _ga/_ga_* yet on a first hit, and consent may land later — so try now,
   // once shortly after, and again when the shopper's consent is collected.
   syncCartIds();
