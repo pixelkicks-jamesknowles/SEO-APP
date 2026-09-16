@@ -8,13 +8,28 @@
 //
 // THE INFERENCE RUNS ONE WAY. A MISSING id is ambiguous: consent denied, the embed never ran, an ad
 // blocker, or gtag simply had not written `_ga` yet. So this yields a FLOOR on the granted rate and never
-// a denied count. Every label here says "floor" for that reason — reading "no id" as "opted out" would
-// invent a number.
+// a denied count. Every label says "floor" for that reason — reading "no id" as "opted out" would invent
+// a number.
+//
+// WHY IT ALSO COUNTS session id AND the consent attribute. Three different questions, one scan:
+//   ga_client_id           → was consent granted? (the floor above)
+//   ga_session_id          → can GA4 actually ATTRIBUTE the purchase? A client id alone is not enough; GA4
+//                            needs client_id + session_id to join the hit to a session that has a traffic
+//                            source. The embed writes the session id only when it can read a
+//                            `_ga_<CONTAINER>` cookie, and that suffix comes from the Measurement ID
+//                            configured on the Tracking page. A different on-page property means that
+//                            cookie never exists, so client id lands and session id does not — which looks
+//                            exactly like "consent is fine but everything is Unassigned".
+//   pxp_analytics_consent  → is the CURRENT embed actually live? It has only been written since
+//                            2026-09-16, so a count of zero on recent orders means the extension deploy
+//                            never reached storefronts.
 
 /** Recharge's own markers, matching rechargeOrderType() in subscription.js. Keep the two in step or this
  *  audit's split will disagree with how the app classifies the same orders. */
 const RECURRING = /\brecurring_subscription\b|subscription recurring order|autorenew/;
 const FIRST_SUB = /\bcheckout_subscription\b|subscription first order/;
+
+const attrValue = (node, key) => (node?.customAttributes || []).find((a) => a?.key === key)?.value || null;
 
 /** Order type from a Shopify GraphQL order node (tags array + lineItems.nodes[].sellingPlan). Pure. */
 export function classifyOrderType(node) {
@@ -29,17 +44,36 @@ export function classifyOrderType(node) {
 
 /** True when the order carries a non-empty ga_client_id cart attribute. Pure. */
 export function hasClientId(node) {
-  return (node?.customAttributes || []).some((a) => a?.key === "ga_client_id" && a?.value);
+  return !!attrValue(node, "ga_client_id");
 }
 
-/** Fold a page of order nodes into a { type -> { total, withId } } tally. Mutates and returns `tally` so
- *  it can accumulate across pages. Pure apart from that. */
+/** True when the order carries a non-empty ga_session_id. Without this GA4 cannot join the purchase to a
+ *  session, so it opens a fresh source-less one and the sale reports as Unassigned. Pure. */
+export function hasSessionId(node) {
+  return !!attrValue(node, "ga_session_id");
+}
+
+/** "granted" | "denied" | null — the explicit consent attribute the CURRENT embed writes. null means the
+ *  attribute is absent entirely, which for a recent order means the new embed is not live. Pure. */
+export function consentSignal(node) {
+  const v = String(attrValue(node, "pxp_analytics_consent") || "").toLowerCase();
+  return v === "granted" || v === "denied" ? v : null;
+}
+
+const emptyBucket = () => ({ total: 0, withId: 0, withSession: 0, consentGranted: 0, consentDenied: 0 });
+
+/** Fold a page of order nodes into a { type -> bucket } tally. Mutates and returns `tally` so it can
+ *  accumulate across pages. Pure apart from that. */
 export function foldConsentAudit(nodes, tally = {}) {
   for (const node of nodes || []) {
     const kind = classifyOrderType(node);
-    const t = tally[kind] || { total: 0, withId: 0 };
+    const t = tally[kind] || emptyBucket();
     t.total += 1;
     if (hasClientId(node)) t.withId += 1;
+    if (hasSessionId(node)) t.withSession += 1;
+    const signal = consentSignal(node);
+    if (signal === "granted") t.consentGranted += 1;
+    if (signal === "denied") t.consentDenied += 1;
     tally[kind] = t;
   }
   return tally;
@@ -48,20 +82,49 @@ export function foldConsentAudit(nodes, tally = {}) {
 /**
  * Turn a tally into the reportable shape.
  *
- * Renewals are reported but EXCLUDED from the headline floor: a recurring order never has a browser
- * session, so it cannot carry the attribute and its absence says nothing about consent. Counting them
- * would depress the rate for a reason unrelated to the question. Pure.
+ * Renewals are reported but EXCLUDED from the headline figures: a recurring order never has a browser
+ * session, so it cannot carry any of these attributes and its absence says nothing. Counting them would
+ * depress every rate for a reason unrelated to the question. Pure.
  */
 export function summarizeConsentAudit(tally = {}) {
+  const pct = (n, d) => (d ? (n / d) * 100 : 0);
   const rows = Object.entries(tally)
-    .map(([type, t]) => ({ type, total: t.total, withId: t.withId, pct: t.total ? (t.withId / t.total) * 100 : 0 }))
+    .map(([type, t]) => ({
+      type,
+      total: t.total,
+      withId: t.withId,
+      withSession: t.withSession,
+      pct: pct(t.withId, t.total),
+      sessionPct: pct(t.withSession, t.total),
+    }))
     .sort((a, b) => b.total - a.total);
-  const live = rows
-    .filter((r) => r.type !== "renewal")
-    .reduce((a, r) => ({ total: a.total + r.total, withId: a.withId + r.withId }), { total: 0, withId: 0 });
+
+  const live = Object.entries(tally)
+    .filter(([type]) => type !== "renewal")
+    .reduce(
+      (a, [, t]) => ({
+        total: a.total + t.total,
+        withId: a.withId + t.withId,
+        withSession: a.withSession + t.withSession,
+      }),
+      { total: 0, withId: 0, withSession: 0 },
+    );
+
+  // The explicit attribute is counted across EVERY order type. The question it answers is "is the current
+  // embed live at all", and a single one anywhere proves it is.
+  const consent = Object.values(tally).reduce(
+    (a, t) => ({ granted: a.granted + t.consentGranted, denied: a.denied + t.consentDenied }),
+    { granted: 0, denied: 0 },
+  );
+
   return {
     rows,
-    excludingRenewals: { ...live, floorPct: live.total ? (live.withId / live.total) * 100 : 0 },
+    excludingRenewals: {
+      ...live,
+      floorPct: pct(live.withId, live.total),
+      sessionPct: pct(live.withSession, live.total),
+    },
+    consentSignal: { ...consent, total: consent.granted + consent.denied },
     scanned: rows.reduce((n, r) => n + r.total, 0),
   };
 }

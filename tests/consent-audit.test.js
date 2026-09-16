@@ -1,4 +1,4 @@
-import { classifyOrderType, hasClientId, foldConsentAudit, summarizeConsentAudit } from "../app/lib/consent-audit.js";
+import { classifyOrderType, hasClientId, hasSessionId, consentSignal, foldConsentAudit, summarizeConsentAudit } from "../app/lib/consent-audit.js";
 
 // Shapes taken from REAL Naturaw orders pulled 2026-09-14, so the classification is pinned against what
 // the store actually sends rather than what we imagine it sends.
@@ -80,5 +80,53 @@ describe("summarizeConsentAudit", () => {
   test("rows are ordered by volume so the dominant order type reads first", () => {
     const tally = foldConsentAudit([renewal, renewal, renewal, oneOffNoId], {});
     expect(summarizeConsentAudit(tally).rows[0].type).toBe("renewal");
+  });
+});
+
+// The session id is the number that actually decides attribution. A client id proves consent was granted;
+// GA4 still needs client_id AND session_id to join the purchase to a session that has a traffic source.
+describe("hasSessionId / consentSignal", () => {
+  const withBoth = { customAttributes: [{ key: "ga_client_id", value: "1.2" }, { key: "ga_session_id", value: "999" }] };
+  const idOnly = { customAttributes: [{ key: "ga_client_id", value: "1.2" }] };
+
+  test("session id is read independently of the client id", () => {
+    expect(hasSessionId(withBoth)).toBe(true);
+    expect(hasSessionId(idOnly)).toBe(false);
+    expect(hasClientId(idOnly)).toBe(true); // the case that looks like "consent is fine but all Unassigned"
+  });
+
+  test("consentSignal only accepts the two real values", () => {
+    expect(consentSignal({ customAttributes: [{ key: "pxp_analytics_consent", value: "granted" }] })).toBe("granted");
+    expect(consentSignal({ customAttributes: [{ key: "pxp_analytics_consent", value: "DENIED" }] })).toBe("denied");
+    expect(consentSignal({ customAttributes: [{ key: "pxp_analytics_consent", value: "maybe" }] })).toBeNull();
+    expect(consentSignal(idOnly)).toBeNull();
+  });
+});
+
+describe("summarizeConsentAudit — the attribution diagnosis", () => {
+  const order = (attrs) => ({ tags: ["One-Time"], customAttributes: attrs, lineItems: { nodes: [{ sellingPlan: null }] } });
+  const cid = { key: "ga_client_id", value: "1.2" };
+  const sid = { key: "ga_session_id", value: "999" };
+
+  test("client id high but session id low is reported as its own gap", () => {
+    // This is the shape that means consent is NOT the problem: shoppers consented, the id landed, but the
+    // embed could not find the `_ga_<CONTAINER>` cookie, so GA4 has no session to attribute against.
+    const tally = foldConsentAudit([order([cid]), order([cid]), order([cid]), order([cid, sid])], {});
+    const s = summarizeConsentAudit(tally);
+    expect(s.excludingRenewals.floorPct).toBe(100);
+    expect(s.excludingRenewals.sessionPct).toBe(25);
+  });
+
+  test("the explicit consent attribute is counted across every order type", () => {
+    // It answers "is the current embed live at all", so a renewal carrying one still counts.
+    const tally = foldConsentAudit(
+      [order([{ key: "pxp_analytics_consent", value: "granted" }]), order([{ key: "pxp_analytics_consent", value: "denied" }]), order([cid])],
+      {},
+    );
+    expect(summarizeConsentAudit(tally).consentSignal).toEqual({ granted: 1, denied: 1, total: 2 });
+  });
+
+  test("no consent attribute anywhere reports zero, which is the 'extension never shipped' signal", () => {
+    expect(summarizeConsentAudit(foldConsentAudit([order([cid, sid])], {})).consentSignal.total).toBe(0);
   });
 });

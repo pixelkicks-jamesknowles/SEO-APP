@@ -413,6 +413,45 @@ function ConsentAudit() {
               the embed had not run, an ad blocker intervened, or Google Analytics had not yet set its cookie
               — so the real figure is higher than this, never lower.
             </Text>
+
+            {/* The actual diagnostic. A client id proves consent; it does NOT get the sale attributed. GA4
+                needs client_id AND session_id to join the purchase to a session that has a traffic source.
+                The embed writes the session id only when it can read a `_ga_<CONTAINER>` cookie, and that
+                suffix comes from the Measurement ID on the Tracking page — so a different on-page property
+                means client id lands, session id never does, and every sale reports as Unassigned. A big
+                gap between these two numbers IS that fault. */}
+            <Banner
+              tone={
+                r.excludingRenewals.withId > 0 && r.excludingRenewals.sessionPct < r.excludingRenewals.floorPct / 2
+                  ? "warning"
+                  : "info"
+              }
+              title={`${r.excludingRenewals.sessionPct.toFixed(1)}% also carried a GA session id`}
+            >
+              <p>
+                {r.excludingRenewals.withSession.toLocaleString()} of{" "}
+                {r.excludingRenewals.total.toLocaleString()} orders. GA4 needs the session id as well as the
+                client id to give a sale a channel, so this is the number that decides whether purchases land
+                in Unassigned.
+              </p>
+              {r.excludingRenewals.withId > 0 && r.excludingRenewals.sessionPct < r.excludingRenewals.floorPct / 2 && (
+                <p>
+                  Far below the client-id rate, which points at the GA4 Measurement ID on the Tracking page
+                  not matching the property actually firing on your storefront. When they differ the embed
+                  cannot find the session cookie, so the session id is never captured.
+                </p>
+              )}
+            </Banner>
+
+            {/* Is the CURRENT embed live? This attribute has only been written since 2026-09-16, so zero of
+                them on recent orders means the extension deploy never reached storefronts. */}
+            <Banner tone={r.consentSignal.total > 0 ? "success" : "warning"} title={r.consentSignal.total > 0 ? "Consent recording is live" : "Consent recording is not reaching orders"}>
+              <p>
+                {r.consentSignal.total > 0
+                  ? `${r.consentSignal.total.toLocaleString()} of the orders scanned carry an explicit consent attribute (${r.consentSignal.granted.toLocaleString()} granted, ${r.consentSignal.denied.toLocaleString()} declined). That figure will grow to cover every order from here on.`
+                  : "None of the orders scanned carry the explicit consent attribute. It has only been written since the latest theme-extension release, so either that release has not reached your storefront yet, or no orders have been placed since it did."}
+              </p>
+            </Banner>
             {!r.complete && (
               <Banner tone="info">
                 Stopped early to keep the page responsive, so this covers the {r.scanned.toLocaleString()} most
@@ -422,8 +461,9 @@ function ConsentAudit() {
             <BlockStack gap="100">
               {r.rows.map((row) => (
                 <Text as="p" variant="bodySm" tone="subdued" key={row.type}>
-                  {row.type}: {row.withId.toLocaleString()} of {row.total.toLocaleString()} ({pct(row.pct)})
-                  {row.type === "renewal" ? " — excluded from the figure above" : ""}
+                  {row.type}: client id {row.withId.toLocaleString()}/{row.total.toLocaleString()} ({pct(row.pct)})
+                  {" · "}session id {row.withSession.toLocaleString()}/{row.total.toLocaleString()} ({pct(row.sessionPct)})
+                  {row.type === "renewal" ? " — excluded from the figures above" : ""}
                 </Text>
               ))}
             </BlockStack>

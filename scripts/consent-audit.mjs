@@ -87,15 +87,30 @@ const sum = summarizeConsentAudit(tally);
 const pct = (n) => `${n.toFixed(1)}%`;
 console.error(`\r${" ".repeat(24)}\r`);
 console.log(`Consent audit — ${SHOP}, paid orders since ${since} (${sum.scanned} scanned)\n`);
-console.log("order type                 orders   with ga_client_id   granted (floor)");
+console.log("order type                 orders    client id            session id");
 for (const r of sum.rows) {
-  console.log(`${r.type.padEnd(24)} ${String(r.total).padStart(7)} ${String(r.withId).padStart(19)} ${pct(r.pct).padStart(17)}`);
+  const cid = `${r.withId} (${pct(r.pct)})`;
+  const sid = `${r.withSession} (${pct(r.sessionPct)})`;
+  console.log(`${r.type.padEnd(24)} ${String(r.total).padStart(7)} ${cid.padStart(18)} ${sid.padStart(21)}`);
 }
 const live = sum.excludingRenewals;
+console.log(`\nExcluding renewals (${live.total} orders):`);
+console.log(`  client id  ${live.withId} (${pct(live.floorPct)})  → analytics consent was granted for AT LEAST this many.`);
+console.log(`  session id ${live.withSession} (${pct(live.sessionPct)})  → GA4 needs BOTH to give a sale a channel.`);
+console.log("\nA missing client id is ambiguous (denied / embed not run / ad blocker / no _ga yet), so the granted");
+console.log("rate is higher than that floor, never lower.");
+
+// The two numbers together are the diagnosis. Consent explains Unassigned only if the CLIENT id rate is
+// low; if client id is high but session id is not, consent is fine and the session join is what is broken.
+if (live.withId > 0 && live.sessionPct < live.floorPct / 2) {
+  console.log("\n⚠ Session id is far below client id. Consent is NOT what is causing Unassigned — the embed is");
+  console.log("  capturing consent but cannot find the `_ga_<CONTAINER>` cookie, which means the GA4 Measurement");
+  console.log("  ID on the Tracking page does not match the property firing on the storefront. Compare the two.");
+}
+
+const c = sum.consentSignal;
 console.log(
-  `\nExcluding renewals: ${live.withId} of ${live.total} carried a client id → analytics consent was granted for AT LEAST ${pct(live.floorPct)} of them.`,
+  c.total > 0
+    ? `\nExplicit consent attribute present on ${c.total} scanned orders (${c.granted} granted, ${c.denied} declined) — the current embed is live.`
+    : "\n⚠ No order scanned carries the explicit consent attribute. It has only been written since the latest theme-extension release, so either that release never reached the storefront or no orders have been placed since it did.",
 );
-console.log("A missing id is ambiguous (denied / embed not run / ad blocker / no _ga yet), so the true rate is higher than this floor, never lower.");
-console.log("\nCompare against the share of purchases GA4 gave a real channel to. If this floor is much higher,");
-console.log("consent is not what is causing Unassigned — check the GA4 measurement ID on the Tracking page");
-console.log("matches the property actually firing on the storefront.");
