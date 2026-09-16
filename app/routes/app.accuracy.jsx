@@ -1,8 +1,9 @@
 import { Suspense } from "react";
-import { useLoaderData, useRevalidator, Await } from "@remix-run/react";
+import { useLoaderData, useRevalidator, Await, useFetcher } from "@remix-run/react";
 import { defer } from "@remix-run/node";
-import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider, SkeletonBodyText, SkeletonDisplayText } from "@shopify/polaris";
-import { authenticate } from "../shopify.server";
+import { Page, Card, BlockStack, InlineStack, Text, Badge, Banner, ProgressBar, Divider, SkeletonBodyText, SkeletonDisplayText, Button } from "@shopify/polaris";
+import { authenticate, unauthenticated } from "../shopify.server";
+import { runConsentAudit } from "../lib/consent-audit.server";
 import prisma from "../db.server";
 import { computeHealth } from "../lib/health.server";
 import { getMatchQuality } from "../lib/delivery.server";
@@ -18,6 +19,16 @@ const ID_LABELS = [
   ["externalId", "Customer ID"], ["fbp", "Meta browser ID (fbp)"], ["fbc", "Meta click ID (fbc)"],
   ["clientIp", "IP address"], ["userAgent", "User agent"],
 ];
+
+// On-demand historical consent audit. Inline rather than a queued job: it writes nothing, and the merchant
+// asking is comparing a number against a GA4 report they have open right now.
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const form = await request.formData();
+  if (form.get("_action") !== "consent-audit") return { ok: true };
+  const { admin } = await unauthenticated.admin(session.shop);
+  return await runConsentAudit(admin, { days: 28 });
+};
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -267,6 +278,8 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
               />
             </InlineStack>
 
+            <ConsentAudit />
+
             <Card>
               <BlockStack gap="300">
                 <SectionHeading
@@ -355,5 +368,76 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
           </>
         )}
       </BlockStack>
+  );
+}
+
+
+/**
+ * Historical consent evidence, on demand.
+ *
+ * The consent tiles above only cover orders placed since the embed started recording consent (2026-09-16).
+ * For everything before that the signal was never written, so the question "did shoppers actually consent?"
+ * can only be answered by inference — see lib/consent-audit.js for why ga_client_id is the evidence and why
+ * it can only ever produce a FLOOR, never a denied count.
+ *
+ * Exists to settle one specific argument: whether consent explains a high "Unassigned" share in GA4. If the
+ * floor is far above the share GA4 gave a real channel to, consent is not the cause.
+ */
+function ConsentAudit() {
+  const fetcher = useFetcher();
+  const r = fetcher.data;
+  const running = fetcher.state !== "idle";
+  const pct = (n) => `${n.toFixed(1)}%`;
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <SectionHeading
+          title="Check historical consent"
+          description="Orders placed before consent recording started carry no consent signal, but one can be inferred: the embed only ever wrote a GA client id once analytics consent was granted. This counts how many of your recent orders carry one. It reads your orders and changes nothing."
+        />
+        <Divider />
+        {r?.error && <Banner tone="critical" title="Couldn't finish the audit">{r.error}</Banner>}
+        {r && !r.error && (
+          <BlockStack gap="200">
+            <Text as="p" variant="headingLg">
+              At least {pct(r.excludingRenewals.floorPct)} granted
+            </Text>
+            <Text as="p" tone="subdued">
+              {r.excludingRenewals.withId.toLocaleString()} of {r.excludingRenewals.total.toLocaleString()} orders
+              since {r.since} carried a GA client id, so analytics consent was granted for at least that many.
+              Renewals are excluded: they have no browser session, so they can never carry one and their
+              absence says nothing about consent.
+            </Text>
+            <Text as="p" tone="subdued">
+              This is a floor, never a ceiling. A missing id can mean consent was declined, but equally that
+              the embed had not run, an ad blocker intervened, or Google Analytics had not yet set its cookie
+              — so the real figure is higher than this, never lower.
+            </Text>
+            {!r.complete && (
+              <Banner tone="info">
+                Stopped early to keep the page responsive, so this covers the {r.scanned.toLocaleString()} most
+                recent orders rather than the full {r.days} days. It is a recent sample, not a total.
+              </Banner>
+            )}
+            <BlockStack gap="100">
+              {r.rows.map((row) => (
+                <Text as="p" variant="bodySm" tone="subdued" key={row.type}>
+                  {row.type}: {row.withId.toLocaleString()} of {row.total.toLocaleString()} ({pct(row.pct)})
+                  {row.type === "renewal" ? " — excluded from the figure above" : ""}
+                </Text>
+              ))}
+            </BlockStack>
+          </BlockStack>
+        )}
+        <InlineStack>
+          <fetcher.Form method="post">
+            <input type="hidden" name="_action" value="consent-audit" />
+            <Button submit loading={running} disabled={running}>
+              {r ? "Check again" : "Check last 28 days"}
+            </Button>
+          </fetcher.Form>
+        </InlineStack>
+      </BlockStack>
+    </Card>
   );
 }
