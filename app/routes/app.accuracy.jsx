@@ -269,7 +269,14 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 sub={
                   purchaseConsentSeen === 0
                     ? ordersNoConsentSignal > 0
-                      ? `No consent signal captured on any of ${ordersNoConsentSignal.toLocaleString()} paid orders — enable the app embed in your theme so shopper consent is recorded on the order`
+                      // NOT "enable the app embed" — that advice was wrong and cost real time. The embed
+                      // was enabled all along; the attribute it should have written was dead code (a
+                      // duplicate syncCartIds shadowed it) until the 2026-09-16 release, so no order before
+                      // then can ever carry one. Nothing to fix and nothing to backfill: consent DENIED is
+                      // unknowable in hindsight (unlike granted, which the historical audit below infers
+                      // from ga_client_id), so filling only the granted side would turn this into a
+                      // confident 0% opt-out rather than an honest blank.
+                      ? `Not recorded on any of ${ordersNoConsentSignal.toLocaleString()} paid orders. Consent has only been captured since the latest theme-extension release, and it cannot be recovered for earlier orders — see the historical estimate below.`
                       : "No checkout consent data yet"
                     : `of ${purchaseConsentSeen.toLocaleString()} orders with a consent signal` +
                       (ordersNoConsentSignal > 0 ? ` · ${ordersNoConsentSignal.toLocaleString()} more had none captured` : "")
