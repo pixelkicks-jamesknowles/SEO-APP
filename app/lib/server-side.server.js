@@ -1163,6 +1163,33 @@ export async function validateGa4Payload(settings, { name, params = {}, clientId
   }
 }
 
+
+// GA4 session ids ARE the session's start time in unix seconds, so staleness is measurable without any
+// extra state.
+//
+// The cutoff is deliberately GENEROUS. GA4 ends a session after 30 minutes of INACTIVITY, not 30 minutes
+// from its start — a shopper who browses for an hour and then buys is on one long, live session, and its
+// id is legitimately an hour old. Dropping that would throw away a join that would have worked, which is
+// the only way this guard can do harm: keeping a dead id and dropping a live one both end in Unassigned,
+// but dropping a LIVE one loses real attribution.
+//
+// So this only discards ids that cannot belong to a living session under any reading. Four hours of
+// unbroken activity is implausible; four hours is not a claim about GA4's timeout, it is the point past
+// which being wrong costs nothing.
+const SESSION_MAX_AGE_SEC = 4 * 60 * 60;
+
+export function isSessionPlausiblyLive(sessionId, timestampMicros) {
+  const started = Number(sessionId);
+  if (!Number.isFinite(started) || started <= 0) return false;
+  // No event timestamp means we are sending "now", so measure against now.
+  const atSec = timestampMicros ? Number(timestampMicros) / 1e6 : Date.now() / 1000;
+  if (!Number.isFinite(atSec)) return true; // can't tell — don't drop a possibly-good id
+  const age = atSec - started;
+  // A negative age means the ids disagree about time (clock skew, or a malformed id). Trust it rather than
+  // silently dropping, since the failure mode of dropping is losing a working join.
+  return age < SESSION_MAX_AGE_SEC;
+}
+
 // Send a FULL GA4 event (name + params, e.g. the subscription_purchase event from orders/paid).
 // Forwards the whole params object verbatim (this path is NOT matrix-gated — it's an explicit,
 // distinctly-named conversion that never collides with the native purchase). Best-effort.
@@ -1177,7 +1204,15 @@ export async function sendGa4Event(settings, { name, params = {}, clientId, sess
   // session_id joins this server-side conversion to the shopper's REAL browser session, so GA4 gives it
   // that session's traffic source. Without it GA4 opens a new, source-less session and the purchase
   // reports as "Unassigned". Only ever sent paired with its own client_id (see subscription-cron).
-  const withSession = sessionId && !params.session_id ? { session_id: String(sessionId), ...params } : params;
+  //
+  // ...but only while the session could plausibly still be ALIVE. The id rides on a cart attribute written
+  // once and never refreshed, so by checkout it can be badly stale — a live order was observed sending one
+  // 47 DAYS old (the session id equalled the client id's own first-seen timestamp, i.e. that visitor's very
+  // first session). GA4 will not join an event to a session that has ended; it silently opens a fresh,
+  // source-less one instead, so a dead id is not merely useless, it manufactures an empty session and
+  // guarantees Unassigned.
+  const effectiveSessionId = isSessionPlausiblyLive(sessionId, timestampMicros) ? sessionId : null;
+  const withSession = effectiveSessionId && !params.session_id ? { session_id: String(effectiveSessionId), ...params } : params;
   const event = { name, params: { engagement_time_msec: 1, ...withSession } };
   const r = await sendGa4(settings.ga4Id, keys.ga4ApiSecret, resolvedClientId, event, { consent, timestampMicros });
   // `job` mirrors a buildJobs "ga4" job so a failed webhook send can be queued for retry (outbox)

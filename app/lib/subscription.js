@@ -201,6 +201,22 @@ const attach = (params, attribution) => {
   if (attribution?.source) params.source = attribution.source;
   if (attribution?.medium) params.medium = attribution.medium;
   if (attribution?.campaign) params.campaign = attribution.campaign;
+  // ALSO emit GA4's native Measurement Protocol attribution names. `source`/`medium`/`campaign` are just
+  // custom parameters to GA4: inert unless someone registers them as custom dimensions, and invisible to
+  // its own channel reporting. `campaign_source`/`campaign_medium`/`campaign_name` are the names GA4 reads
+  // for traffic-source attribution on an MP event.
+  //
+  // This matters because the session join cannot be relied on for these orders. The session id rides on a
+  // cart attribute written once and never refreshed, so by checkout it can be hours or (observed on a live
+  // order) 47 DAYS stale — GA4 will not join an event to a session that ended, it opens a fresh source-less
+  // one, and the sale reports as Unassigned. Carrying the channel on the event itself does not depend on a
+  // session being alive.
+  //
+  // Both sets are sent: the generic names keep any custom dimensions already registered against them
+  // working, and GA4 ignores parameters it has no use for.
+  if (attribution?.source) params.campaign_source = attribution.source;
+  if (attribution?.medium) params.campaign_medium = attribution.medium;
+  if (attribution?.campaign) params.campaign_name = attribution.campaign;
 };
 
 // order_type / customer_type custom dimensions (register them in GA4). Kept separate from attach() so the
