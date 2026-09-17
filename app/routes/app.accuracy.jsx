@@ -263,26 +263,27 @@ function AccuracyBody({ days, totals, recoveredCurrency, alerts, outboxPending, 
                 progress={consentRate ?? 0}
                 tone={consentRate == null ? (consentUnknown > 0 ? "warning" : undefined) : consentRate < 50 ? "critical" : undefined}
               />
-              <Stat basis="220px"
-                title="Orders opted out of tracking (30d)"
-                value={optedOutOrders.toLocaleString()}
-                sub={
-                  purchaseConsentSeen === 0
-                    ? ordersNoConsentSignal > 0
-                      // NOT "enable the app embed" — that advice was wrong and cost real time. The embed
-                      // was enabled all along; the attribute it should have written was dead code (a
-                      // duplicate syncCartIds shadowed it) until the 2026-09-16 release, so no order before
-                      // then can ever carry one. Nothing to fix and nothing to backfill: consent DENIED is
-                      // unknowable in hindsight (unlike granted, which the historical audit below infers
-                      // from ga_client_id), so filling only the granted side would turn this into a
-                      // confident 0% opt-out rather than an honest blank.
-                      ? `Not recorded on any of ${ordersNoConsentSignal.toLocaleString()} paid orders. Consent has only been captured since the latest theme-extension release, and it cannot be recovered for earlier orders — see the historical estimate below.`
-                      : "No checkout consent data yet"
-                    : `of ${purchaseConsentSeen.toLocaleString()} orders with a consent signal` +
-                      (ordersNoConsentSignal > 0 ? ` · ${ordersNoConsentSignal.toLocaleString()} more had none captured` : "")
-                }
-                tone={optedOutOrders > 0 ? "warning" : undefined}
-              />
+              {/* Hidden until a single order carries a consent signal, rather than removed outright.
+                  Consent has only been recorded since the 2026-09-16 theme-extension release (before that
+                  the attribute was dead code — a duplicate syncCartIds shadowed it), and it cannot be
+                  backfilled: the inference that recovers history only proves consent was GRANTED, never
+                  denied. A missing ga_client_id is equally an ad blocker, an embed that had not run, or
+                  gtag not having set its cookie.
+                  So showing this now can only print 0, which reads as "nobody opted out" rather than "we
+                  have no idea" — a confident wrong number in a card whose whole job is honesty about what
+                  tracking missed. It reappears by itself as soon as post-release orders arrive; the
+                  historical picture lives in the estimate below, correctly labelled as a floor. */}
+              {purchaseConsentSeen > 0 && (
+                <Stat basis="220px"
+                  title="Orders opted out of tracking (30d)"
+                  value={optedOutOrders.toLocaleString()}
+                  sub={
+                    `of ${purchaseConsentSeen.toLocaleString()} orders with a consent signal` +
+                    (ordersNoConsentSignal > 0 ? ` · ${ordersNoConsentSignal.toLocaleString()} more had none captured` : "")
+                  }
+                  tone={optedOutOrders > 0 ? "warning" : undefined}
+                />
+              )}
               <Stat basis="220px"
                 title="Retry queue"
                 value={(outboxPending || 0).toLocaleString()}
