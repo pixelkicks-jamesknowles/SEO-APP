@@ -14,7 +14,12 @@
     try {
       if (!window.fetch) return;
       var allowed = analyticsAllowed();
-      var attrs = { pxp_analytics_consent: allowed ? "granted" : "denied" };
+      // Build marker, so "is the new extension actually live on the storefront?" is answerable from order
+      // data instead of from the Partner Dashboard. Without it the only evidence was the absence of
+      // pxp_analytics_consent, which is indistinguishable from "no orders yet" — and a release that was
+      // created but never made live looks identical to one that shipped fine.
+      // Bump this whenever the embed's cart-attribute behaviour changes.
+      var attrs = { pxp_analytics_consent: allowed ? "granted" : "denied", pxp_embed: "2" };
       var cid = null;
       var sid = null;
       if (allowed) {

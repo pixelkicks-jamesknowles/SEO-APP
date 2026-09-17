@@ -152,24 +152,24 @@ async function clearWindow(shopDomain, sinceDate) {
   await prisma.customerLifetime.deleteMany({ where: { shopDomain } }).catch(() => {});
 }
 
+
 /**
- * Persist a page's aggregates (increment) + first-touch learned (create-only) + the (unattributed) orders.
- * Runs on `db`, which is a Prisma transaction client so the whole page commits atomically with the cursor
- * advance (see the caller). Errors PROPAGATE — a failed write must roll the page back, not be swallowed,
- * or the increments could land without the cursor moving and double-count on retry.
+ * The IDEMPOTENT half of a page, run OUTSIDE the transaction and BEFORE it.
+ *
+ * Every write here is keyed on something stable — upsert by order id, create-only, or a null-guarded
+ * fill-in — so re-running a page re-applies them harmlessly. That is what makes them safe to lift out of
+ * the transaction, and lifting them out is the point: they were the bulk of it (up to PAGE_SIZE writes
+ * each), and a transaction that large is what made pages outgrow their timeout on a long history.
+ *
+ * BEFORE, not after, and the order matters. Run before, a failed transaction simply re-applies these on
+ * the retry; a committed one means they were already durable. Run AFTER, a process death between commit
+ * and these writes would advance the cursor past a page whose first-touch and (unattributed) rows never
+ * landed — lost silently and permanently, since the page is never revisited.
+ *
+ * Errors propagate here too. These run on the plain client rather than a transaction, so a failure leaves
+ * the cursor where it was and the page retries.
  */
-async function persist(db, shopDomain, rows, learned, unattributedOrders = [], lifetimeUpdates = [], firstSubscriptionOrder = new Map()) {
-  // Per-customer lifetime (for LTV / retention by channel). Increment — safe because the page commits
-  // atomically with the cursor, and a fresh backfill resets these rows (clearWindow). Backfill is
-  // oldest-first, so `create` captures the true firstOrderAt; lastOrderAt is bumped to each page's max.
-  for (const l of lifetimeUpdates) {
-    if (!l.customerKey) continue;
-    await db.customerLifetime.upsert({
-      where: { shopDomain_customerKey: { shopDomain, customerKey: l.customerKey } },
-      create: { shopDomain, customerKey: l.customerKey, revenue: l.revenueDelta, orders: l.orderDelta, firstOrderAt: l.firstOrderAt, lastOrderAt: l.lastOrderAt },
-      update: { revenue: { increment: l.revenueDelta }, orders: { increment: l.orderDelta }, lastOrderAt: l.lastOrderAt },
-    });
-  }
+async function persistIdempotent(db, shopDomain, learned, unattributedOrders = [], firstSubscriptionOrder = new Map()) {
   // The individual (unattributed) orders — upsert by orderId so a re-processed page (lease expiry, retry)
   // can't duplicate them, unlike the increment-based aggregate rows.
   for (const o of unattributedOrders) {
@@ -185,27 +185,6 @@ async function persist(db, shopDomain, rows, learned, unattributedOrders = [], l
       customerKey: o.customerKey,
     };
     await db.unattributedOrder.upsert({ where: { shopDomain_orderId: { shopDomain, orderId: o.orderId } }, create: { shopDomain, orderId: o.orderId, ...data }, update: data });
-  }
-  for (const r of rows) {
-    await db.channelRevenueDaily.upsert({
-      where: { shopDomain_date_source_medium: { shopDomain, date: r.date, source: r.source, medium: r.medium } },
-      create: {
-        shopDomain,
-        date: r.date,
-        source: r.source,
-        medium: r.medium,
-        orders: r.orders,
-        revenue: r.revenue,
-        subscriptionOrders: r.subscriptionOrders,
-        subscriptionRevenue: r.subscriptionRevenue,
-      },
-      update: {
-        orders: { increment: r.orders },
-        revenue: { increment: r.revenue },
-        subscriptionOrders: { increment: r.subscriptionOrders },
-        subscriptionRevenue: { increment: r.subscriptionRevenue },
-      },
-    });
   }
   // Seed CustomerAttribution so FUTURE renewals inherit the acquiring channel. `create`-only: never
   // clobber a first touch the live pipeline already captured (it saw the real visit; we're inferring).
@@ -247,6 +226,55 @@ async function persist(db, shopDomain, rows, learned, unattributedOrders = [], l
     await db.customerAttribution.updateMany({
       where: { shopDomain, customerKey, firstSubscriptionOrderId: null },
       data: { firstSubscriptionOrderId: String(orderId) },
+    });
+  }
+}
+
+/**
+ * The INCREMENT-based half of a page: the only writes that genuinely need to commit atomically with the
+ * cursor. Runs on `db`, a Prisma transaction client.
+ *
+ * Split out from the idempotent writes (persistIdempotent) because a transaction holding hundreds of
+ * sequential upserts is what made a page outgrow its timeout as the tables filled. Only these two tables
+ * increment, so only these can double-count if the cursor advances without them — everything else is an
+ * upsert keyed on something stable and can safely re-run.
+ *
+ * Errors PROPAGATE — a failed write must roll the page back, not be swallowed. Note that inside a Postgres
+ * transaction a swallowed error is not even survivable: the first failure aborts the whole transaction
+ * (SQLSTATE 25P02) and every later statement fails regardless. See
+ * tests/no-swallowed-errors-in-transaction.test.js.
+ */
+async function persistCounters(db, shopDomain, rows, lifetimeUpdates = []) {
+  // Per-customer lifetime (for LTV / retention by channel). Increment — safe because the page commits
+  // atomically with the cursor, and a fresh backfill resets these rows (clearWindow). Backfill is
+  // oldest-first, so `create` captures the true firstOrderAt; lastOrderAt is bumped to each page's max.
+  for (const l of lifetimeUpdates) {
+    if (!l.customerKey) continue;
+    await db.customerLifetime.upsert({
+      where: { shopDomain_customerKey: { shopDomain, customerKey: l.customerKey } },
+      create: { shopDomain, customerKey: l.customerKey, revenue: l.revenueDelta, orders: l.orderDelta, firstOrderAt: l.firstOrderAt, lastOrderAt: l.lastOrderAt },
+      update: { revenue: { increment: l.revenueDelta }, orders: { increment: l.orderDelta }, lastOrderAt: l.lastOrderAt },
+    });
+  }
+  for (const r of rows) {
+    await db.channelRevenueDaily.upsert({
+      where: { shopDomain_date_source_medium: { shopDomain, date: r.date, source: r.source, medium: r.medium } },
+      create: {
+        shopDomain,
+        date: r.date,
+        source: r.source,
+        medium: r.medium,
+        orders: r.orders,
+        revenue: r.revenue,
+        subscriptionOrders: r.subscriptionOrders,
+        subscriptionRevenue: r.subscriptionRevenue,
+      },
+      update: {
+        orders: { increment: r.orders },
+        revenue: { increment: r.revenue },
+        subscriptionOrders: { increment: r.subscriptionOrders },
+        subscriptionRevenue: { increment: r.subscriptionRevenue },
+      },
     });
   }
 }
@@ -349,9 +377,11 @@ export async function processBackfill({ pages = MAX_PAGES_PER_TICK, budgetMs = T
       // a container death (deploy, OOM) between the two re-ran the page from the old cursor and
       // double-incremented ~a page of orders. Atomic now: either both land or neither does.
       try {
+        // Outside the transaction, and first — see persistIdempotent for why the ordering is load-bearing.
+        await persistIdempotent(prisma, shopDomain, learned, unattributedOrders, firstSubscriptionOrder);
         await prisma.$transaction(
           async (tx) => {
-            await persist(tx, shopDomain, rows, learned, unattributedOrders, lifetimeUpdates, firstSubscriptionOrder);
+            await persistCounters(tx, shopDomain, rows, lifetimeUpdates);
             await tx.backfillJob.updateMany({
               where: { shopDomain, leaseToken: token },
               data: { cursor: nextCursor, ordersProcessed: nextProcessed, breakdown: JSON.stringify(nextBreakdown) },

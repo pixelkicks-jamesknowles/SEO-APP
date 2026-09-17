@@ -53,6 +53,13 @@ export function hasSessionId(node) {
   return !!attrValue(node, "ga_session_id");
 }
 
+/** The embed build that wrote this order's cart attributes, or null for an order written by a build older
+ *  than the marker. Turns "did the release actually go live?" into something order data answers: the
+ *  absence of pxp_analytics_consent alone cannot distinguish a stalled release from no orders yet. Pure. */
+export function embedVersion(node) {
+  return attrValue(node, "pxp_embed") || null;
+}
+
 /** "granted" | "denied" | null — the explicit consent attribute the CURRENT embed writes. null means the
  *  attribute is absent entirely, which for a recent order means the new embed is not live. Pure. */
 export function consentSignal(node) {
@@ -60,7 +67,7 @@ export function consentSignal(node) {
   return v === "granted" || v === "denied" ? v : null;
 }
 
-const emptyBucket = () => ({ total: 0, withId: 0, withSession: 0, consentGranted: 0, consentDenied: 0 });
+const emptyBucket = () => ({ total: 0, withId: 0, withSession: 0, consentGranted: 0, consentDenied: 0, newEmbed: 0 });
 
 /** Fold a page of order nodes into a { type -> bucket } tally. Mutates and returns `tally` so it can
  *  accumulate across pages. Pure apart from that. */
@@ -74,6 +81,7 @@ export function foldConsentAudit(nodes, tally = {}) {
     const signal = consentSignal(node);
     if (signal === "granted") t.consentGranted += 1;
     if (signal === "denied") t.consentDenied += 1;
+    if (embedVersion(node)) t.newEmbed += 1;
     tally[kind] = t;
   }
   return tally;
@@ -116,6 +124,9 @@ export function summarizeConsentAudit(tally = {}) {
     (a, t) => ({ granted: a.granted + t.consentGranted, denied: a.denied + t.consentDenied }),
     { granted: 0, denied: 0 },
   );
+  // How many orders were written by an embed carrying the build marker. Zero across recent orders is
+  // positive evidence the release never reached storefronts, rather than an ambiguous absence.
+  const newEmbedOrders = Object.values(tally).reduce((n, t) => n + t.newEmbed, 0);
 
   return {
     rows,
@@ -125,6 +136,7 @@ export function summarizeConsentAudit(tally = {}) {
       sessionPct: pct(live.withSession, live.total),
     },
     consentSignal: { ...consent, total: consent.granted + consent.denied },
+    newEmbedOrders,
     scanned: rows.reduce((n, r) => n + r.total, 0),
   };
 }

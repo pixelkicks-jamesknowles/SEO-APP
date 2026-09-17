@@ -24,10 +24,10 @@ import path from "node:path";
 const SRC = path.join(__dirname, "..", "app", "lib", "backfill.server.js");
 const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-/** The body of `async function persist(...)`, comments removed. Brace-matched from its opening brace. */
-function persistBody() {
+/** The body of a named `async function`, comments removed. Brace-matched from its opening brace. */
+function fnBody(name) {
   const src = stripComments(fs.readFileSync(SRC, "utf8"));
-  const start = src.indexOf("async function persist");
+  const start = src.indexOf(`async function ${name}`);
   expect(start).toBeGreaterThan(-1); // renamed? update this guard rather than deleting it
   let i = src.indexOf("{", start);
   let depth = 0;
@@ -35,19 +35,39 @@ function persistBody() {
     if (src[j] === "{") depth++;
     else if (src[j] === "}" && --depth === 0) return src.slice(i, j + 1);
   }
-  throw new Error("could not brace-match persist()");
+  throw new Error(`could not brace-match ${name}()`);
 }
 
-describe("persist() runs inside a transaction, so it must not swallow errors", () => {
-  test("no .catch() anywhere in persist() — a caught error still aborts the Postgres transaction", () => {
-    expect(persistBody()).not.toMatch(/\.catch\s*\(/);
+describe("the page write path must not swallow errors", () => {
+  // persistCounters runs INSIDE prisma.$transaction, where a swallowed error is not survivable at all.
+  // persistIdempotent runs outside it, but a swallowed failure there would silently skip a page's
+  // first-touch and (unattributed) rows while the cursor advanced past them — lost permanently, since the
+  // page is never revisited. Neither may catch.
+  test.each(["persistCounters", "persistIdempotent"])("no .catch() anywhere in %s()", (fn) => {
+    expect(fnBody(fn)).not.toMatch(/\.catch\s*\(/);
   });
 
   test("no bare .create() on customerAttribution — a PK conflict there is what wedged the backfill", () => {
     // The fill-in-only write must be an upsert with an empty `update`: creates when absent, no-ops when
-    // present, and cannot conflict. `.create()` here is expected to throw on an existing row, which is
-    // exactly the thing that cannot be allowed inside the transaction.
-    expect(persistBody()).not.toMatch(/customerAttribution\s*\n?\s*\.create\s*\(/);
-    expect(persistBody()).toMatch(/customerAttribution\.upsert/);
+    // present, and cannot conflict. `.create()` is expected to throw on an existing row, which inside a
+    // transaction aborts everything after it.
+    expect(fnBody("persistIdempotent")).not.toMatch(/customerAttribution\s*\n?\s*\.create\s*\(/);
+    expect(fnBody("persistIdempotent")).toMatch(/customerAttribution\.upsert/);
+  });
+
+  // The whole point of the split: keep the transaction small. If an increment-based table ever moves out
+  // of it, or a bulk idempotent write moves in, the timeout problem comes straight back.
+  test("only the increment-based tables are inside the transaction", () => {
+    const counters = fnBody("persistCounters");
+    expect(counters).toMatch(/channelRevenueDaily/);
+    expect(counters).toMatch(/customerLifetime/);
+    expect(counters).not.toMatch(/unattributedOrder|customerAttribution/);
+  });
+
+  test("the idempotent writes run BEFORE the transaction, not after", () => {
+    // After it, a process death between commit and these writes would advance the cursor past a page whose
+    // rows never landed. Before it, a retry simply re-applies them.
+    const src = stripComments(fs.readFileSync(SRC, "utf8"));
+    expect(src.indexOf("persistIdempotent(prisma")).toBeLessThan(src.indexOf("prisma.$transaction"));
   });
 });

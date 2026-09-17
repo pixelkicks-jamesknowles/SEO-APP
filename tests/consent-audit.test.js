@@ -1,4 +1,4 @@
-import { classifyOrderType, hasClientId, hasSessionId, consentSignal, foldConsentAudit, summarizeConsentAudit } from "../app/lib/consent-audit.js";
+import { classifyOrderType, hasClientId, hasSessionId, consentSignal, embedVersion, foldConsentAudit, summarizeConsentAudit } from "../app/lib/consent-audit.js";
 
 // Shapes taken from REAL Naturaw orders pulled 2026-09-14, so the classification is pinned against what
 // the store actually sends rather than what we imagine it sends.
@@ -128,5 +128,34 @@ describe("summarizeConsentAudit — the attribution diagnosis", () => {
 
   test("no consent attribute anywhere reports zero, which is the 'extension never shipped' signal", () => {
     expect(summarizeConsentAudit(foldConsentAudit([order([cid, sid])], {})).consentSignal.total).toBe(0);
+  });
+});
+
+// The build marker exists to separate two causes that were otherwise indistinguishable: a release that was
+// created but never made live, versus one that shipped fine but has had no orders yet. Both show zero
+// consent attributes.
+describe("embedVersion", () => {
+  const order = (attrs) => ({ tags: ["One-Time"], customAttributes: attrs, lineItems: { nodes: [{ sellingPlan: null }] } });
+
+  test("counts orders written by an embed carrying the marker", () => {
+    const tally = foldConsentAudit(
+      [order([{ key: "pxp_embed", value: "2" }]), order([{ key: "pxp_embed", value: "2" }]), order([{ key: "ga_client_id", value: "1.2" }])],
+      {},
+    );
+    expect(summarizeConsentAudit(tally).newEmbedOrders).toBe(2);
+  });
+
+  test("zero marked orders is the 'release never went live' signal", () => {
+    const tally = foldConsentAudit([order([{ key: "ga_client_id", value: "1.2" }])], {});
+    const s = summarizeConsentAudit(tally);
+    expect(s.newEmbedOrders).toBe(0);
+    expect(s.consentSignal.total).toBe(0); // both zero — the ambiguous case the marker resolves
+  });
+
+  test("marked but no consent attribute means the release IS live and something else is wrong", () => {
+    const tally = foldConsentAudit([order([{ key: "pxp_embed", value: "2" }])], {});
+    const s = summarizeConsentAudit(tally);
+    expect(s.newEmbedOrders).toBe(1);
+    expect(s.consentSignal.total).toBe(0);
   });
 });

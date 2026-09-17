@@ -456,8 +456,18 @@ function ConsentAudit() {
               <p>
                 {r.consentSignal.total > 0
                   ? `${r.consentSignal.total.toLocaleString()} of the orders scanned carry an explicit consent attribute (${r.consentSignal.granted.toLocaleString()} granted, ${r.consentSignal.denied.toLocaleString()} declined). That figure will grow to cover every order from here on.`
-                  : "None of the orders scanned carry the explicit consent attribute. It has only been written since the latest theme-extension release, so either that release has not reached your storefront yet, or no orders have been placed since it did."}
+                  : "None of the orders scanned carry the explicit consent attribute."}
               </p>
+              {/* The build marker separates the two reasons the attribute can be missing. Without it, a
+                  release that was created but never made live looks identical to one that shipped fine but
+                  has had no orders yet — which is exactly the ambiguity that left this unresolved. */}
+              {r.consentSignal.total === 0 && (
+                <p>
+                  {r.newEmbedOrders > 0
+                    ? `${r.newEmbedOrders.toLocaleString()} orders WERE written by the current embed, so the release is live and the consent attribute is failing for another reason — worth reporting.`
+                    : "No order scanned was written by the current embed either, so the release has not reached your storefront. Check the app version list in the Partner Dashboard: a version that was created but never made live behaves exactly like this."}
+                </p>
+              )}
             </Banner>
             {!r.complete && (
               <Banner tone="info">
